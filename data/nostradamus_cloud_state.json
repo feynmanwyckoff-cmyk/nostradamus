@@ -1,6 +1,6 @@
 {
   "schemaVersion": "3.0-DEMIGUEL-MF24",
-  "updatedAt": "2026-11-09T10:37:32.059Z",
+  "updatedAt": "2026-11-09T10:43:10.134Z",
   "strategyName": "Vol-Managed Multifactor + 40% Buffer",
   "rebalanceBufferPct": 40,
   "thresholdAnnVol": 18,
@@ -72,6 +72,38 @@
     }
   ],
   "stocks": [
+    {
+      "ticker": "BTPS",
+      "idxTicker": "IDX:BTPS",
+      "yfTicker": "BTPS.JK",
+      "name": "Bank BTPN Syariah Tbk",
+      "sector": "Financials",
+      "lastPrice": 1035,
+      "change1D": 2.98,
+      "return30D": 7.81,
+      "beta1Y": 0.32,
+      "volatilityAnn": 52.9,
+      "roe": 13.8,
+      "debtToEquity": 0.22,
+      "operatingMargin": 29.5,
+      "isLiveFetched": true,
+      "isLiquid": true,
+      "dividendYieldPct": 8.28,
+      "lastSyncedAt": "17.42.26",
+      "dmuMomScore": 9.9,
+      "dmuLowVolScore": 5.2,
+      "dmuValueScore": 8.6,
+      "dmuSizeScore": 7.6,
+      "dmuCompositeScore": 7.78,
+      "isHscFlagged": false,
+      "hscSource": "NONE",
+      "dmuRankPct": 0,
+      "dmuZone": "TOP_DECILE_BUY",
+      "qmjScore": 7.8,
+      "babScore": 5.2,
+      "hrpPropensity": 1.47,
+      "role": "DEFENSIVE_QUALITY"
+    },
     {
       "ticker": "MYOR",
       "idxTicker": "IDX:MYOR",
@@ -456,38 +488,6 @@
       "babScore": 5.5,
       "hrpPropensity": 1.68,
       "role": "NEUTRAL_HOLD"
-    },
-    {
-      "ticker": "BTPS",
-      "idxTicker": "IDX:BTPS",
-      "yfTicker": "BTPS.JK",
-      "name": "Bank BTPN Syariah Tbk",
-      "sector": "Financials",
-      "lastPrice": 1035,
-      "change1D": 2.98,
-      "return30D": 7.81,
-      "beta1Y": 0.32,
-      "volatilityAnn": 52.9,
-      "roe": 13.8,
-      "debtToEquity": 0.22,
-      "operatingMargin": 29.5,
-      "isLiveFetched": true,
-      "isLiquid": true,
-      "dividendYieldPct": 8.28,
-      "lastSyncedAt": "16.43.46",
-      "dmuMomScore": 9.9,
-      "dmuLowVolScore": 5.2,
-      "dmuValueScore": 8.6,
-      "dmuSizeScore": 7.6,
-      "dmuCompositeScore": 7.78,
-      "isHscFlagged": false,
-      "hscSource": "NONE",
-      "dmuRankPct": 0,
-      "dmuZone": "TOP_DECILE_BUY",
-      "qmjScore": 7.8,
-      "babScore": 5.2,
-      "hrpPropensity": 1.47,
-      "role": "DEFENSIVE_QUALITY"
     },
     {
       "ticker": "BDMN",
@@ -31483,70 +31483,64 @@
       "category": "FX_RATES",
       "value": 18080,
       "unit": "Rp",
-      "change1D": 0.42,
+      "change1D": 3.1,
       "ihsgImpact": "BEARISH",
-      "transmissionNote": "Tekanan depresiasi Rupiah memicu penyesuaian eksposur ekuitas ke cadangan kas.",
-      "isLiveFetched": true
+      "transmissionNote": "Tekanan depresiasi Rupiah memicu penyesuaian eksposur ekuitas ke cadangan kas."
     },
     {
       "id": "dxy",
       "symbol": "DX-Y.NYB",
       "label": "US Dollar Index (DXY)",
       "category": "FX_RATES",
-      "value": 101.88,
+      "value": 101.22,
       "unit": "pts",
-      "change1D": -0.41,
+      "change1D": -0.29,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Pelemahan indeks DXY memberi ruang stabilisasi bagi mata uang Asia.",
-      "isLiveFetched": true
+      "transmissionNote": "Pelemahan indeks DXY memberi ruang stabilisasi bagi mata uang Asia."
     },
     {
       "id": "us10y",
       "symbol": "^TNX",
       "label": "US 10Y Treasury Yield",
       "category": "FX_RATES",
-      "value": 4.86,
+      "value": 4.89,
       "unit": "%",
-      "change1D": 0.46,
+      "change1D": -1.17,
       "ihsgImpact": "BEARISH",
-      "transmissionNote": "Yield US 10Y di atas 4.5% menjaga cost of equity pasar berkembang tetap ketat.",
-      "isLiveFetched": true
+      "transmissionNote": "Yield US 10Y di atas 4.5% menjaga cost of equity pasar berkembang tetap ketat."
     },
     {
       "id": "vix",
       "symbol": "^VIX",
       "label": "CBOE VIX Volatility",
       "category": "GLOBAL_RISK",
-      "value": 24.55,
+      "value": 16.61,
       "unit": "pts",
-      "change1D": -4.25,
+      "change1D": -20.26,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Penurunan tajam VIX meredakan kepanikan ekor (tail-risk) di bursa global.",
-      "isLiveFetched": true
+      "transmissionNote": "Penurunan tajam VIX meredakan kepanikan ekor (tail-risk) di bursa global."
     },
     {
       "id": "sp500",
       "symbol": "^GSPC",
       "label": "S&P 500 Index",
       "category": "GLOBAL_RISK",
-      "value": 7376.86,
+      "value": 7688.62,
       "unit": "pts",
-      "change1D": 0.32,
+      "change1D": 1.58,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Reli ekuitas AS memberikan dukungan sentimen jangka pendek ke bursa regional.",
-      "isLiveFetched": true
+      "transmissionNote": "Reli ekuitas AS memberikan dukungan sentimen jangka pendek ke bursa regional."
     },
     {
       "id": "hsi",
       "symbol": "^HSI",
       "label": "Hang Seng Index",
       "category": "GLOBAL_RISK",
-      "value": 24448.95,
+      "value": 24779.33,
       "unit": "pts",
-      "change1D": -0.13,
+      "change1D": 3.59,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Penguatan bursa Asia Timur menopang permintaan komoditas ekspor Indonesia.",
-      "isLiveFetched": true
+      "transmissionNote": "Penguatan bursa Asia Timur menopang permintaan komoditas ekspor Indonesia."
     },
     {
       "id": "coal",
@@ -31557,32 +31551,29 @@
       "unit": "USD/t",
       "change1D": 1.25,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Menopang faktor Value & arus kas bebas emiten batubara (ITMG, PTBA, ADRO).",
-      "isLiveFetched": true
+      "transmissionNote": "Menopang faktor Value & arus kas bebas emiten batubara (ITMG, PTBA, ADRO)."
     },
     {
       "id": "gold",
       "symbol": "GC=F",
       "label": "Gold Spot (XAU)",
       "category": "COMMODITIES",
-      "value": 4102.4,
+      "value": 4136.5,
       "unit": "USD/oz",
-      "change1D": 0.68,
+      "change1D": 1.56,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Rekor harga emas menjadi lindung nilai & katalis emiten tambang emas/tembaga (AMMN, ANTM).",
-      "isLiveFetched": true
+      "transmissionNote": "Rekor harga emas menjadi lindung nilai & katalis emiten tambang emas/tembaga (AMMN, ANTM)."
     },
     {
       "id": "brent",
       "symbol": "BZ=F",
       "label": "Brent Crude Oil",
       "category": "COMMODITIES",
-      "value": 97.1,
+      "value": 94.19,
       "unit": "USD/bbl",
-      "change1D": -1.24,
+      "change1D": -0.45,
       "ihsgImpact": "NEUTRAL",
-      "transmissionNote": "Harga minyak tinggi menguntungkan MEDC/AKRA namun perlu dipantau terhadap inflasi.",
-      "isLiveFetched": true
+      "transmissionNote": "Harga minyak tinggi menguntungkan MEDC/AKRA namun perlu dipantau terhadap inflasi."
     },
     {
       "id": "nickel",
@@ -31593,8 +31584,7 @@
       "unit": "USD/t",
       "change1D": 0.95,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Mendukung margin emiten hilirisasi nikel (INCO, NCKL, ANTM).",
-      "isLiveFetched": true
+      "transmissionNote": "Mendukung margin emiten hilirisasi nikel (INCO, NCKL, ANTM)."
     },
     {
       "id": "cpo",
@@ -31605,8 +31595,7 @@
       "unit": "MYR/t",
       "change1D": 1.4,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Mandatori biodiesel B40 menopang harga jual rata-rata (ASP) emiten sawit (TAPG).",
-      "isLiveFetched": true
+      "transmissionNote": "Mandatori biodiesel B40 menopang harga jual rata-rata (ASP) emiten sawit (TAPG)."
     }
   ],
   "liveIhsgQuote": {
