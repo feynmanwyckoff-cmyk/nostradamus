@@ -1,10 +1,10 @@
 {
   "schemaVersion": "3.0-DEMIGUEL-MF24",
-  "updatedAt": "2026-11-09T10:04:51.919Z",
+  "updatedAt": "2026-11-09T10:04:56.545Z",
   "strategyName": "Vol-Managed Multifactor + 40% Buffer",
   "rebalanceBufferPct": 40,
   "thresholdAnnVol": 18,
-  "capitalIdr": 16229878,
+  "capitalIdr": 11951678,
   "cashReserveIdr": 2397878,
   "holdings": [
     {
@@ -25,41 +25,6 @@
       "ticker": "POWR",
       "lots": 13,
       "avgBuyPrice": 922,
-      "addedAt": "2026-11-07",
-      "notes": "Active Multifactor Position"
-    },
-    {
-      "ticker": "TAPG",
-      "lots": 6,
-      "avgBuyPrice": 1851,
-      "addedAt": "2026-11-07",
-      "notes": "Active Multifactor Position"
-    },
-    {
-      "ticker": "WIIM",
-      "lots": 3,
-      "avgBuyPrice": 1373,
-      "addedAt": "2026-11-07",
-      "notes": "Active Multifactor Position"
-    },
-    {
-      "ticker": "NISP",
-      "lots": 6,
-      "avgBuyPrice": 1110,
-      "addedAt": "2026-11-07",
-      "notes": "Active Multifactor Position"
-    },
-    {
-      "ticker": "AUTO",
-      "lots": 4,
-      "avgBuyPrice": 3169,
-      "addedAt": "2026-11-07",
-      "notes": "Active Multifactor Position"
-    },
-    {
-      "ticker": "PRDA",
-      "lots": 2,
-      "avgBuyPrice": 3625,
       "addedAt": "2026-11-07",
       "notes": "Active Multifactor Position"
     },
@@ -31656,9 +31621,9 @@
     "version": 1,
     "saltBase64": "VnsorMcDCpdVWdhPJy1n1A==",
     "verifierHashBase64": "4n2Mmvj0WYbqgIZRTAlg7solExkFmaKEMwbBRhc0KNM=",
-    "ivBase64": "zixmiPhKrjJANFxj",
-    "cipherTextBase64": "D8xHuyD9ZxNGQYF6CrsTqnyca0sHcI1vyTX49Y2ouRjxQO9Or2T9r7UHOdPUX46hZsyxCPMi+Oo8ADiXFJtK5Hp/0MKrMKADlo+jOspfJsRNTL9sYz9yzjL8lQjDb8yf/msevF9JXNrsRZfsO/GGcVJLwnFKS5AI8V2CSBO7NbxQEFx29syEbELGjlFSajoRrNWgcJi9yUWlPQTISUVvRUPaD8silsCZgzYMZY/5AomUdZAjaiWkmpfuv7Fkf5iE8g5CmM3eDHxyq1N7M+saVn0gpEMMdh0XY4JsGbixtTyDS+Z5u4Cxalh8b4AQ2iPfnym/+AlOXridlx4EDnoBBxs1N3wqGqDvEOeudM4NLF5Pa6UZkMCn7fNrOOdpiE522kD9Ly96dRiNRxB3hdyqhvr2D6idxm/we0PqTLHRa1awokcG8hd4/m91wWalSVZH/HJl1I8ST0LanYqUz/fH+DKKs5GeDxGKAal26OLDg/VgQjKRpEQ0u1slUUFV/IISbBgaOu1pOuo+hdz237/NCwPMFWIPzl8g7osC0BkJ3sxA2xZu4iW+WhoTWYuEvm7tRiCr1l4tpk2x2WhB65c+qSqpeKOvJhLi8YURVizc2voJXl7L7/xGC7DwU3zHoiE1bwL2M7K0zAu/dO5SYbzVE6tYUjm298BQvDvHgBc92mS9Xx/CCHtH8JOrTesccHh+s5NVc+qJJwiSyxq71iXuNQ4iZcqwmwDo5mhGD/PX6/V7t7VqY5lf+DVXFuUVdgRvEOmROPBhnvwe2zqN/Wys2gRizhyXNbw3g5zFxyNGEk0cqyVsqSIU2HR4Dy8QZjQSWfe+zmdE9M51V25KJ60OzJhNOTOsqolHVAXGp5HifPGwwm5tOal3M4a1MfiG4+AmStJ3vhw422C0Ng2LOmfssNGrQdFI9YKyAbu9X5vImHMJ8Dldo8fBELFJbEHasNxDy0gQ0VWyB1YXua4pWPSWyeJp0hz3c/ZMOaYsXMul0G9YH8oHbiaTn1cHQEAKqNVwX5cY/GtbSHMMDVJuYLR5gDuCowSx9RSGdOaYy7hherZmN+eW+JLfbVHX8dk5nMrZ0qKcIOj1S38JJh/RH1C4LRWqfO3jyN5wC3S1EHw/bsfQCENwll0oW/3HCKphtaf1HGDMdJgF2hID5y8r7W49B+teUHnbL76cMt51IjGiz3tPspDeSEIZE7beKRgrwdmKEWWzjHDRa2AwF/bO2rSMy6Gr3ntXKLTF1ixP4756QCR8CxW0jn1IQGCZBwzKsRCqRrQSGyS/C6fpurq5ieed/tAqBNY9dWWly6TXHUHDVnUs+ErcJZ5114lzev8ZZDr41LoBNri+u/dROSNyMrfZFyf5zt7nGQaaYxPgxzBO7OeNmfJN3raB5Q2Wpugu2hGFgLJmAv7NKeoQwJUIRZnMtQNwhh/z1WbTZWb1OGxeiZTRXxivAJZq36o93+hFI3LaiQgemNqQF0WYyp7RPpncAgz4LubHIzdW6Olkbhnfp6BZjJo8+zxOK/3ty0QDdL9RhGFo180mWUQ1AO9SzWWOot4hFCnPA/6K6moBZ5agCHgc0ku83ATw7zNnPRH7ZgaX0iGugyQO9C3dbBwG5ZOOdA4cDarn1wy2zec6Bnhdm15AQl8gtXX95ZikKMVfSvc1f+2dufafPo7O66M=",
-    "updatedAt": "2026-11-09T09:41:28.549Z",
+    "ivBase64": "TMi8FFWeh4KWxIGk",
+    "cipherTextBase64": "4tYU/57Yb0dSEtvwE0ll1pnO1z6NqY/aTDohAVlp14VnM9qDnQnnv8ckAFdowV1jog175Q4k1wEfq5wYk/9jD+fZ4Ggo/Uqmg8U2OVywxs1uimaQyvdW6+zo/JhOfSNjzmGQdE9N7XN8hvob3r5WQAg93Z4gKF9AtlcMegV+wgvINhCdEJSSLiSrJGSLbbxZuF/VQ7vni5pgJGqJdB57kyeEiMlG345OHOs4kg1BdYIuqHnombdlj2l+J8M8QisdOiN9jQyCVlQ8+8uo60001e4ZIW4FLJKG7PPq41tT0keqIrVdq03K2gmyx/IHyiWg2AB8F1Z6PKdeSBoMrr/ZzPK2bgf/h/YHMeYZaTeborVGqR1V2Fi6p4ft94dXn693cgs2nhR2VRdHu9Ddd4PmKJawhWfr/ABa4ww0Px38j2mdguuEJDqCli2YGY3b6IhxLKfkpKmSbU6Y9dHAs0Ao863dHGuWN2SfXCWeZQZo5zjZRm1maooAqOqkep9sdBi+b/dfSe/mkTvQEQjvPbZ1rMFwQhoMXa81HlKYNrWv8p/iXw1XywlQqWgn8Z68VS0eRGGFn8qImucGgJ5RfAZZVkLrOrSV6gJ2No+G9AaGPlVZ8TSUg2kFdm+3FFGJrLaIDFSiC5YS6O9ralbbKv+qMF7MCqAw9mBRI3CGn0aID+o8Mbu6H2RK0uOJdCnrIRzIc7EWfWoDVQ0OZn4IAp24WUE21k+R2hsS+s9k5sGnSG5KyB6yIckYAfK6V5IoAxwN6OkbIV7Ze4M1fWGkm5mxT+gYI4+akposgzoNeCMuiWoAbRpEpXnc6G7RQnR6IjqIsJTXn50p1gQIz1iQ04QEjiuoqZdfa895uwXHHV2pqpSUdRi/MbLFen3acOrxHtLEa+rzY8S4D8AQ10+pwNusP40FPOvtBRomu4fF7bW0NYqTL/32lCtpLZibv7C4a3AJnw==",
+    "updatedAt": "2026-11-09T10:04:55.586Z",
     "scopeHash": "16183f276edb0072818f889699df444fbc598e280371cccb5181968464c88546",
     "originHash": "f3a7d76bbb9d13f907952d46bed14f67d329db4e664ede97c181f9d289e94aa3",
     "repoScope": "feynmanwyckoff-cmyk/nostradamus",
