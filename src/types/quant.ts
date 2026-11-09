@@ -71,6 +71,9 @@ export interface StockMetrics {
   isLiveFetched?: boolean;
   isLiquid?: boolean;
   dividendYieldPct?: number;
+  forwardDividendYieldPct?: number;
+  historicalDpr3YPct?: number;
+  adtv20dIdr?: number;
   lastSyncedAt?: string;
   isHscFlagged?: boolean;
   hscSource?: 'MANUAL' | 'AUTO_QUANT' | 'NONE';
@@ -88,13 +91,28 @@ export interface JoeliardiOosEvaluation {
   impliedPbv: number;
   joeliardiFairPer: number;
   joeliardiFairPbv: number;
+  standaloneFairPer?: number;
+  standaloneFairPbv?: number;
   intrinsicValueIdr: number;
   marginOfSafetyPct: number;
+  annualizedEpsQ3Idr: number;
+  historicalDpr3YPct: number;
+  estimatedForwardDpsIdr: number;
+  forwardDividendYieldPct: number;
+  netBuybackDebtPaydownYieldPct: number;
+  totalShareholderYieldPct: number;
+  rawSbnSpreadPct: number;
+  erpBenchmarkPct: number;
+  netErpSpreadPct: number;
+  adtv20dIdr: number;
+  maxSafeAllocationIdr: number;
+  isDefensiveDiscountAnomaly: boolean;
+  isUndercutDeepDiscount: boolean;
   valuationVerdict: 'STRONG_UNDERVALUED' | 'FAIR_QUALITY' | 'FULLY_VALUED' | 'OVERVALUED_OR_TRAP';
   valuationLabel: string;
   businessQualityScore: number;   // 0 - 100 (Joeliardi Pillar 1: ROE vs Cost of Equity, Op Margin, Moat)
   balanceSheetHealthScore: number; // 0 - 100 (Joeliardi Pillar 2: DER, Solvency, Cashflow/Dividend Reality)
-  valuationSafetyScore: number;   // 0 - 100 (Joeliardi Pillar 3: Margin of Safety, Earnings Yield vs SBN)
+  valuationSafetyScore: number;   // 0 - 100 (Joeliardi Pillar 3: Margin of Safety, Earnings Yield vs SBN + ERP)
   oosQuantRobustnessScore: number; // 0 - 100 (Pillar 4: Out-of-Sample Cross-Sectional Factor & Low-Vol Stability)
   totalConvictionScore: number;   // 0 - 100
   convictionGrade: 'A+ (CORE CONVICTION)' | 'A (SOLID VALUE)' | 'B (WATCHLIST / HOLD)' | 'C (SPECULATIVE)' | 'D (AVOID / HSC)';
@@ -126,6 +144,12 @@ export interface StructuredAiConvictionReport {
     idealEntryZone: string;
     InvalidationOrRiskLimit: string;
     portfolioAllocationGuide: string;
+    isUndercutDeepDiscount?: boolean;
+    adtv20dIdr?: number;
+    maxSafeAllocationIdr?: number;
+    targetAllocationIdr?: number;
+    isLiquidityCapped?: boolean;
+    liquidityWarningBadge?: string;
   };
 }
 

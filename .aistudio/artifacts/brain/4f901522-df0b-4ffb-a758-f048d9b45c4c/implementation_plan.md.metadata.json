@@ -1,6 +1,6 @@
 {
-  "summary":  "Rencana penyempurnaan tampilan Export PDF/PNG Inspector, pembuatan narasi analisis yang lebih natural dan humanis tanpa istilah teknis kaku, penggantian ikon huruf 'N' dengan logo kompas Nostradamus pada header export, serta penyederhanaan teks footer kiri.",
-  "updatedAt":  "2026-11-09T12:54:22.118779168Z",
+  "summary":  "Revisi komprehensif rencana implementasi yang mencakup 7 perbaikan arsitektur kuantitatif (backend & frontend): (1) Rekonsiliasi Wajar PER & Wajar PBV terhadap Nilai Intrinsik Blended, (2) Eliminasi double-counting pada Total Shareholder Yield berbasis Forward Dividend Yield, (3) Zona Akumulasi Ideal dinamis sesuai fraksi harga BEI dengan deteksi Undercut/Deep Discount, (4) Integrasi Equity Risk Premium (ERP) pada Spread SBN 10Y, (5) Override Beta Defensif (< 0.5) & Skor Value (> 9.0) pada Uji Silang Momentum & Value Trap menjadi 'Strong Buy: Anomali Aset Defensif Terdiskon', (6) Fungsi calculateForwardDividend() berbasis Annualized EPS Q3-2026 & DPR historis 3Y dengan label 'Forward Dividend Yield (Est)', serta (7) Integrasi ADTV 20 Hari & algoritma Liquidity Constraint (Maksimal 5% ADTV) beserta Warning Badge visual pada Panduan Porsi Keranjang.",
+  "updatedAt":  "2026-11-09T13:33:15.022200466Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

@@ -127,6 +127,8 @@ function renderHighlightedFinancialNarrative(
   const escapedTicker = cleanTicker.replace(/[^A-Z0-9]/g, '');
 
   const verdictTerms = [
+    'STRONG BUY: ANOMALI ASET DEFENSIF TERDISKON',
+    'UNDERCUT / DEEP DISCOUNT',
     'LAYAK DIAKUMULASI BERTAHAP',
     'LAYAK KOLEKSI SELEKTIF SAAT KOREKSI',
     'LEBIH TEPAT DITUNGGU PADA AREA PULLBACK',
@@ -144,14 +146,23 @@ function renderHighlightedFinancialNarrative(
   ];
 
   const metricLabels = [
+    'Implied Target Wajar PER',
     'Implied PER',
+    'Wajar PER',
     'Fair PER',
     'PER',
     'Implied PBV',
+    'Wajar PBV',
     'Fair PBV',
     'PBV',
+    'Forward Dividend Yield (Est)',
+    'Forward Dividend Yield',
     'Earnings Yield',
+    'Net ERP Spread',
+    'Raw Spread',
     'SBN 10Y',
+    'ERP',
+    'ADTV 20D',
     'ROA murni',
     'ROA',
     'ROE organik',
@@ -901,7 +912,12 @@ export function EmitenFundamentalInspectorModal({
               <div className="text-[11px] text-neutral-600 font-mono space-y-0.5">
                 <div>ROE: {activeStock.roe.toFixed(1)}% (vs Ke 10,5%)</div>
                 <div>Op. Margin: {activeStock.operatingMargin.toFixed(1)}%</div>
-                <div>Div. Yield TTM: {(activeStock.dividendYieldPct ?? 0).toFixed(2)}%</div>
+                <div>
+                  Forward Dividend Yield (Est): {joeliardiEval.forwardDividendYieldPct.toFixed(2)}%{' '}
+                  <span className="text-[10px] text-neutral-500">
+                    (DPR 3Y {joeliardiEval.historicalDpr3YPct.toFixed(0)}%)
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -1025,7 +1041,7 @@ export function EmitenFundamentalInspectorModal({
               )}
             </div>
 
-            {/* Quantitative DuPont & Risk-Free Spread Strip with MetricTooltips */}
+            {/* Quantitative DuPont & Risk-Free + ERP Spread Strip with MetricTooltips */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
               {(() => {
                 const safeDer = Math.max(0, activeStock.debtToEquity);
@@ -1033,9 +1049,11 @@ export function EmitenFundamentalInspectorModal({
                 const roaDuPont = activeStock.roe / Math.max(1, eqMult);
                 const earningsYield =
                   joeliardiEval.impliedPer > 0 ? (1 / joeliardiEval.impliedPer) * 100 : 0;
-                const sbnSpread = earningsYield - 6.75;
-                const divYield = Math.max(0, activeStock.dividendYieldPct ?? 0);
-                const totalYield = earningsYield + divYield;
+                const rawSbnSpread = joeliardiEval.rawSbnSpreadPct ?? earningsYield - 6.75;
+                const netErpSpread = joeliardiEval.netErpSpreadPct ?? earningsYield - 12.75;
+                const fwdDivYield = joeliardiEval.forwardDividendYieldPct;
+                const buybackYield = joeliardiEval.netBuybackDebtPaydownYieldPct;
+                const totalYield = joeliardiEval.totalShareholderYieldPct;
 
                 return (
                   <>
@@ -1059,25 +1077,26 @@ export function EmitenFundamentalInspectorModal({
                     <div className="p-2.5 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs">
                       <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
                         <MetricTooltip
-                          label="Earnings Yield vs SBN 10Y"
-                          title="Imbal Hasil Laba Saham (1/PER) vs Obligasi Negara SBN 10Y (6,75%)"
-                          laymanExplanation="Membandingkan tingkat imbal hasil laba tahunan saham ini (100% dibagi PER) terhadap bunga obligasi negara bebas risiko SBN 10 Tahun (6,75%)."
-                          practicalGuide="Spread positif (+2% atau lebih di atas SBN 6,75%) berarti investor saham mendapatkan kompensasi premi risiko yang layak."
+                          label="EY vs SBN 10Y + ERP"
+                          title="Earnings Yield (1/PER) vs SBN 10Y (6,75%) + Equity Risk Premium (ERP 6,0%)"
+                          laymanExplanation="Membandingkan imbal hasil laba tahunan saham (100% ÷ PER) terhadap kupon obligasi bebas risiko SBN 10Y (6,75%) dan Hurdle Return pasar saham Indonesia yang menyertakan Equity Risk Premium (ERP 6,0% -> Total 12,75%)."
+                          practicalGuide="Net ERP Spread ≥ 0% menunjukkan Earnings Yield saham sudah mengompensasi penuh risiko SBN 10Y + ERP 6,0% secara wajar."
                         />
                       </div>
                       <div
                         className={`text-xs sm:text-sm font-mono tabular-nums font-bold mt-0.5 ${
-                          sbnSpread >= 2
+                          netErpSpread >= 0
                             ? 'text-[#0D5C46]'
-                            : sbnSpread >= 0
+                            : rawSbnSpread >= 0
                             ? 'text-[#D97706]'
                             : 'text-[#9E2A2B]'
                         }`}
                       >
                         {earningsYield.toFixed(2)}%{' '}
                         <span className="text-[10px] font-normal text-neutral-500">
-                          ({sbnSpread >= 0 ? '+' : ''}
-                          {sbnSpread.toFixed(2)}% vs 6,75%)
+                          (SBN {rawSbnSpread >= 0 ? '+' : ''}
+                          {rawSbnSpread.toFixed(2)}% · Net ERP {netErpSpread >= 0 ? '+' : ''}
+                          {netErpSpread.toFixed(2)}%)
                         </span>
                       </div>
                     </div>
@@ -1086,15 +1105,15 @@ export function EmitenFundamentalInspectorModal({
                       <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
                         <MetricTooltip
                           label="Total Shareholder Yield"
-                          title="Total Imbal Hasil Pemegang Saham (Earnings Yield + Dividend Yield)"
-                          laymanExplanation="Akumulasi keuntungan fundamental tahunan yang mengalir ke pemegang saham, baik dari laba bersih per saham (Earnings Yield) maupun kas dividen tunai (Dividend Yield)."
-                          practicalGuide="Semakin tinggi di atas 10%–12%, semakin cepat modal investasi Anda kembali secara fundamental."
+                          title="Total Shareholder Yield Murni (Forward Dividend Yield + Net Buyback & Debt Paydown Yield)"
+                          laymanExplanation="Menggabungkan proyeksi dividen kas ke depan (Forward Dividend Yield dari Annualized EPS Q3 × DPR 3Y) dengan Net Buyback & Debt Paydown Yield — tanpa menjumlahkan Earnings Yield + Dividend Yield agar bebas dari bias perhitungan ganda (double counting)."
+                          practicalGuide="Semakin tinggi di atas 7%–10%, semakin nyata distribusi kas dan pengurangan utang bersih yang dinikmati pemegang saham."
                         />
                       </div>
                       <div className="text-xs sm:text-sm font-mono tabular-nums font-bold text-[#0284C7] bb-cyan mt-0.5">
                         {totalYield.toFixed(2)}%{' '}
                         <span className="text-[10px] font-normal text-neutral-500">
-                          (Div {divYield.toFixed(2)}%)
+                          (Fwd Div {fwdDivYield.toFixed(2)}% + Buyback/Paydown {buybackYield.toFixed(2)}%)
                         </span>
                       </div>
                     </div>
@@ -1103,8 +1122,8 @@ export function EmitenFundamentalInspectorModal({
                       <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
                         <MetricTooltip
                           label="Spread Nilai Intrinsik"
-                          title="Spread Diskon / Premium terhadap Nilai Intrinsik Wajar"
-                          laymanExplanation="Persentase jarak antara harga pasar saat ini menuju target Nilai Intrinsik Wajarnya (Rp)."
+                          title="Spread Diskon / Premium terhadap Nilai Intrinsik Wajar Blended"
+                          laymanExplanation="Persentase jarak antara harga pasar saat ini menuju target Nilai Intrinsik Wajarnya (Rp) yang telah disinkronkan dengan Wajar PER dan Wajar PBV."
                           practicalGuide="Positif (+) berarti ruang kenaikan menuju harga wajar; Negatif (-) berarti harga pasar sudah melampaui nilai intrinsik konservatif."
                           align="right"
                         />
@@ -1438,11 +1457,18 @@ export function EmitenFundamentalInspectorModal({
                           </div>
                         </div>
 
-                        <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
-                          <span className="text-[10px] font-bold uppercase text-[#0D5C46] block">
-                            Zona Akumulasi Ideal
-                          </span>
-                          <div className="font-mono font-bold text-[#0D5C46] mt-1 leading-snug">
+                        <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs space-y-1.5">
+                          <div className="flex items-center justify-between gap-1.5">
+                            <span className="text-[10px] font-bold uppercase text-[#0D5C46] block">
+                              Zona Akumulasi Ideal
+                            </span>
+                            {structuredReport.executionStrategy.isUndercutDeepDiscount && (
+                              <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold uppercase bg-[#059669]/15 text-[#0D5C46] border border-[#059669]/40 rounded-xs">
+                                UNDERCUT / DEEP DISCOUNT
+                              </span>
+                            )}
+                          </div>
+                          <div className="font-mono font-bold text-[#0D5C46] leading-snug">
                             {structuredReport.executionStrategy.idealEntryZone}
                           </div>
                         </div>
@@ -1456,13 +1482,24 @@ export function EmitenFundamentalInspectorModal({
                           </div>
                         </div>
 
-                        <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
+                        <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs space-y-1.5">
                           <span className="text-[10px] font-bold uppercase text-[#0284C7] bb-cyan block">
-                            Panduan Porsi Keranjang
+                            Panduan Porsi Keranjang &amp; Batas ADTV
                           </span>
-                          <div className="font-bold text-[#111315] mt-1 leading-snug text-justify">
+                          <div className="font-bold text-[#111315] leading-snug text-justify">
                             {structuredReport.executionStrategy.portfolioAllocationGuide}
                           </div>
+                          {structuredReport.executionStrategy.liquidityWarningBadge && (
+                            <div
+                              className={`p-1.5 rounded-xs border text-[10px] font-mono font-bold leading-snug ${
+                                structuredReport.executionStrategy.isLiquidityCapped
+                                  ? 'bg-[#F59E0B]/15 text-[#B45309] border-[#F59E0B]/50'
+                                  : 'bg-[#059669]/10 text-[#0D5C46] border-[#059669]/35'
+                              }`}
+                            >
+                              {structuredReport.executionStrategy.liquidityWarningBadge}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>

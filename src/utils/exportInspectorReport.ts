@@ -21,6 +21,8 @@ interface RichWordToken {
 }
 
 const VERDICT_TERMS = [
+  'STRONG BUY: ANOMALI ASET DEFENSIF TERDISKON',
+  'UNDERCUT / DEEP DISCOUNT',
   'LAYAK DIAKUMULASI BERTAHAP',
   'LAYAK KOLEKSI SELEKTIF SAAT KOREKSI',
   'LEBIH TEPAT DITUNGGU PADA AREA PULLBACK',
@@ -38,14 +40,23 @@ const VERDICT_TERMS = [
 ];
 
 const METRIC_LABELS = [
+  'Implied Target Wajar PER',
   'Implied PER',
+  'Wajar PER',
   'Fair PER',
   'PER',
   'Implied PBV',
+  'Wajar PBV',
   'Fair PBV',
   'PBV',
+  'Forward Dividend Yield (Est)',
+  'Forward Dividend Yield',
   'Earnings Yield',
+  'Net ERP Spread',
+  'Raw Spread',
   'SBN 10Y',
+  'ERP',
+  'ADTV 20D',
   'ROA murni',
   'ROA',
   'ROE organik',
@@ -512,9 +523,11 @@ export function renderInspectorReportCanvas(
           color: '#FB7185'
         },
         {
-          label: 'PANDUAN PORSI KERANJANG',
-          val: ex.portfolioAllocationGuide,
-          color: '#38BDF8'
+          label: 'PANDUAN PORSI KERANJANG & ADTV',
+          val: ex.liquidityWarningBadge
+            ? `${ex.portfolioAllocationGuide} — ${ex.liquidityWarningBadge}`
+            : ex.portfolioAllocationGuide,
+          color: ex.isLiquidityCapped ? '#FBBF24' : '#38BDF8'
         }
       ].map((col) => {
         sCtx.font = '600 10.5px Montserrat, sans-serif';
@@ -750,7 +763,7 @@ export function renderInspectorReportCanvas(
       lines: [
         `ROE: ${stock.roe.toFixed(1)}% (vs Ke 10,5%)`,
         `Op. Margin: ${stock.operatingMargin.toFixed(1)}%`,
-        `Div. Yield TTM: ${(stock.dividendYieldPct ?? 0).toFixed(2)}%`
+        `Forward Div. Yield (Est): ${joeliardiEval.forwardDividendYieldPct.toFixed(2)}% (DPR ${joeliardiEval.historicalDpr3YPct.toFixed(0)}%)`
       ]
     },
     {
@@ -822,14 +835,16 @@ export function renderInspectorReportCanvas(
 
   curY += 132;
 
-  // 7. Row 3: DuPont ROE Decomposition & SBN 10Y Spread Strip
+  // 7. Row 3: DuPont ROE Decomposition & SBN 10Y + ERP Spread Strip
   const safeDer = Math.max(0, stock.debtToEquity);
   const eqMult = 1 + safeDer;
   const roaDuPont = stock.roe / Math.max(1, eqMult);
   const earningsYield = joeliardiEval.impliedPer > 0 ? (1 / joeliardiEval.impliedPer) * 100 : 0;
-  const sbnSpread = earningsYield - 6.75;
-  const divYield = Math.max(0, stock.dividendYieldPct ?? 0);
-  const totalYield = earningsYield + divYield;
+  const rawSbnSpread = joeliardiEval.rawSbnSpreadPct ?? earningsYield - 6.75;
+  const netErpSpread = joeliardiEval.netErpSpreadPct ?? earningsYield - 12.75;
+  const fwdDivYield = joeliardiEval.forwardDividendYieldPct;
+  const buybackYield = joeliardiEval.netBuybackDebtPaydownYieldPct;
+  const totalYield = joeliardiEval.totalShareholderYieldPct;
 
   const dupontStrip = [
     {
@@ -838,13 +853,13 @@ export function renderInspectorReportCanvas(
       color: '#F3F4F6'
     },
     {
-      label: 'EARNINGS YIELD VS SBN 10Y',
-      val: `${earningsYield.toFixed(2)}% (${sbnSpread >= 0 ? '+' : ''}${sbnSpread.toFixed(2)}% vs 6,75%)`,
-      color: sbnSpread >= 0 ? '#34D399' : '#FB7185'
+      label: 'EY VS SBN 10Y + ERP (6%)',
+      val: `${earningsYield.toFixed(2)}% (SBN ${rawSbnSpread >= 0 ? '+' : ''}${rawSbnSpread.toFixed(2)}% · Net ERP ${netErpSpread >= 0 ? '+' : ''}${netErpSpread.toFixed(2)}%)`,
+      color: netErpSpread >= 0 ? '#34D399' : rawSbnSpread >= 0 ? '#FBBF24' : '#FB7185'
     },
     {
       label: 'TOTAL SHAREHOLDER YIELD',
-      val: `${totalYield.toFixed(2)}% (Div ${divYield.toFixed(2)}%)`,
+      val: `${totalYield.toFixed(2)}% (Fwd Div ${fwdDivYield.toFixed(2)}% + Buyback ${buybackYield.toFixed(2)}%)`,
       color: '#38BDF8'
     },
     {

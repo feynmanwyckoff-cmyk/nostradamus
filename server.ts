@@ -17,6 +17,7 @@ interface SparkSeriesItem {
   closes: number[];
   timestamp?: number[];
   shortName?: string;
+  adtv20dIdr?: number;
 }
 
 async function fetchYahooJsonDirect(url: string, timeoutMs = 8000): Promise<any> {
@@ -127,13 +128,26 @@ async function fetchSingleChartDirect(
           ? Number((((lastPrice - prevClose) / prevClose) * 100).toFixed(2))
           : 0;
 
+      const rawVolumes: Array<number | null> =
+        result?.indicators?.quote?.[0]?.volume || [];
+      const validVolumes = rawVolumes.filter(
+        (v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0
+      );
+      const recent20Volumes = validVolumes.slice(-20);
+      const avgVol20d =
+        recent20Volumes.length > 0
+          ? recent20Volumes.reduce((a, b) => a + b, 0) / recent20Volumes.length
+          : 0;
+      const adtv20dIdr = avgVol20d > 0 ? Math.round(avgVol20d * lastPrice) : undefined;
+
       return {
         symbol,
         lastPrice,
         change1D,
         closes: closes.length >= 2 ? closes : [prevClose, lastPrice],
         timestamp: timestamps.length === closes.length ? timestamps : undefined,
-        shortName: meta.longName || meta.shortName
+        shortName: meta.longName || meta.shortName,
+        adtv20dIdr
       };
     } catch {
       // try alternate host
@@ -722,23 +736,64 @@ async function startServer() {
         ? String(userQuestion).trim()
         : `Evaluasi mendalam kelayakan beli ${stock.ticker} pada harga Rp ${Number(stock.lastPrice).toLocaleString('id-ID')}, uji potensi value trap vs katalis pertumbuhan, dan berikan strategi eksekusi lot terbaik.`;
 
+      const calculateForwardDividend = (stk: any, evalObj: any) => {
+        const fwdYield = Number(evalObj?.forwardDividendYieldPct ?? stk?.dividendYieldPct ?? 0);
+        const dpr3Y = Number(evalObj?.historicalDpr3YPct ?? 65);
+        const annEpsQ3 = Number(evalObj?.annualizedEpsQ3Idr ?? evalObj?.estimatedEpsIdr ?? 0);
+        const fwdDps = Number(evalObj?.estimatedForwardDpsIdr ?? Math.round(annEpsQ3 * (dpr3Y / 100)));
+        const buybackYield = Number(evalObj?.netBuybackDebtPaydownYieldPct ?? 1.45);
+        const totalShYield = Number(
+          evalObj?.totalShareholderYieldPct ?? Number((fwdYield + buybackYield).toFixed(2))
+        );
+        return { fwdYield, dpr3Y, annEpsQ3, fwdDps, buybackYield, totalShYield };
+      };
+
+      const fwdDiv = calculateForwardDividend(stock, joeliardiEval);
+      const earningsYieldVal = joeliardiEval?.impliedPer
+        ? Number((100 / Number(joeliardiEval.impliedPer)).toFixed(2))
+        : 0;
+      const rawSbnSpreadVal =
+        joeliardiEval?.rawSbnSpreadPct ?? Number((earningsYieldVal - 6.75).toFixed(2));
+      const erpBenchmarkVal = joeliardiEval?.erpBenchmarkPct ?? 6.0;
+      const netErpSpreadVal =
+        joeliardiEval?.netErpSpreadPct ??
+        Number((earningsYieldVal - (6.75 + erpBenchmarkVal)).toFixed(2));
+      const isDefensiveOverride =
+        Boolean(joeliardiEval?.isDefensiveDiscountAnomaly) ||
+        (Number(stock.beta1Y) < 0.5 && Number(stock.dmuValueScore) > 9.0 && !stock.isHscFlagged);
+      const adtv20dIdrVal = Number(joeliardiEval?.adtv20dIdr || stock.adtv20dIdr || 3_500_000_000);
+      const maxSafeAllocationIdrVal = Number(
+        joeliardiEval?.maxSafeAllocationIdr || Math.round(adtv20dIdrVal * 0.05)
+      );
+      const adtvMillions = (adtv20dIdrVal / 1_000_000).toLocaleString('id-ID', {
+        maximumFractionDigits: 0
+      });
+      const maxSafeMillions = (maxSafeAllocationIdrVal / 1_000_000).toLocaleString('id-ID', {
+        maximumFractionDigits: 1
+      });
+
       const promptText = `
 Lakukan analisis Komite Investasi mendalam (Fundamental & Kuantitatif) untuk saham BEI berikut:
 
 DATA FUNDAMENTAL & KUANTITATIF LIVE EMITEN:
 - Emiten: ${stock.ticker} (${stock.name}) | Sektor IDX-IC: ${stock.sector}
 - Harga Pasar Live: Rp ${Number(stock.lastPrice).toLocaleString('id-ID')} | Perubahan 1D: ${stock.change1D}% | Pergerakan 30 Hari (1M): ${stock.return30D}%
-- Profitabilitas & Efisiensi Modal (DuPont): ROE ${stock.roe}% (Batas wajar biaya modal RI: 10,5%, Selisih ROE: ${(Number(stock.roe) - 10.5).toFixed(1)}%) | Margin Usaha (Operating Margin): ${stock.operatingMargin}% | Dividend Yield TTM: ${stock.dividendYieldPct || 0}%
-- Struktur Neraca & Risiko: DER ${stock.debtToEquity}x | Beta 1Y: ${stock.beta1Y}x | Volatilitas Tahunan: ${stock.volatilityAnn}% | Likuiditas: ${stock.isLiquid !== false && stock.lastPrice >= 68 ? 'Likuid Aktif Institusional' : 'Tidak Likuid / Gocap'}
+- Profitabilitas & Efisiensi Modal (DuPont): ROE ${stock.roe}% (Batas wajar biaya modal RI: 10,5%, Selisih ROE: ${(Number(stock.roe) - 10.5).toFixed(1)}%) | Margin Usaha (Operating Margin): ${stock.operatingMargin}%
+- Proyeksi Kas Forward Dividend & Shareholder Yield (Bebas Double Counting):
+  * Forward Dividend Yield (Est): ${fwdDiv.fwdYield.toFixed(2)}% (dihitung dari Annualized EPS Q3-2026 Rp ${fwdDiv.annEpsQ3.toLocaleString('id-ID')} × DPR Historis 3Y ${fwdDiv.dpr3Y.toFixed(0)}% = Est. DPS Rp ${fwdDiv.fwdDps.toLocaleString('id-ID')}/saham)
+  * Net Buyback & Debt Paydown Yield: ${fwdDiv.buybackYield.toFixed(2)}%
+  * Total Shareholder Yield Murni: ${fwdDiv.totalShYield.toFixed(2)}% (Forward Dividend Yield + Net Buyback & Debt Paydown Yield — TANPA menjumlahkan Earnings Yield + Dividend Yield)
+- Struktur Neraca, Risiko & Kedalaman Likuiditas (ADTV 20D): DER ${stock.debtToEquity}x | Beta 1Y: ${stock.beta1Y}x | Volatilitas Tahunan: ${stock.volatilityAnn}% | ADTV 20 Hari: Rp ${adtvMillions} Juta/hari | Batas Maksimal Alokasi 5% ADTV: Rp ${maxSafeMillions} Juta/hari
 - Peringkat 4-Faktor Out-of-Sample (OOS DeMiguel): Skor Komposit ${stock.dmuCompositeScore}/10 (Peringkat Top ${stock.dmuRankPct}%, Zona Buffer: ${stock.dmuZone})
   * Rincian Faktor: Value ${stock.dmuValueScore}/10 (bobot 35%), Low-Vol ${stock.dmuLowVolScore}/10 (bobot 28%), Momentum ${stock.dmuMomScore}/10 (bobot 22%), Size/Liq ${stock.dmuSizeScore}/10 (bobot 15%)
+- Status Override Aset Defensif Terdiskon (Beta < 0.5 & Skor Value > 9.0): ${isDefensiveOverride ? 'AKTIF -> WAJIB abaikan koreksi harga 30D negatif dan tetapkan status "Strong Buy: Anomali Aset Defensif Terdiskon"' : 'TIDAK AKTIF (Gunakan uji silang normal)'}
 - Status Saringan Risiko HSC (Gorengan/Cornered): ${stock.isHscFlagged ? `TERINDIKASI HSC (${stock.hscReason || 'Anomali Spekulatif'})` : 'BEBAS INDIKASI HSC (Clean Institutional/Fundamental)'}
-- Kalibrasi Nilai Intrinsik Wajar & Fundamental Kualitas Moat:
-  * Estimasi Nilai Intrinsik Wajar: Rp ${Number(joeliardiEval?.intrinsicValueIdr || stock.lastPrice).toLocaleString('id-ID')}
+- Kalibrasi Nilai Intrinsik Wajar Blended & Spread ERP:
+  * Estimasi Nilai Intrinsik Wajar Blended: Rp ${Number(joeliardiEval?.intrinsicValueIdr || stock.lastPrice).toLocaleString('id-ID')}
   * Margin of Safety (MoS): ${joeliardiEval?.marginOfSafetyPct ?? 0}% (${joeliardiEval?.valuationLabel || '-'})
-  * Implied PER: ${joeliardiEval?.impliedPer ?? '-'}x (Earnings Yield: ${joeliardiEval?.impliedPer ? (100 / Number(joeliardiEval.impliedPer)).toFixed(2) : '-'}% vs SBN 10Y 6,75%) | Fair PER Wajar: ${joeliardiEval?.joeliardiFairPer ?? '-'}x
-  * Implied PBV: ${joeliardiEval?.impliedPbv ?? '-'}x vs Fair PBV Wajar: ${joeliardiEval?.joeliardiFairPbv ?? '-'}x
-  * Estimasi EPS: Rp ${joeliardiEval?.estimatedEpsIdr ?? '-'} | Estimasi BVPS: Rp ${joeliardiEval?.estimatedBvpsIdr ?? '-'}
+  * Implied PER: ${joeliardiEval?.impliedPer ?? '-'}x vs Implied Target Wajar PER (Pegged): ${joeliardiEval?.joeliardiFairPer ?? '-'}x (EPS Rp ${joeliardiEval?.estimatedEpsIdr ?? '-'} × Wajar PER = Nilai Intrinsik Wajar)
+  * Implied PBV: ${joeliardiEval?.impliedPbv ?? '-'}x vs Implied Target Wajar PBV (Pegged): ${joeliardiEval?.joeliardiFairPbv ?? '-'}x (BVPS Rp ${joeliardiEval?.estimatedBvpsIdr ?? '-'} × Wajar PBV = Nilai Intrinsik Wajar)
+  * Spread Valuasi vs SBN 10Y & ERP: Earnings Yield ${earningsYieldVal}% | Raw Spread vs SBN 10Y (6,75%): ${rawSbnSpreadVal >= 0 ? '+' : ''}${rawSbnSpreadVal}% | Equity Risk Premium (ERP) Indonesia: ${erpBenchmarkVal}% (Hurdle Rate 12,75%) | Net ERP Spread: ${netErpSpreadVal >= 0 ? '+' : ''}${netErpSpreadVal}%
   * Skor 4 Pilar Fundamental: Kualitas Bisnis & Moat ${joeliardiEval?.businessQualityScore ?? 0}/100, Kesehatan Neraca ${joeliardiEval?.balanceSheetHealthScore ?? 0}/100, Keamanan Valuasi ${joeliardiEval?.valuationSafetyScore ?? 0}/100, Ketahanan OOS ${joeliardiEval?.oosQuantRobustnessScore ?? 0}/100
 - Rezim Pasar IHSG Saat Ini: ${regimeStatus || 'WASPADA'}
 
@@ -748,12 +803,13 @@ ${newsContext}
 PERTANYAAN / FOKUS UTAMA INVESTOR:
 "${activePromptFocus}"
 
-INSTRUKSI GAYA BAHASA & PENALARAN KOMITE INVESTASI WAJIB (HUMANIS, LUGAS & BEBAS KATA KAKU):
-1. Gunakan gaya bahasa analis investasi senior Indonesia yang lugas, natural, humanis, dan enak dibaca. DILARANG KERAS menggunakan kata-kata terjemahan kaku atau teknis yang janggal seperti "kuotasi", "diskon optik", "secara optik", "secara kausal", "trajektori", "pengungkit utang", atau "bermoat". Gunakan padanan yang wajar seperti "Di harga Rp ...", "terlihat murah di atas kertas", "dari sisi fundamental", "pergerakan harga", "rasio utang", dan "berdaya saing kuat".
-2. Bedah kualitas bisnis di sektor ${stock.sector} secara jernih: jelaskan apakah ROE ${stock.roe}% ditopang oleh margin usaha yang sehat (${stock.operatingMargin}%) dengan beban utang yang terjaga (DER ${stock.debtToEquity}x), atau justru banyak bertumpu pada utang. Jangan pernah menulis bahwa efisiensi modal belum terkonfirmasi jika ROE sudah tinggi di atas 15%.
-3. Bandingkan imbal hasil laba (Earnings Yield) terhadap bunga SBN 10Y (6,75%), dan jelaskan secara mengalir mengapa saham ${stock.ticker} saat ini dihargai pada PER ${joeliardiEval?.impliedPer ?? '-'}x / PBV ${joeliardiEval?.impliedPbv ?? '-'}x di tengah pergerakan harga 30 hari terakhir (${stock.return30D}%).
-4. Jawab fokus analisis secara langsung, mengalir, dan terukur pada directAnswerSummary dengan awalan "Hasil Analisis Komite Investasi: " TANPA mengulang kalimat pertanyaan pengguna.
-5. Jangan pernah menulis simbol bintang ganda (**), sintaks markdown mentah, atau menyebut nama tokoh individu di dalam nilai string JSON. Gunakan istilah "Nilai Intrinsik Wajar" dan "Fundamental Kualitas Moat".
+INSTRUKSI GAYA BAHASA & PENALARAN KOMITE INVESTASI WAJIB (HUMANIS, LUGAS & KONSISTEN MATEMATIS):
+1. Gunakan gaya bahasa analis investasi senior Indonesia yang lugas, natural, humanis, dan enak dibaca. DILARANG KERAS menggunakan kata-kata terjemahan kaku seperti "kuotasi", "diskon optik", "secara optik", "secara kausal", "trajektori", "pengungkit utang", atau "bermoat".
+2. Konsistensi Multipel & Yield: Gunakan selalu Wajar PER ${joeliardiEval?.joeliardiFairPer ?? '-'}x dan Wajar PBV ${joeliardiEval?.joeliardiFairPbv ?? '-'}x yang sudah tersinkronisasi penuh dengan Nilai Intrinsik Wajar Rp ${Number(joeliardiEval?.intrinsicValueIdr || stock.lastPrice).toLocaleString('id-ID')}. Gunakan istilah "Forward Dividend Yield (Est) ${fwdDiv.fwdYield.toFixed(2)}%" dan "Total Shareholder Yield ${fwdDiv.totalShYield.toFixed(2)}%" (jangan pernah menjumlahkan Earnings Yield dengan Dividend Yield karena double counting).
+3. Spread SBN 10Y + ERP 6,0%: Saat membandingkan Earnings Yield (${earningsYieldVal}%) terhadap SBN 10Y (6,75%), sertakan juga perhitungan Equity Risk Premium (ERP) Indonesia sebesar 6,0% (total Hurdle Return 12,75%, Net ERP Spread ${netErpSpreadVal >= 0 ? '+' : ''}${netErpSpreadVal}%).
+4. Aturan Override Defensif Wajib pada Langkah 03 (Uji Silang Momentum & Value Trap): Jika Beta < 0.5 DAN Skor Value > 9.0 (${isDefensiveOverride ? 'KONDISI TERPENUHI PADA SAHAM INI' : 'tidak terpenuhi'}), maka sistem WAJIB mengabaikan tekanan harga 30D yang negatif dan menulis kesimpulan langkah ke-3 sebagai "Strong Buy: Anomali Aset Defensif Terdiskon" (BUKAN "Tunggu Konfirmasi Akumulasi").
+5. Batas Likuiditas 5% ADTV 20D: Pada panduan porsi keranjang (alokasi 6%-12% modal ekuitas aktif), tegaskan bahwa nilai nominal alokasi TIDAK BOLEH melebihi 5% dari ADTV 20D (Maks Rp ${maxSafeMillions} Juta/hari dari ADTV Rp ${adtvMillions} Juta).
+6. Jawab fokus analisis secara langsung pada directAnswerSummary dengan awalan "Hasil Analisis Komite Investasi: " TANPA mengulang kalimat pertanyaan pengguna, dan jangan pernah menulis simbol bintang ganda (**).
 `.trim();
 
       const response = await ai.models.generateContent({
@@ -761,14 +817,14 @@ INSTRUKSI GAYA BAHASA & PENALARAN KOMITE INVESTASI WAJIB (HUMANIS, LUGAS & BEBAS
         contents: promptText,
         config: {
           systemInstruction:
-            'Anda adalah Kepala Komite Investasi Pasar Modal Indonesia (BEI) yang berpengalaman. Gaya penulisan Anda seperti analis senior yang berbicara langsung kepada investor: lugas, natural, humanis, mengalir, dan mudah dipahami. Hindari istilah terjemahan kaku atau robotik seperti "kuotasi", "diskon optik", "secara optik", "secara kausal", "trajektori", atau "pengungkit". Sajikan kesimpulan analisis yang tajam dengan mengaitkan harga pasar, efisiensi laba (ROE & ROA), kesehatan neraca (DER), serta perbandingan imbal hasil terhadap SBN 10Y tanpa simbol markdown mentah (**).',
+            'Anda adalah Kepala Komite Investasi Pasar Modal Indonesia (BEI) yang berpengalaman. Sajikan analisis yang 100% konsisten secara matematis: (1) Wajar PER dan Wajar PBV tersinkronisasi dengan Nilai Intrinsik Wajar Blended, (2) Total Shareholder Yield = Forward Dividend Yield (Est) + Net Buyback/Paydown Yield tanpa double counting Earnings Yield, (3) Spread Valuasi memperhitungkan SBN 10Y (6,75%) ditambah Equity Risk Premium ERP (6,0%), (4) Jika Beta < 0.5 dan Skor Value > 9.0, abaikan koreksi 30D negatif dan berikan sinyal "Strong Buy: Anomali Aset Defensif Terdiskon", dan (5) batasi porsi alokasi portofolio maksimal 5% dari ADTV 20 hari.',
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
             properties: {
               verdictBadge: {
                 type: Type.STRING,
-                description: 'Keputusan singkat kapital, misal: STRONG ACCUMULATE, SELECTIVE BUY, HOLD / WAIT PULLBACK, atau AVOID / HSC BLOCK'
+                description: 'Keputusan singkat kapital, misal: STRONG ACCUMULATE // DEFENSIVE DISCOUNT ANOMALY, STRONG ACCUMULATE, SELECTIVE BUY, HOLD / WAIT PULLBACK, atau AVOID / HSC BLOCK'
               },
               verdictTitle: {
                 type: Type.STRING,
@@ -785,7 +841,7 @@ INSTRUKSI GAYA BAHASA & PENALARAN KOMITE INVESTASI WAJIB (HUMANIS, LUGAS & BEBAS
               chainOfThoughtSteps: {
                 type: Type.ARRAY,
                 items: { type: Type.STRING },
-                description: '4 langkah penalaran berurutan dengan format "01. Judul: Penjelasan singkat -> Kesimpulan singkat": (1) Bedah DuPont & Kualitas Laba, (2) Perbandingan Valuasi vs SBN 10Y, (3) Evaluasi Tren Harga & Risiko Value Trap, (4) Tinjuauan Katalis Berita & Dividen'
+                description: '4 langkah penalaran berurutan dengan format "01. Judul: Penjelasan singkat -> Kesimpulan singkat": (1) 01. Dekomposisi DuPont & Moat, (2) 02. Spread Valuasi vs SBN 10Y + ERP, (3) 03. Uji Silang Momentum & Value Trap (jika Beta < 0.5 dan Skor Value > 9.0 wajib menghasilkan -> Strong Buy: Anomali Aset Defensif Terdiskon), (4) 04. Audit Forward Dividend & Likuiditas ADTV'
               },
               sections: {
                 type: Type.ARRAY,
