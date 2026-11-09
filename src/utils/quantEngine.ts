@@ -1069,7 +1069,7 @@ export function evaluateJoeliardiOosFundamental(stock: StockMetrics): JoeliardiO
 
   if (roe >= 15) {
     keyStrengths.push(
-      `ROE ${roe.toFixed(1)}% melampaui Cost of Equity RI (10,5%), mencerminkan keunggulan kompetitif (Moat) sesuai kriteria Joeliardi Sunendar.`
+      `ROE ${roe.toFixed(1)}% melampaui Cost of Equity RI (10,5%), mencerminkan keunggulan kompetitif (Fundamental Kualitas Moat) yang solid.`
     );
   }
   if (der <= 0.65) {
@@ -1115,7 +1115,7 @@ export function evaluateJoeliardiOosFundamental(stock: StockMetrics): JoeliardiO
   }
   if (marginOfSafetyPct < 0) {
     keyRisks.push(
-      `Harga pasar saat ini berada ${Math.abs(marginOfSafetyPct).toFixed(1)}% di atas nilai intrinsik konservatif Joeliardi-Graham.`
+      `Harga pasar saat ini berada ${Math.abs(marginOfSafetyPct).toFixed(1)}% di atas estimasi Nilai Intrinsik Wajar konservatif.`
     );
   }
   if (stock.volatilityAnn >= 32) {

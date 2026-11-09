@@ -160,6 +160,31 @@
   transform-origin: bottom center;
 }
 
+@keyframes robotPulse {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg) scale(1);
+    filter: drop-shadow(0 0 2px rgba(56, 189, 248, 0.45));
+  }
+  25% {
+    transform: translateY(-2px) rotate(-8deg) scale(1.14);
+    filter: drop-shadow(0 0 6px rgba(245, 158, 11, 0.8));
+  }
+  50% {
+    transform: translateY(0px) rotate(0deg) scale(1.06);
+    filter: drop-shadow(0 0 5px rgba(56, 189, 248, 0.75));
+  }
+  75% {
+    transform: translateY(-2px) rotate(8deg) scale(1.14);
+    filter: drop-shadow(0 0 6px rgba(245, 158, 11, 0.8));
+  }
+}
+
+.animate-robot {
+  display: inline-block;
+  animation: robotPulse 1.6s ease-in-out infinite;
+  transform-origin: center;
+}
+
 /* ============================================================================
  * DUAL-MODE BLOOMBERG TERMINAL THEME ENGINE (LIGHT DAYLIGHT & CLASSIC DARK)
  * ============================================================================ */

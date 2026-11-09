@@ -80,18 +80,28 @@ export function renderInspectorReportCanvas(
   const sCtx = scratch.getContext('2d')!;
   sCtx.font = '500 13px Montserrat, sans-serif';
 
-  const summaryText =
+  const rawSummaryText =
     structuredReport?.directAnswerSummary ||
-    `Pada harga Rp ${formatIdrPriceDisplay(stock.lastPrice)}, ${stock.ticker} memiliki Nilai Intrinsik Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct.toFixed(1)}%) dengan Skor Keyakinan ${joeliardiEval.totalConvictionScore}/100.`;
+    `Hasil Analisis Komite Investasi: Pada harga Rp ${formatIdrPriceDisplay(stock.lastPrice)}, ${stock.ticker} memiliki Nilai Intrinsik Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct.toFixed(1)}%) dengan Skor Keyakinan ${joeliardiEval.totalConvictionScore}/100.`;
 
-  const summaryLines = wrapCanvasText(sCtx, summaryText, LOGICAL_WIDTH - 120);
+  const summaryHeaderMatch = rawSummaryText.match(
+    /^((?:Hasil|Kesimpulan|Keputusan|Evaluasi|Audit)\s+[^:]{3,75}):\s*([\s\S]*)$/i
+  );
+  const summaryBoxHeader = summaryHeaderMatch
+    ? summaryHeaderMatch[1].trim().toUpperCase()
+    : 'HASIL ANALISIS KOMITE INVESTASI';
+  const summaryBodyText = summaryHeaderMatch
+    ? summaryHeaderMatch[2].trim()
+    : rawSummaryText.trim();
+
+  const summaryLines = wrapCanvasText(sCtx, summaryBodyText, LOGICAL_WIDTH - 120);
   const cotSteps = structuredReport?.chainOfThoughtSteps || [];
   const topNews = recentNews.slice(0, 4);
 
   const LOGICAL_HEIGHT =
-    780 +
+    812 +
     summaryLines.length * 20 +
-    (cotSteps.length > 0 ? Math.ceil(cotSteps.length / 2) * 58 + 36 : 0) +
+    (cotSteps.length > 0 ? Math.ceil(cotSteps.length / 2) * 72 + 40 : 0) +
     (structuredReport ? 115 : 0) +
     (topNews.length > 0 ? Math.ceil(topNews.length / 2) * 78 + 56 : 0) +
     75;
@@ -107,7 +117,7 @@ export function renderInspectorReportCanvas(
   ctx.fillStyle = '#0B0F17';
   ctx.fillRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
 
-  // 2. Diagonal Repeating Watermark ("NOSTRADAMUS QUANT TERMINAL")
+  // 2. Diagonal Repeating Background Pattern ("NOSTRADAMUS QUANT TERMINAL")
   ctx.save();
   ctx.translate(LOGICAL_WIDTH / 2, LOGICAL_HEIGHT / 2);
   ctx.rotate((-24 * Math.PI) / 180);
@@ -152,7 +162,7 @@ export function renderInspectorReportCanvas(
   ctx.fillStyle = '#F59E0B';
   ctx.font = '700 11px Montserrat, sans-serif';
   ctx.fillText(
-    'NOSTRADAMUS QUANT TERMINAL // ON-DEMAND FUNDAMENTAL & AI INSPECTOR (PRINSIP JOELIARDI SUNENDAR)',
+    'NOSTRADAMUS QUANT TERMINAL // ON-DEMAND FUNDAMENTAL & AI INSPECTOR (FUNDAMENTAL KUALITAS MOAT)',
     94,
     46
   );
@@ -214,7 +224,7 @@ export function renderInspectorReportCanvas(
     ctx.fillStyle = '#FECDD3';
     ctx.font = '500 11px Montserrat, sans-serif';
     ctx.fillText(
-      `${stock.hscReason || 'Anomali spekulatif terdeteksi.'} Dikunci pada zona Rotate Out sesuai filter perlindungan modal Joeliardi Sunendar.`,
+      `${stock.hscReason || 'Anomali spekulatif terdeteksi.'} Dikunci pada zona Rotate Out sesuai filter perlindungan modal Fundamental Kualitas Moat.`,
       54,
       curY + 41
     );
@@ -234,7 +244,7 @@ export function renderInspectorReportCanvas(
       subColor: stock.change1D >= 0 ? '#34D399' : '#FB7185'
     },
     {
-      label: 'NILAI INTRINSIK (JOELIARDI-GRAHAM)',
+      label: 'NILAI INTRINSIK WAJAR',
       labelColor: '#F59E0B',
       main: `Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)}`,
       mainColor: '#F9FAFB',
@@ -421,9 +431,9 @@ export function renderInspectorReportCanvas(
 
   // 8. AI Investment Committee Synthesis Box
   const aiBoxH =
-    105 +
+    136 +
     summaryLines.length * 20 +
-    (cotSteps.length > 0 ? Math.ceil(cotSteps.length / 2) * 58 + 34 : 0) +
+    (cotSteps.length > 0 ? Math.ceil(cotSteps.length / 2) * 72 + 38 : 0) +
     (structuredReport ? 105 : 0);
 
   drawRoundedRect(ctx, 38, curY, LOGICAL_WIDTH - 76, aiBoxH, 4);
@@ -449,7 +459,19 @@ export function renderInspectorReportCanvas(
   ctx.font = '700 14px Montserrat, sans-serif';
   ctx.fillText(`[${verdictBadge}]  ${verdictTitle}`, 56, curY + 48);
 
-  let textY = curY + 74;
+  // Boxed Bold Header for "HASIL ANALISIS KOMITE INVESTASI"
+  ctx.font = '800 11.5px Montserrat, sans-serif';
+  const hdrBoxW = ctx.measureText(summaryBoxHeader).width + 28;
+  drawRoundedRect(ctx, 56, curY + 60, hdrBoxW, 24, 3);
+  ctx.fillStyle = 'rgba(245, 158, 11, 0.16)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(245, 158, 11, 0.65)';
+  ctx.stroke();
+  ctx.fillStyle = '#FBBF24';
+  ctx.fillText(summaryBoxHeader, 70, curY + 76);
+
+  // New-line narrative discussion body below the boxed header
+  let textY = curY + 104;
   ctx.fillStyle = '#E5E7EB';
   ctx.font = '500 12.5px Montserrat, sans-serif';
   summaryLines.forEach((line) => {
@@ -462,29 +484,46 @@ export function renderInspectorReportCanvas(
     ctx.fillStyle = '#F59E0B';
     ctx.font = '700 10.5px Montserrat, sans-serif';
     ctx.fillText('ALUR PENALARAN KUANTITATIF-FUNDAMENTAL (CHAIN-OF-THOUGHT):', 56, textY);
-    textY += 12;
+    textY += 14;
 
     const halfW = (LOGICAL_WIDTH - 126) / 2;
     for (let i = 0; i < cotSteps.length; i++) {
       const col = i % 2;
       const row = Math.floor(i / 2);
       const bx = 56 + col * (halfW + 14);
-      const by = textY + row * 56;
+      const by = textY + row * 72;
 
-      drawRoundedRect(ctx, bx, by, halfW, 48, 3);
+      drawRoundedRect(ctx, bx, by, halfW, 64, 3);
       ctx.fillStyle = '#161D2A';
       ctx.fill();
       ctx.strokeStyle = '#263244';
       ctx.stroke();
 
+      const rawStep = String(cotSteps[i] || '').trim();
+      const colonIdx = rawStep.indexOf(':');
+      const stepHeader =
+        colonIdx > 0 && colonIdx <= 68
+          ? rawStep.slice(0, colonIdx + 1).trim()
+          : `0${i + 1}. Analisis Faktor:`;
+      const stepBody =
+        colonIdx > 0 && colonIdx <= 68
+          ? rawStep.slice(colonIdx + 1).trim()
+          : rawStep;
+
+      // Bold Title on Top Line
+      ctx.fillStyle = '#F9FAFB';
+      ctx.font = '700 11px Montserrat, sans-serif';
+      ctx.fillText(stepHeader, bx + 12, by + 18);
+
+      // Discussion on New Line with space
       ctx.fillStyle = '#D1D5DB';
-      ctx.font = '500 10.5px Montserrat, sans-serif';
-      const stepLines = wrapCanvasText(ctx, cotSteps[i], halfW - 20).slice(0, 2);
+      ctx.font = '500 10px Montserrat, sans-serif';
+      const stepLines = wrapCanvasText(ctx, stepBody, halfW - 24).slice(0, 2);
       stepLines.forEach((sl, sIdx) => {
-        ctx.fillText(sl, bx + 10, by + 19 + sIdx * 16);
+        ctx.fillText(sl, bx + 12, by + 37 + sIdx * 15);
       });
     }
-    textY += Math.ceil(cotSteps.length / 2) * 56 + 14;
+    textY += Math.ceil(cotSteps.length / 2) * 72 + 14;
   }
 
   if (structuredReport?.executionStrategy) {
@@ -558,7 +597,7 @@ export function renderInspectorReportCanvas(
     curY += Math.ceil(topNews.length / 2) * 74 + 12;
   }
 
-  // 10. Official Watermark Footer Bar
+  // 10. Institutional Footer Bar (Without "WATERMARK RESMI")
   const footerY = LOGICAL_HEIGHT - 56;
   ctx.fillStyle = '#11161F';
   ctx.fillRect(17, footerY, LOGICAL_WIDTH - 34, 39);
@@ -571,7 +610,7 @@ export function renderInspectorReportCanvas(
   ctx.fillStyle = '#F59E0B';
   ctx.font = '700 11px Montserrat, sans-serif';
   ctx.fillText(
-    'WATERMARK RESMI: © 2026 NOSTRADAMUS QUANT TERMINAL · PRINSIP JOELIARDI SUNENDAR & DEMIGUEL OOS QUANT',
+    '© 2026 NOSTRADAMUS QUANT TERMINAL · FUNDAMENTAL KUALITAS MOAT & DEMIGUEL OOS QUANT',
     38,
     footerY + 24
   );
@@ -579,7 +618,7 @@ export function renderInspectorReportCanvas(
   ctx.fillStyle = '#9CA3AF';
   ctx.font = '600 11px Montserrat, sans-serif';
   ctx.textAlign = 'right';
-  ctx.fillText('Made with 🔥 by Fayadh', LOGICAL_WIDTH - 38, footerY + 24);
+  ctx.fillText('Made with 🤖 by Fayadh', LOGICAL_WIDTH - 38, footerY + 24);
   ctx.textAlign = 'left';
 
   return canvas;

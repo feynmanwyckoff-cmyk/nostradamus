@@ -301,8 +301,17 @@ function decodeHtmlEntitiesServer(input: string): string {
   return text;
 }
 
+function stripInlineCrossLinksServer(raw: string): string {
+  if (!raw) return '';
+  return raw
+    .replace(/<(p|div|li|span|strong|b|a)[^>]*>\s*(baca|lihat|simak)\s+juga[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/\b(baca|lihat|simak)\s+juga\s*:?[^.\n\r]*(\.|$)/gi, ' ')
+    .replace(/\b(artikel|berita)\s+terkait\s*:?[^.\n\r]*(\.|$)/gi, ' ');
+}
+
 function stripTags(raw: string): string {
-  const withoutCdataAndTags = raw
+  const withoutCrossLinks = stripInlineCrossLinksServer(raw);
+  const withoutCdataAndTags = withoutCrossLinks
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gi, '$1')
     .replace(/<[^>]*>/g, ' ');
   return decodeHtmlEntitiesServer(withoutCdataAndTags)
@@ -314,6 +323,80 @@ function extractXmlTag(block: string, tag: string): string {
   const regex = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i');
   const match = block.match(regex);
   return match ? stripTags(match[1]) : '';
+}
+
+function isArticleStrictlyAboutEmitenServer(
+  title: string,
+  url: string,
+  targetTicker: string,
+  companyName: string
+): boolean {
+  const cleanTicker = targetTicker.trim().toUpperCase();
+  if (!cleanTicker) return true;
+
+  // Strip publisher suffix like " - Kontan.co.id" or " - CNBC Indonesia"
+  const headlineCore = String(title || '')
+    .replace(/\s+[-|]\s+[^-|]+$/, '')
+    .trim();
+  const urlLower = String(url || '').toLowerCase();
+
+  // 1. Direct ticker match in headline or URL slug
+  const tickerRegex = new RegExp(`\\b${cleanTicker}\\b`, 'i');
+  const hasTickerInTitleOrUrl =
+    tickerRegex.test(headlineCore) ||
+    new RegExp(`[-/_]${cleanTicker.toLowerCase()}[-/_.]`).test(urlLower);
+
+  // 2. Distinctive company name tokens match in headline or URL
+  const cleanedCompany = String(companyName || '')
+    .replace(
+      /\b(Tbk|PT|Persero|Indonesia|Internasional|Nusantara|Sejahtera|Pratama|Makmur|Sentosa|Abadi|Karya|Utama|Mandiri|Group|Grup|Investama|Corporindo|Korporindo)\b/gi,
+      ' '
+    )
+    .replace(/[^a-zA-Z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const companyTokens = cleanedCompany
+    .split(' ')
+    .map((w) => w.trim().toLowerCase())
+    .filter((w) => w.length >= 4);
+
+  const primaryTwoWords = companyTokens.slice(0, 2).join(' ');
+  const hasCompanyInTitleOrUrl =
+    (primaryTwoWords.length >= 5 &&
+      (headlineCore.toLowerCase().includes(primaryTwoWords) ||
+        urlLower.includes(primaryTwoWords.replace(/\s+/g, '-')))) ||
+    companyTokens.some(
+      (tok) =>
+        tok.length >= 6 &&
+        (new RegExp(`\\b${tok}\\b`, 'i').test(headlineCore) || urlLower.includes(tok))
+    );
+
+  // 3. Guard against articles primarily about ANOTHER 4-letter IDX ticker (e.g., "Profil Emiten TOBA" matching MPMX via inline "Baca Juga")
+  const foreignEmitenInTitle = headlineCore.match(
+    /\b(?:emiten|saham|dividen|laba|kinerja|prospek|profil|direksi)\s+([A-Z]{4})\b/
+  );
+  if (
+    foreignEmitenInTitle &&
+    foreignEmitenInTitle[1].toUpperCase() !== cleanTicker &&
+    !tickerRegex.test(headlineCore)
+  ) {
+    return false;
+  }
+
+  const foreignEmitenInUrl = urlLower.match(
+    /\b(?:emiten|saham)-([a-z]{4})\b/
+  );
+  if (
+    foreignEmitenInUrl &&
+    foreignEmitenInUrl[1].toUpperCase() !== cleanTicker &&
+    !tickerRegex.test(headlineCore)
+  ) {
+    return false;
+  }
+
+  // Require the headline or URL slug itself to reference the target ticker or distinctive company name
+  return hasTickerInTitleOrUrl || hasCompanyInTitleOrUrl;
 }
 
 function isNewsItemWithin90DaysServer(pubDateRaw: string, title: string, desc: string): boolean {
@@ -388,7 +471,7 @@ async function fetchRssXmlDirect(
       const title = extractXmlTag(itemXml, 'title') || 'Market Update';
       const link = extractXmlTag(itemXml, 'link') || 'https://www.idx.co.id';
       const rawPubDate = extractXmlTag(itemXml, 'pubDate');
-      const desc = extractXmlTag(itemXml, 'description').slice(0, 175);
+      const desc = stripInlineCrossLinksServer(extractXmlTag(itemXml, 'description')).slice(0, 175);
 
       if (!isNewsItemWithin90DaysServer(rawPubDate, title, desc)) {
         continue;
@@ -539,11 +622,23 @@ async function startServer() {
       }
 
       const cleanCompanyShort = rawName
-        .replace(/\b(Tbk|PT|Persero|Indonesia)\b/gi, '')
+        .replace(
+          /\b(Tbk|PT|Persero|Indonesia|Internasional|Nusantara|Sejahtera|Pratama|Makmur|Sentosa|Abadi|Karya|Utama|Mandiri|Group|Grup)\b/gi,
+          ' '
+        )
+        .replace(/\s+/g, ' ')
         .trim();
-      const queryTerm = cleanCompanyShort
-        ? `("${rawTicker}" OR "${cleanCompanyShort}") saham BEI when:90d`
-        : `"${rawTicker}" saham BEI emiten when:90d`;
+      const primaryWords = cleanCompanyShort
+        .split(' ')
+        .filter((w) => w.length >= 3)
+        .slice(0, 2)
+        .join(' ');
+
+      // Use intitle: to prevent matching inline "Baca Juga: ..." links inside articles about other stocks
+      const queryTerm =
+        primaryWords && primaryWords.length >= 4
+          ? `(intitle:"${rawTicker}" OR intitle:"${primaryWords}") saham when:90d`
+          : `intitle:"${rawTicker}" saham when:90d`;
 
       const googleNewsRssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(
         queryTerm
@@ -553,15 +648,21 @@ async function startServer() {
       )}&region=US&lang=en-US`;
 
       const [gNewsItems, yfItems] = await Promise.all([
-        fetchRssXmlDirect(googleNewsRssUrl, `Radar Emiten ${rawTicker} (ID)`, 'DOMESTIC', 8),
+        fetchRssXmlDirect(googleNewsRssUrl, `Radar Emiten ${rawTicker} (ID)`, 'DOMESTIC', 10),
         fetchRssXmlDirect(yahooTickerRssUrl, `Yahoo Finance ${rawTicker}.JK`, 'DOMESTIC', 4)
       ]);
 
-      const merged = [...gNewsItems, ...yfItems].map((item, idx) => ({
-        ...item,
-        id: `emiten_${rawTicker}_${Date.now()}_${idx}`,
-        ticker: rawTicker
-      }));
+      const verifiedGNews = gNewsItems.filter((item) =>
+        isArticleStrictlyAboutEmitenServer(item.title, item.url, rawTicker, rawName)
+      );
+
+      const merged = [...verifiedGNews, ...yfItems]
+        .slice(0, 8)
+        .map((item, idx) => ({
+          ...item,
+          id: `emiten_${rawTicker}_${Date.now()}_${idx}`,
+          ticker: rawTicker
+        }));
 
       res.json({
         ticker: rawTicker,
@@ -632,13 +733,13 @@ DATA FUNDAMENTAL & KUANTITATIF LIVE EMITEN:
 - Peringkat 4-Faktor Out-of-Sample (OOS DeMiguel): Skor Komposit ${stock.dmuCompositeScore}/10 (Peringkat Top ${stock.dmuRankPct}%, Zona Buffer: ${stock.dmuZone})
   * Rincian Faktor: Value ${stock.dmuValueScore}/10 (bobot 35%), Low-Vol ${stock.dmuLowVolScore}/10 (bobot 28%), Momentum ${stock.dmuMomScore}/10 (bobot 22%), Size/Liq ${stock.dmuSizeScore}/10 (bobot 15%)
 - Status Saringan Risiko HSC (Gorengan/Cornered): ${stock.isHscFlagged ? `TERINDIKASI HSC (${stock.hscReason || 'Anomali Spekulatif'})` : 'BEBAS INDIKASI HSC (Clean Institutional/Fundamental)'}
-- Kalibrasi Valuasi Intrinsik Joeliardi-Graham:
-  * Estimasi Nilai Intrinsik: Rp ${Number(joeliardiEval?.intrinsicValueIdr || stock.lastPrice).toLocaleString('id-ID')}
+- Kalibrasi Nilai Intrinsik Wajar & Fundamental Kualitas Moat:
+  * Estimasi Nilai Intrinsik Wajar: Rp ${Number(joeliardiEval?.intrinsicValueIdr || stock.lastPrice).toLocaleString('id-ID')}
   * Margin of Safety (MoS): ${joeliardiEval?.marginOfSafetyPct ?? 0}% (${joeliardiEval?.valuationLabel || '-'})
-  * Implied PER: ${joeliardiEval?.impliedPer ?? '-'}x (Earnings Yield: ${joeliardiEval?.impliedPer ? (100 / Number(joeliardiEval.impliedPer)).toFixed(2) : '-'}% vs SBN 10Y 6,75%) | Fair PER Joeliardi: ${joeliardiEval?.joeliardiFairPer ?? '-'}x
-  * Implied PBV: ${joeliardiEval?.impliedPbv ?? '-'}x vs Fair PBV Joeliardi: ${joeliardiEval?.joeliardiFairPbv ?? '-'}x
+  * Implied PER: ${joeliardiEval?.impliedPer ?? '-'}x (Earnings Yield: ${joeliardiEval?.impliedPer ? (100 / Number(joeliardiEval.impliedPer)).toFixed(2) : '-'}% vs SBN 10Y 6,75%) | Fair PER Wajar: ${joeliardiEval?.joeliardiFairPer ?? '-'}x
+  * Implied PBV: ${joeliardiEval?.impliedPbv ?? '-'}x vs Fair PBV Wajar: ${joeliardiEval?.joeliardiFairPbv ?? '-'}x
   * Estimasi EPS: Rp ${joeliardiEval?.estimatedEpsIdr ?? '-'} | Estimasi BVPS: Rp ${joeliardiEval?.estimatedBvpsIdr ?? '-'}
-  * Skor 4 Pilar Joeliardi: Kualitas Bisnis ${joeliardiEval?.businessQualityScore ?? 0}/100, Kesehatan Neraca ${joeliardiEval?.balanceSheetHealthScore ?? 0}/100, Keamanan Valuasi ${joeliardiEval?.valuationSafetyScore ?? 0}/100, Ketahanan OOS ${joeliardiEval?.oosQuantRobustnessScore ?? 0}/100
+  * Skor 4 Pilar Fundamental: Kualitas Bisnis & Moat ${joeliardiEval?.businessQualityScore ?? 0}/100, Kesehatan Neraca ${joeliardiEval?.balanceSheetHealthScore ?? 0}/100, Keamanan Valuasi ${joeliardiEval?.valuationSafetyScore ?? 0}/100, Ketahanan OOS ${joeliardiEval?.oosQuantRobustnessScore ?? 0}/100
 - Rezim Pasar IHSG Saat Ini: ${regimeStatus || 'WASPADA'}
 
 RADAR BERITA TERKINI & AKSI KORPORASI (${stock.ticker}):
@@ -650,8 +751,8 @@ PERTANYAAN / FOKUS UTAMA INVESTOR:
 INSTRUKSI PENALARAN KOMITE INVESTASI WAJIB (ANTI-TEMPLATE & BEBAS SIMBOL MARKDOWN **):
 1. Berpikirlah secara kausal dan kritis layaknya Chief Investment Officer: bedah hubungan sebab-akibat antar metrik spesifik sektor ${stock.sector}. Jelaskan apakah ROE ${stock.roe}% berasal dari keunggulan margin operasional (${stock.operatingMargin}%) atau sekadar daya ungkit utang (DER ${stock.debtToEquity}x).
 2. Uji hipotesis Value Trap vs Diskon Asimetris: bandingkan Earnings Yield terhadap imbal hasil bebas risiko SBN 10Y (6,75%), dan jelaskan mengapa pasar saat ini menghargai ${stock.ticker} pada PER ${joeliardiEval?.impliedPer ?? '-'}x / PBV ${joeliardiEval?.impliedPbv ?? '-'}x dengan tren 30 hari ${stock.return30D}%.
-3. Jawab fokus analisis secara langsung, tajam, dan terukur pada directAnswerSummary TANPA mengulang kalimat pertanyaan pengguna (jangan pernah menulis awalan seperti "Keputusan Komite atas pertanyaan Anda..." atau "Menjawab pertanyaan Anda..."). Langsung mulai dengan hasil analisis komite.
-4. Jangan pernah menulis simbol bintang ganda (**) atau sintaks markdown mentah di dalam nilai string JSON.
+3. Jawab fokus analisis secara langsung, tajam, dan terukur pada directAnswerSummary dengan awalan "Hasil Analisis Komite Investasi: " TANPA mengulang kalimat pertanyaan pengguna.
+4. Jangan pernah menulis simbol bintang ganda (**), sintaks markdown mentah, atau menyebut nama tokoh individu di dalam nilai string JSON. Gunakan istilah "Nilai Intrinsik Wajar" dan "Fundamental Kualitas Moat".
 `.trim();
 
       const response = await ai.models.generateContent({
@@ -659,7 +760,7 @@ INSTRUKSI PENALARAN KOMITE INVESTASI WAJIB (ANTI-TEMPLATE & BEBAS SIMBOL MARKDOW
         contents: promptText,
         config: {
           systemInstruction:
-            'Anda adalah Kepala Komite Investasi Kuantitatif & Fundamental Pasar Modal Indonesia (BEI) yang memadukan prinsip nilai intrinsik Joeliardi Sunendar, dekomposisi DuPont, dan disiplin faktor Out-of-Sample (OOS) DeMiguel. Analisis Anda bersifat kausal, spesifik terhadap dinamika sektor emiten, membongkar kontradiksi antara harga dan fundamental, langsung menyajikan kesimpulan analisis tanpa mengulang pertanyaan pengguna, serta bebas dari template generik maupun simbol markdown mentah (**).',
+            'Anda adalah Kepala Komite Investasi Kuantitatif & Fundamental Pasar Modal Indonesia (BEI) yang memadukan disiplin Nilai Intrinsik Wajar, Fundamental Kualitas Moat, dekomposisi DuPont, dan faktor Out-of-Sample (OOS) DeMiguel. Analisis Anda bersifat kausal, spesifik terhadap dinamika sektor emiten, membongkar kontradiksi antara harga dan fundamental, langsung menyajikan kesimpulan analisis tanpa mengulang pertanyaan pengguna, serta bebas dari template generik maupun simbol markdown mentah (**).',
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,

@@ -1,91 +1,77 @@
-# Penyempurnaan UI/UX, Komite AI Bertahap, Ekspor Laporan Ber-Watermark & Simulasi 3 Rezim Pasar — Nostradamus Quant Terminal
+# Pembersihan Penyebutan Nama, Standarisasi Terminologi Fundamental & Pembaruan Kredit Footer (`Made with 🤖 by Fayadh`)
 
-Rencana pembaruan terarah untuk menyempurnakan antarmuka, ketajaman analisis Komite Investasi AI, validitas waktu berita emiten, fitur ekspor laporan ber-watermark, serta kontrol simulasi rezim pasar pada **Nostradamus Quant Terminal**.
-
----
+Menghapus seluruh penyebutan nama "Joeliardi Sunendar" dan "Joeliardi-Graham" dari seluruh elemen antarmuka (UI), *tooltip*, *chip* pertanyaan cepat, mesin narasi Komite Investasi AI, radar aksi korporasi, hingga hasil *export* laporan (HD PNG & PDF) dengan menggantinya menjadi **Nilai Intrinsik Wajar** dan **Fundamental Kualitas Moat**, serta mengganti ikon api berdenyut (`🔥`) pada *footer* menjadi emot robot bergerak (`Made with 🤖 by Fayadh`).
 
 ## User Review & Critical Decisions
 
-* **Confirmed Requirements**:
-  * **Ekspor Laporan Hasil Inspect Emiten**: Menyediakan **kedua tombol** sekaligus di bilah atas jendela *Fundamental & AI Inspector*, yaitu **Export HD Image (PNG)** dan **Export PDF**, lengkap dengan *watermark* resmi **Nostradamus Quant Terminal**.
-  * **Kontrol Simulasi Sentimen Pasar**: Menggunakan **Segmented Button 3 Mode Langsung** (`Tenang`, `Waspada`, `Volatil`) berdampingan dengan tombol kembali ke **`Live Real-Time`** pada *Market Regime Banner*.
-  * **Halaman Login Minimalis**: Menghapus *header* dan *footer* penuh pada `TerminalSecurityGate` sehingga layar kunci tampil fokus di tengah layar, dengan tombol pengubah tema (*Daylight/Dark*) ringkas di sudut kartu.
-  * **Posisi Tombol Tutup (`X`) & Scrollbar Tema Gelap**: Memisahkan tata letak tombol tutup (`X`) agar selalu terkunci di pojok kanan atas jendela modal (seperti jendela aplikasi desktop standar) dan menyesuaikan warna *scrollbar* modal agar mengikuti tema gelap (`theme-dark`).
-  * **Komite AI Tanpa Pengulangan Pertanyaan + Animasi Berpikir & Typing**: Menghapus kalimat pembuka yang mengulang pertanyaan pengguna, serta menambahkan tahapan visualisasi berpikir (*multi-step quantitative synthesis*) yang diikuti efek ketikan bertahap (*typewriter animation*).
-  * **Filter Berita Maksimal 3 Bulan (90 Hari)**: Menyaring tanggal publikasi RSS (`pubDate` dan `when:90d`) baik di sisi klien maupun server agar berita yang kadaluarsa (> 90 hari) otomatis tereliminasi.
-  * **Tooltip Indikator & Kontras Kotak Pra-Analisis**: Menambahkan `MetricTooltip` pada seluruh metrik di jendela *Emiten Inspector* dan memperbaiki kontras kotak informasi sebelum tombol *Bedah Komite AI* ditekan pada mode gelap.
+> [!IMPORTANT]
+> Berdasarkan konfirmasi dan revisi Anda, seluruh referensi nama individu dihapus total (0 kemunculan), digantikan dengan terminologi institusional, serta kredit *footer* diperbarui menjadi **`Made with 🤖 by Fayadh`** lengkap dengan animasi gerak robot yang halus.
+
+- **Keputusan Terkonfirmasi 1 (Cakupan Penghapusan)**: Hapus total seluruh penyebutan "Joeliardi Sunendar" dan "Joeliardi-Graham" dari semua tampilan aplikasi, *tooltip*, narasi AI, dan *footer*/dokumen *export*.
+- **Keputusan Terkonfirmasi 2 (Terminologi Pengganti)**: Gunakan istilah **Nilai Intrinsik Wajar** (untuk valuasi harga wajar & *Margin of Safety*) serta **Fundamental Kualitas Moat** (untuk evaluasi kualitas laba, ROE vs *Cost of Equity*, dan kesehatan neraca).
+- **Keputusan Terkonfirmasi 3 (Kredit Footer Robot AI)**: Ganti emot api berdenyut (`Made with 🔥 by Fayadh`) menjadi emot robot bergerak (**`Made with 🤖 by Fayadh`**) pada *sticky footer* aplikasi utama maupun pada *footer* dokumen hasil *export* (HD PNG & PDF).
 
 ---
 
 ## 1. Overview & Core Concept
 
-Pembaruan ini berfokus pada peningkatan ergonomi terminal kuantitatif dan kredibilitas penyajian data riset emiten:
-
-1. **Ergonomi Jendela & Fokus Visual**: Memastikan halaman *Security Gate* bebas dari distraksi navigasi utama, mengunci tombol tutup (`X`) di sudut kanan atas jendela *Inspector*, menghitamkan *scrollbar* pada mode gelap, serta memperbaiki keterbacaan kotak panduan pra-analisis Komite AI.
-2. **Pengalaman Komite Investasi AI yang Hidup & Langsung ke Inti**: Menghilangkan kalimat pengulangan pertanyaan yang kaku dan menghadirkan transisi *Chain-of-Thought Thinking* ke *Progressive Typing Effect* sehingga pengguna merasakan proses sintesis data fundamental, *spread* SBN 10Y, dan berita secara cerdas.
-3. **Integritas Data & Portabilitas Riset Institusional**: Memastikan seluruh berita emiten berusia maksimal 3 bulan terakhir ($\le 90\text{ hari}$), melengkapi setiap indikator di modal *Inspector* dengan *tooltip* penjelasan rumus/makna, menyediakan simulasi lengkap 3 rezim pasar (`Tenang`, `Waspada`, `Volatil`), dan memungkinkan ekspor riset ke **HD PNG** maupun **PDF** ber-*watermark*.
+- **What It Does**: Menyajikan laporan inspeksi fundamental emiten, kartu Komite Investasi AI, tabel penyaringan saham, dan dokumen *export* (PNG/PDF) yang bersih dan berstandar institusional tanpa pengulangan atribusi nama tokoh, disertai *signature footer* **`Made with 🤖 by Fayadh`** yang merefleksikan rekayasa berbasis AI.
+- **Target Audience / Persona**: Investor kuantitatif dan fundamental di Bursa Efek Indonesia (BEI) yang mengutamakan kejelasan metrik (**Nilai Intrinsik Wajar**, **Dekomposisi DuPont ROE**, **Fundamental Kualitas Moat**, dan **4-Faktor Out-of-Sample**).
+- **Key Value**: Menghilangkan kesan repetitif (*clutter*) pada *header*, *badge*, *tooltip*, *prompt* pertanyaan, serta narasi hasil analisis, sekaligus menyelaraskan identitas visual *footer* dengan kapabilitas AI terminal.
 
 ---
 
 ## 2. User Experience & Visual Design
 
-* **Halaman Login (`TerminalSecurityGate`)**:
-  * Hanya menampilkan kartu otentikasi terpusat di tengah layar (`min-h-screen flex items-center justify-center`) tanpa *top header bar* maupun *bottom footer*. Tombol *toggle* tema diletakkan secara elegan di pojok kanan atas kartu login.
-* **Header Modal Inspect Emiten & Dark Scrollbar**:
-  * Tombol tutup (`X`) diposisikan secara permanen di pojok kanan atas *header* modal (`top-right corner`), terpisah dari baris tombol aksi (`Refresh Emiten`, `Export HD PNG`, `Export PDF`, `Label HSC`) sehingga tidak pernah turun ke baris bawah di sebelah kiri.
-  * Kontainer gulir (*scroll container*) modal menggunakan gaya *dark scrollbar* khusus pada `.theme-dark` (latar *track* `#0E1117` dan *thumb* `#2D3545` dengan *hover* `#475569`).
-* **Animasi Berpikir & Efek Mengetik Komite AI**:
-  * Saat modal dibuka atau tombol **Bedah Komite AI** diklik, sistem menampilkan tahapan berpikir aktif (*"01. Membedah dekomposisi DuPont ROE & ROA murni..."* $\rightarrow$ *"02. Mengukur spread Earnings Yield vs SBN 10Y..."* $\rightarrow$ *"03. Memverifikasi saringan OOS & berita 90 hari terakhir..."*) sebelum merender teks kesimpulan dan poin penalaran dengan animasi *typing* bertahap yang dilengkapi tombol *Skip Animasi* jika pengguna ingin langsung melihat seluruh teks.
-* **Kotak Informasi Pra-Analisis (Perbaikan Lampiran 3)**:
-  * Mengganti kelas latar `bg-[#FFFFFF]/80` yang sebelumnya luput dari aturan `.theme-dark` menjadi permukaan adaptif ber-kontras tinggi (`bg-[#FAF9F6]` dengan teks `#111315` di mode terang, dan `#161B26` dengan teks `#E2E8F0` di mode gelap) agar terbaca jelas sebelum pengguna menekan tombol **Bedah Komite AI**.
-* **Tooltip Indikator Lengkap di Modal Inspector**:
-  * Menambahkan ikon informasi dan `MetricTooltip` interaktif pada:
-    1. Empat kartu utama: *Harga Pasar Live (BEI)*, *Nilai Intrinsik (Joeliardi-Graham)*, *Margin of Safety (MoS)*, dan *Valuasi Multipel (Implied PER & PBV vs Wajar)*.
-    2. Empat skor pilar: *1. Kualitas Bisnis & Moat*, *2. Kesehatan Neraca*, *3. Keamanan Valuasi*, dan *4. Ketahanan OOS Quant*.
-    3. Empat metrik *strip* Komite AI: *ROA Murni (DuPont)*, *Earnings Yield vs SBN 10Y*, *Total Shareholder Yield*, dan *Spread Nilai Intrinsik*.
-* **Segmented Control Simulasi 3 Rezim Pasar**:
-  * Pada `MarketRegimeBanner`, tombol simulasi tunggal diganti dengan kontrol bersegmen 4 status: **`Live Real-Time`**, **`Simulasi: Tenang`**, **`Simulasi: Waspada`**, dan **`Simulasi: Volatil`**, lengkap dengan warna aksen semantik (Hijau *Emerald* untuk Tenang, Kuning *Amber* untuk Waspada, Merah *Rose* untuk Volatil).
+- **Key User Flows**:
+  1. **Tabel Screening Saham**: Saat kursor diarahkan ke tombol *Inspect*, *tooltip* menampilkan *"Inspect Fundamental Kualitas Moat & OOS + Analisis AI & Berita Terkini"* tanpa atribusi nama.
+  2. **Header & Kartu Valuasi Modal Inspector**: *Kicker* bagian atas menampilkan `ON-DEMAND FUNDAMENTAL & AI INSPECTOR // FUNDAMENTAL KUALITAS MOAT`, dan kartu kedua bertajuk **`NILAI INTRINSIK WAJAR`** (lengkap dengan penjelasan *tooltip* berbasis EPS, BVPS, dan ROE vs biaya modal).
+  3. **Pertanyaan Cepat & Narasi Komite Investasi AI**: *Chip* pertanyaan *default* menjadi *"Apakah [TICKER] layak dibeli pada harga Rp [HARGA] berdasarkan Nilai Intrinsik Wajar & Kualitas Moat?"*, dan seluruh narasi hasil analisis maupun kartu pilar (`01. DUPONT & MOAT`) bersih dari nama tokoh.
+  4. **Footer Aplikasi & Export HD Image (PNG) / PDF**:
+     - Pada *sticky footer* bawah layar, teks **`Made with 🤖 by Fayadh`** menampilkan emot robot `🤖` dengan animasi gerak mekanis/mengangguk halus (`animate-robot`) dan pendaran cahaya *cyan/amber* khas AI.
+     - Pada *footer* dokumen hasil *export* (PNG/PDF), bagian kiri menampilkan `© 2026 NOSTRADAMUS QUANT TERMINAL · FUNDAMENTAL KUALITAS MOAT & DEMIGUEL OOS QUANT` dan bagian kanan menampilkan `Made with 🤖 by Fayadh`.
+- **Visual Identity & Theme**:
+  - *Aesthetic Direction*: *Clean Institutional Quant Terminal* (mendukung mode terang *Editorial Daylight* dan mode gelap *Bloomberg Amber-Cyan*).
+  - *Interactive Feedback & Motion*: Animasi CSS `@keyframes robotPulse` (kombinasi gerakan *float/tilt* halus dan efek *glow* lembut) pada emot `🤖` di *footer*.
 
 ---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-* **Render Ekspor HD Image (PNG) & PDF Ber-Watermark Secara Native di Klien**:
-  * *Keputusan*: Membangun mesin *renderer* kanvas resolusi tinggi (`2x Retina scale` via HTML5 Canvas 2D + pembungkus PDF vektor/raster presisi) yang menggambar seluruh metrik fundamental emiten, 4 pilar Joeliardi, dekomposisi DuPont, kesimpulan Komite AI, serta *watermark* diagonal dan *footer* resmi **Nostradamus Quant Terminal**.
-  * *Alasan*: Menghindari masalah pemotongan area gulir (*scroll clipping*) pada modal panjang, menjamin kecepatan ekspor instan tanpa ketergantungan *headless browser* eksternal, serta menghasilkan tata letak laporan riset institusional yang rapi dan siap dibagikan.
-* **Validasi Ganda Kesegaran Berita ($\le 90\text{ Hari}$)**:
-  * *Keputusan*: Menambahkan parameter pencarian `when:90d` pada kueri Google News RSS sekaligus menerapkan fungsi validator tanggal `isWithinThreeMonths(pubDate)` yang membuang artikel dengan usia $> 90\text{ hari}$ dari tanggal saat ini, serta memperbarui *timestamp* item radar aksi korporasi agar mencerminkan periode kuartal berjalan.
-  * *Alasan*: Menjamin tidak ada berita usang dari tahun-tahun sebelumnya yang masuk ke *Radar Berita & Isu Spesifik Emiten*.
+- **Decision 1: Standarisasi Istilah Valuasi & Moat di Seluruh Lapisan (UI, AI Prompt, & Export)**
+  - *Chosen Approach*: Mengganti semua label `"Nilai Intrinsik (Joeliardi-Graham)"` menjadi **`"Nilai Intrinsik Wajar"`** dan `"Prinsip Joeliardi Sunendar"` menjadi **`"Fundamental Kualitas Moat"`**, termasuk pada *system instruction* AI di server agar respons LLM tidak lagi memunculkan nama tersebut secara otomatis.
+  - *Why*: Menjamin konsistensi 100% baik ketika pengguna menjalankan analisis melalui server AI maupun mesin analitik statis.
+- **Decision 2: Animasi Emot Robot (`🤖`) pada Footer**
+  - *Chosen Approach*: Mengganti `🔥` dengan `🤖` menggunakan animasi CSS khusus (gerak melayang dan goyangan kepala robotik halus) di *footer* web serta memperbarui teks kanvas *export* PNG/PDF menjadi `Made with 🤖 by Fayadh`.
+  - *Why*: Ringan (murni CSS `@keyframes` tanpa beban *library* tambahan), ekspresif, dan langsung menonjolkan identitas aplikasi berbasis AI.
 
 ---
 
-## 4. Technical Architecture & Data Strategy
+## 4. Technical Architecture & Data Strategy *(Technical Reference)*
+
+- **Architecture & Component Diagram**:
 
 ```
-+-----------------------------------------------------------------------------------+
-|                           NOSTRADAMUS QUANT TERMINAL                              |
-+-----------------------------------------------------------------------------------+
-         |                                  |                                 |
-         v                                  v                                 v
-+------------------------+     +----------------------------+    +--------------------------+
-|  Market Regime Engine  |     | Emiten Inspector & AI Flow |    | HD PNG & PDF Exporter    |
-|------------------------|     |----------------------------|    |--------------------------|
-| Mode:                  |     | 1. 90-Day News Filter      |    | - High-DPI Canvas (2x)   |
-| - LIVE (Actual Market) |     |    (when:90d + Date Check) |    | - Diagonal & Header/     |
-| - TENANG (Vol ~11.5%)  |     | 2. Strip Question Prefix   |    |   Footer Watermark:      |
-| - WASPADA (Vol ~16.8%) |     |    (Direct Causal Summary) |    |   "NOSTRADAMUS QUANT     |
-| - VOLATIL (Vol ~34.5%) |     | 3. Staged Thinking Stepper |    |    TERMINAL"             |
-|                        |     |    + Progressive Typing    |    | - Direct PNG Download    |
-| Dynamically updates    |     | 4. MetricTooltip on all    |    | - Multi-Section A4 PDF   |
-| Equity/SBN/Cash split  |     |    12 Inspector Indicators |    |   Generator              |
-+------------------------+     +----------------------------+    +--------------------------+
+┌──────────────────────────────────────────────────────────────────────────┐
+│                 PEMBARUAN IDENTITAS & TERMINOLOGI TERMINAL               │
+│   "Nilai Intrinsik Wajar" · "Fundamental Kualitas Moat" · "Made with 🤖"  │
+└───────────────────┬──────────────────────────────────┬───────────────────┘
+                    │                                  │
+                    ▼                                  ▼
+┌───────────────────────────────────────┐  ┌───────────────────────────────┐
+│     Antarmuka & Komponen Visual       │  │   Mesin Analitik & Server AI  │
+├───────────────────────────────────────┤  ├───────────────────────────────┤
+│ • Sticky Footer Utama:                │  │ • Prompt & System Instruction │
+│   "Made with 🤖 (animate) by Fayadh"  │  │   Komite Investasi AI         │
+│ • Tabel Screening (Tooltip Inspect)   │  │ • Narasi Sintesis Komite &    │
+│ • Header & Kartu Nilai Intrinsik Wajar│  │   4 Kartu Pilar Fundamental   │
+│ • Tooltip Metrik & Peringatan HSC     │  │ • Evaluasi Kekuatan/Risiko &  │
+│ • Generator Canvas Export PNG & PDF   │  │   Radar Berita Korporasi      │
+│   (Header, Kartu Valuasi, & Footer 🤖) │  │                               │
+└───────────────────────────────────────┘  └───────────────────────────────┘
 ```
 
-1. **State Rezim Pasar (`SimRegimeMode`)**:
-   * Mengubah *state* boolean `isCalmSim` menjadi tipe terstruktur `'LIVE' | 'TENANG' | 'WASPADA' | 'VOLATIL'`.
-   * Menambahkan profil kalibrasi `CAUTION_GLOBAL_MACRO` dan `CAUTION_IHSG_30D_RETURNS` pada mesin kuantitatif sehingga mode `WASPADA` menghasilkan volatilitas IHSG di rentang moderat ($\sim 16{,}8\%$, di atas ambang tenang $14{,}2\%$ namun di bawah batas krisis) dengan alokasi ekuitas berimbang.
-2. **Pembersihan Kalimat Pengulangan & Mesin Animasi Ketikan**:
-   * Menghapus awalan `"Keputusan Komite atas pertanyaan Anda (...):"` dan `"Menjawab fokus Anda (...):"` baik pada *engine* analitis lokal maupun instruksi *prompt* server Gemini, serta menambahkan pembersih *regex* otomatis agar `directAnswerSummary` langsung menampilkan substansi analisis.
-   * Mengimplementasikan *hook/state* animasi berpikir multi-tahap (`thinkingStageIndex`) dan *progressive text reveal* (`typedCharCount`) yang berjalan mulus saat analisis dimuat.
-3. **Filter Tanggal Berita Maksimal 3 Bulan (`90 Hari`)**:
-   * Pada `server.ts` dan `liveMarketFetcher.ts`, kueri RSS dilengkapi `when:90d` dan setiap item diuji selisih waktunya (`Date.now() - Date.parse(pubDate) <= 90 * 24 * 60 * 60 * 1000`). Selain itu, judul/ringkasan diperiksa agar tidak memuat referensi tahun lampau yang sudah kadaluarsa.
+- **Data Model & State**:
+  - Struktur data evaluasi fundamental tetap mempertahankan properti kalkulasi (`intrinsicValueIdr`, `marginOfSafetyPct`, `businessQualityScore`, `balanceSheetHealthScore`, `valuationSafetyScore`, `oosQuantRobustnessScore`) tanpa perubahan yang merusak kompatibilitas *state*.
+- **Interactive Component & State Mapping**:
+  - Seluruh alur *Inspect Emiten*, *chip* pertanyaan cepat, *Bedah Komite AI*, *sticky footer*, dan unduhan *Export PNG / PDF* secara konsisten menampilkan terminologi baru dan kredit **`Made with 🤖 by Fayadh`**.

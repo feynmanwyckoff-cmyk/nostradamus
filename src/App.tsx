@@ -1513,11 +1513,11 @@ export default function App() {
             <div className="inline-flex items-center gap-1 font-bold text-[#D97706] bb-amber whitespace-nowrap shrink-0">
               <span>Made with</span>
               <span
-                className="inline-block animate-flame text-xs leading-none"
+                className="inline-block animate-robot text-xs leading-none"
                 role="img"
-                aria-label="blazing fire"
+                aria-label="AI robot"
               >
-                🔥
+                🤖
               </span>
               <span>by Fayadh</span>
             </div>

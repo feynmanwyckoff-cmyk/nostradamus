@@ -46,6 +46,174 @@ interface EmitenFundamentalInspectorModalProps {
   onStockSynced?: (updatedStock: StockMetrics) => void;
 }
 
+const DEFAULT_COT_TITLES = [
+  '01. Dekomposisi DuPont & Moat:',
+  '02. Spread Valuasi vs SBN 10Y:',
+  '03. Uji Silang Momentum & Value Trap:',
+  '04. Audit Katalis Berita & Eksekusi:'
+];
+
+function parseDirectSummaryHeaderAndBody(rawSummary: string): {
+  header: string;
+  body: string;
+} {
+  const clean = String(rawSummary || '').trim();
+  const match = clean.match(
+    /^((?:Hasil|Kesimpulan|Keputusan|Evaluasi|Audit)\s+[^:]{3,75}):\s*([\s\S]*)$/i
+  );
+  if (match) {
+    return {
+      header: match[1].trim(),
+      body: match[2].trim()
+    };
+  }
+  const genericColon = clean.match(/^([^:]{5,55}):\s*([\s\S]+)$/);
+  if (genericColon && !genericColon[1].includes('.')) {
+    return {
+      header: genericColon[1].trim(),
+      body: genericColon[2].trim()
+    };
+  }
+  return {
+    header: 'Hasil Analisis Komite Investasi',
+    body: clean
+  };
+}
+
+function parseTitledCardStep(
+  rawText: string,
+  fallbackIndex?: number
+): {
+  header: string | null;
+  body: string;
+  conclusion: string | null;
+} {
+  const clean = String(rawText || '').trim();
+  let header: string | null = null;
+  let remainder = clean;
+
+  const colonIdx = clean.indexOf(':');
+  if (colonIdx > 0 && colonIdx <= 68) {
+    header = clean.slice(0, colonIdx + 1).trim();
+    remainder = clean.slice(colonIdx + 1).trim();
+  } else if (typeof fallbackIndex === 'number' && DEFAULT_COT_TITLES[fallbackIndex]) {
+    header = DEFAULT_COT_TITLES[fallbackIndex];
+  }
+
+  const arrowMatch = remainder.split(/\s*(?:->|→)\s*/);
+  if (arrowMatch.length > 1) {
+    const bodyPart = arrowMatch.slice(0, -1).join(' → ').trim();
+    const conclusionPart = arrowMatch[arrowMatch.length - 1].trim();
+    return {
+      header,
+      body: bodyPart,
+      conclusion: conclusionPart || null
+    };
+  }
+
+  return {
+    header,
+    body: remainder,
+    conclusion: null
+  };
+}
+
+function renderHighlightedFinancialNarrative(
+  text: string,
+  ticker?: string
+): React.ReactNode {
+  if (!text) return null;
+  const cleanTicker = (ticker || '').trim().toUpperCase();
+  const escapedTicker = cleanTicker.replace(/[^A-Z0-9]/g, '');
+
+  const verdictTerms = [
+    'LAYAK DIAKUMULASI BERTAHAP',
+    'LAYAK KOLEKSI SELEKTIF SAAT KOREKSI',
+    'LEBIH TEPAT DITUNGGU PADA AREA PULLBACK',
+    'TIDAK LAYAK DIAKUMULASI',
+    'STRONG ACCUMULATE',
+    'SELECTIVE BUY',
+    'BUY ON WEAKNESS',
+    'BUKAN VALUE TRAP',
+    'VALUE TRAP',
+    'DIVIDEND TRAP',
+    'HIGH SPECULATIVE CONCENTRATION',
+    'CLEAN NON-HSC',
+    'BLOKIR HSC',
+    'ROTATE OUT'
+  ];
+
+  const metricLabels = [
+    'Implied PER',
+    'Fair PER',
+    'PER',
+    'Implied PBV',
+    'Fair PBV',
+    'PBV',
+    'Earnings Yield',
+    'SBN 10Y',
+    'ROA murni',
+    'ROA',
+    'ROE organik',
+    'ROE',
+    'Equity Multiplier',
+    'DER',
+    'Operating Margin',
+    'Op Margin',
+    'Margin of Safety',
+    'MoS',
+    'Equity Yield Spread',
+    'Total Shareholder Yield',
+    'Skor Value',
+    'Skor Komposit',
+    'Skor Momentum',
+    'Low-Vol',
+    'Beta 1Y',
+    'Beta',
+    'BVPS',
+    'EPS',
+    'biaya modal',
+    'Cost of Equity'
+  ];
+
+  const patternParts: string[] = [
+    `\\b(?:${verdictTerms.join('|')})\\b`,
+    `\\b(?:${metricLabels.join('|')})\\s*~?(?:Rp\\s*)?[+-]?\\d+(?:[.,]\\d+)?(?:%|x|\\/100|\\/10|\\/saham)?`,
+    `~?Rp\\s*\\d+(?:[.,]\\d+)*(?:\\/saham)?`,
+    `[+-]?\\d+(?:[.,]\\d+)?(?:%|x|\\b\\/100\\b|\\b\\/10\\b)`
+  ];
+
+  if (escapedTicker.length >= 4) {
+    patternParts.push(`\\b${escapedTicker}\\b`);
+  }
+
+  const masterRegex = new RegExp(`(${patternParts.join('|')})`, 'g');
+  const segments = text.split(masterRegex);
+
+  return segments.map((seg, i) => {
+    if (!seg) return null;
+    if (i % 2 === 1) {
+      const isVerdict = verdictTerms.some((v) => seg.toUpperCase() === v);
+      if (isVerdict) {
+        return (
+          <strong
+            key={i}
+            className="font-extrabold text-[#D97706] bb-amber underline decoration-[#D97706]/50 underline-offset-2"
+          >
+            {seg}
+          </strong>
+        );
+      }
+      return (
+        <strong key={i} className="font-bold text-[#111315]">
+          {seg}
+        </strong>
+      );
+    }
+    return <React.Fragment key={i}>{seg}</React.Fragment>;
+  });
+}
+
 export function EmitenFundamentalInspectorModal({
   stock,
   regimeStatus = 'WASPADA',
@@ -125,8 +293,10 @@ export function EmitenFundamentalInspectorModal({
       return;
     }
 
-    const fullSummary = structuredReport.directAnswerSummary || '';
-    const totalChars = fullSummary.length;
+    const parsedSummary = parseDirectSummaryHeaderAndBody(
+      structuredReport.directAnswerSummary || ''
+    );
+    const totalChars = parsedSummary.body.length;
     const totalCot = structuredReport.chainOfThoughtSteps?.length || 0;
     const totalSecs = structuredReport.sections?.length || 0;
 
@@ -181,7 +351,10 @@ export function EmitenFundamentalInspectorModal({
       typingTimerRef.current = null;
     }
     if (structuredReport) {
-      setTypedCharCount(structuredReport.directAnswerSummary.length);
+      const parsed = parseDirectSummaryHeaderAndBody(
+        structuredReport.directAnswerSummary || ''
+      );
+      setTypedCharCount(parsed.body.length);
       setVisibleCotCount(structuredReport.chainOfThoughtSteps?.length || 0);
       setVisibleSectionCount(structuredReport.sections?.length || 0);
       setIsTypingComplete(true);
@@ -213,7 +386,7 @@ export function EmitenFundamentalInspectorModal({
     setIsLoadingNews(true);
     setStructuredReport(null);
     setAiAnalysisFallbackText(null);
-    const defaultQuestion = `Apakah ${stock.ticker} layak dibeli pada harga Rp ${stock.lastPrice.toLocaleString('id-ID')} menurut prinsip Joeliardi Sunendar?`;
+    const defaultQuestion = `Apakah ${stock.ticker} layak dibeli pada harga Rp ${stock.lastPrice.toLocaleString('id-ID')} berdasarkan Nilai Intrinsik Wajar & Fundamental Kualitas Moat?`;
     setUserQuestion(defaultQuestion);
 
     const runLazyOnDemandInspect = async () => {
@@ -269,7 +442,7 @@ export function EmitenFundamentalInspectorModal({
       setIsAnalyzingAi(true);
       try {
         const evalObj = evaluateJoeliardiOosFundamental(currentStock);
-        const qText = `Apakah ${currentStock.ticker} layak dibeli pada harga Rp ${currentStock.lastPrice.toLocaleString('id-ID')} menurut prinsip Joeliardi Sunendar?`;
+        const qText = `Apakah ${currentStock.ticker} layak dibeli pada harga Rp ${currentStock.lastPrice.toLocaleString('id-ID')} berdasarkan Nilai Intrinsik Wajar & Fundamental Kualitas Moat?`;
         setUserQuestion(qText);
         const aiRes = await runWithThinkingStages(() =>
           requestEmitenAiInspection({
@@ -461,9 +634,11 @@ export function EmitenFundamentalInspectorModal({
     ? 'bg-[#F59E0B]/15 text-[#D97706] border-[#F59E0B]/50'
     : 'bg-[#E11D48]/15 text-[#9E2A2B] border-[#E11D48]/50';
 
-  const displayedDirectSummary = structuredReport
-    ? structuredReport.directAnswerSummary.slice(0, typedCharCount)
-    : '';
+  const parsedDirectSummary = structuredReport
+    ? parseDirectSummaryHeaderAndBody(structuredReport.directAnswerSummary)
+    : { header: 'Hasil Analisis Komite Investasi', body: '' };
+
+  const displayedDirectBody = parsedDirectSummary.body.slice(0, typedCharCount);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 sm:p-5 overflow-y-auto">
@@ -478,7 +653,7 @@ export function EmitenFundamentalInspectorModal({
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-[#D97706] bb-amber">
-                    ON-DEMAND FUNDAMENTAL &amp; AI INSPECTOR // PRINSIP JOELIARDI SUNENDAR
+                    ON-DEMAND FUNDAMENTAL &amp; AI INSPECTOR // FUNDAMENTAL KUALITAS MOAT
                   </span>
                   <span
                     className={`text-[10px] font-bold px-2 py-0.5 rounded-xs border ${gradeBadgeCls}`}
@@ -519,7 +694,7 @@ export function EmitenFundamentalInspectorModal({
             </button>
           </div>
 
-          {/* Action Toolbar Row: Refresh, Export HD PNG, Export PDF (with Watermark), and HSC Toggle */}
+          {/* Action Toolbar Row: Refresh, Export HD PNG, Export PDF, and HSC Toggle */}
           <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[#E4E2DD]/70">
             <div className="flex flex-wrap items-center gap-2">
               <button
@@ -564,7 +739,7 @@ export function EmitenFundamentalInspectorModal({
                 onClick={handleExportPng}
                 disabled={isExporting !== null}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold text-[#0D5C46] bg-[#FFFFFF] border border-[#059669]/50 hover:border-[#059669] hover:bg-[#059669]/10 rounded-xs transition-colors cursor-pointer disabled:opacity-60"
-                title="Unduh gambar resolusi tinggi (HD PNG) hasil Inspect Emiten dengan watermark Nostradamus Quant Terminal"
+                title="Unduh gambar resolusi tinggi (HD PNG) hasil Inspect Emiten — Nostradamus Quant Terminal"
               >
                 <ImageDown className="w-3.5 h-3.5" />
                 <span>
@@ -577,7 +752,7 @@ export function EmitenFundamentalInspectorModal({
                 onClick={handleExportPdf}
                 disabled={isExporting !== null}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold text-[#D97706] bb-amber bg-[#FFFFFF] border border-[#D97706]/50 hover:border-[#F59E0B] hover:bg-[#D97706]/10 rounded-xs transition-colors cursor-pointer disabled:opacity-60"
-                title="Unduh dokumen PDF hasil Inspect Emiten dengan watermark Nostradamus Quant Terminal"
+                title="Unduh dokumen PDF hasil Inspect Emiten — Nostradamus Quant Terminal"
               >
                 <FileDown className="w-3.5 h-3.5" />
                 <span>{isExporting === 'PDF' ? 'Menyusun PDF...' : 'Export PDF'}</span>
@@ -596,16 +771,16 @@ export function EmitenFundamentalInspectorModal({
                 <div className="font-bold uppercase tracking-wider">
                   PERINGATAN SAHAM HSC (HIGH SPECULATIVE / CORNERED RISK) — DIBLOKIR DARI TOP DECILE BUY
                 </div>
-                <p className="leading-relaxed">
+                <p className="leading-relaxed text-justify">
                   {activeStock.hscReason ||
                     'Saham ini terindikasi memiliki karakteristik spekulatif tinggi atau fundamental yang tidak mendukung reli harga.'}{' '}
-                  Sesuai prinsip perlindungan modal Joeliardi Sunendar &amp; filter Out-of-Sample DeMiguel, emiten ini dikunci pada zona <strong>Rotate Out</strong>.
+                  Sesuai disiplin perlindungan modal Fundamental Kualitas Moat &amp; filter Out-of-Sample DeMiguel, emiten ini dikunci pada zona <strong>Rotate Out</strong>.
                 </p>
               </div>
             </div>
           )}
 
-          {/* Top Valuation & Intrinsic Value Bar (Joeliardi-Graham Model) with MetricTooltips */}
+          {/* Top Valuation & Intrinsic Value Bar with MetricTooltips */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="p-3.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
               <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
@@ -613,7 +788,7 @@ export function EmitenFundamentalInspectorModal({
                   label="HARGA PASAR LIVE (BEI)"
                   title="Kuotasi Harga Pasar Reguler BEI (.JK)"
                   laymanExplanation="Harga transaksi terakhir saham di pasar reguler Bursa Efek Indonesia beserta persentase perubahan harian (1D) dan bulanan (30D)."
-                  practicalGuide="Bandingkan harga pasar ini terhadap Nilai Intrinsik Joeliardi-Graham di sebelahnya untuk melihat apakah saham sedang terdiskon atau sudah mahal."
+                  practicalGuide="Bandingkan harga pasar ini terhadap Nilai Intrinsik Wajar di sebelahnya untuk melihat apakah saham sedang terdiskon atau sudah mahal."
                 />
               </div>
               <div className="text-lg font-bold font-mono text-[#111315] mt-1">
@@ -633,10 +808,10 @@ export function EmitenFundamentalInspectorModal({
             <div className="p-3.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
               <div className="text-[10px] font-bold uppercase tracking-wider text-[#D97706] bb-amber">
                 <MetricTooltip
-                  label="NILAI INTRINSIK (JOELIARDI-GRAHAM)"
-                  title="Estimasi Nilai Wajar Intrinsik (Joeliardi Sunendar & Benjamin Graham)"
+                  label="NILAI INTRINSIK WAJAR"
+                  title="Estimasi Nilai Intrinsik Wajar (Fundamental Kualitas Moat)"
                   laymanExplanation="Perkiraan harga wajar saham berdasarkan kemampuan perusahaan mencetak laba bersih per saham (EPS), nilai buku ekuitas (BVPS), dan keunggulan ROE dibanding biaya modal (10,5%)."
-                  practicalGuide="Jika Nilai Intrinsik lebih tinggi dari Harga Pasar Live, berarti saham sedang diperdagangkan di bawah nilai fundamentalnya."
+                  practicalGuide="Jika Nilai Intrinsik Wajar lebih tinggi dari Harga Pasar Live, berarti saham sedang diperdagangkan di bawah nilai fundamentalnya."
                   className="text-[#D97706] bb-amber"
                 />
               </div>
@@ -679,7 +854,7 @@ export function EmitenFundamentalInspectorModal({
               <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
                 <MetricTooltip
                   label="VALUASI MULTIPEL (IMPLIED VS WAJAR)"
-                  title="Rasio PER & PBV Saat Ini vs Multipel Wajar Joeliardi"
+                  title="Rasio PER & PBV Saat Ini vs Multipel Intrinsik Wajar"
                   laymanExplanation="Membandingkan berapa kali lipat laba (PER) dan modal bersih (PBV) yang Anda bayar di harga sekarang dibandingkan batas wajarnya menurut kualitas ROE dan neraca perusahaan."
                   practicalGuide="PER dan PBV yang lebih rendah dari angka 'Wajar'-nya menandakan valuasi yang murah secara fundamental."
                   align="right"
@@ -700,7 +875,7 @@ export function EmitenFundamentalInspectorModal({
             </div>
           </div>
 
-          {/* 4 Pillar Scores Grid: Joeliardi Sunendar + Out-of-Sample (OOS) Quant with MetricTooltips */}
+          {/* 4 Pillar Scores Grid: Fundamental Kualitas Moat + Out-of-Sample (OOS) Quant with MetricTooltips */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
             <div className="p-3.5 border border-[#E4E2DD] rounded-xs bg-[#FFFFFF]">
               <div className="flex items-center justify-between text-xs font-bold text-[#111315] mb-1">
@@ -762,7 +937,7 @@ export function EmitenFundamentalInspectorModal({
                 <MetricTooltip
                   label="3. Keamanan Valuasi"
                   title="Pilar 3: Keamanan Valuasi & Faktor Value (Bobot 35%)"
-                  laymanExplanation="Menggabungkan Margin of Safety Joeliardi-Graham dengan Skor Faktor Value Out-of-Sample agar Anda tidak membeli bisnis bagus di harga yang kelewat mahal."
+                  laymanExplanation="Menggabungkan Margin of Safety Nilai Intrinsik Wajar dengan Skor Faktor Value Out-of-Sample agar Anda tidak membeli bisnis bagus di harga yang kelewat mahal."
                   practicalGuide="Skor ≥ 68/100 mengonfirmasi harga beli memberikan asimetri imbal hasil terhadap risiko yang menguntungkan."
                 />
                 <span className="font-mono text-[#D97706]">
@@ -925,8 +1100,8 @@ export function EmitenFundamentalInspectorModal({
                       <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
                         <MetricTooltip
                           label="Spread Nilai Intrinsik"
-                          title="Spread Diskon / Premium terhadap Nilai Intrinsik Joeliardi-Graham"
-                          laymanExplanation="Persentase jarak antara harga pasar saat ini menuju target Nilai Intrinsik wajarnya (Rp)."
+                          title="Spread Diskon / Premium terhadap Nilai Intrinsik Wajar"
+                          laymanExplanation="Persentase jarak antara harga pasar saat ini menuju target Nilai Intrinsik Wajarnya (Rp)."
                           practicalGuide="Positif (+) berarti ruang kenaikan menuju harga wajar; Negatif (-) berarti harga pasar sudah melampaui nilai intrinsik konservatif."
                           align="right"
                         />
@@ -958,7 +1133,7 @@ export function EmitenFundamentalInspectorModal({
                 Sudut Bedah Komite:
               </span>
               {[
-                `Apakah ${activeStock.ticker} layak dibeli pada harga Rp ${activeStock.lastPrice.toLocaleString('id-ID')} menurut prinsip Joeliardi Sunendar?`,
+                `Apakah ${activeStock.ticker} layak dibeli pada harga Rp ${activeStock.lastPrice.toLocaleString('id-ID')} berdasarkan Nilai Intrinsik Wajar & Fundamental Kualitas Moat?`,
                 `Bagaimana dampak berita dan corporate action terbaru terhadap prospek ${activeStock.ticker}?`,
                 `Apakah ${activeStock.ticker} aman dari jebakan value trap atau indikasi HSC?`
               ].map((preset) => (
@@ -1088,35 +1263,66 @@ export function EmitenFundamentalInspectorModal({
                     </div>
                   </div>
 
-                  <p className="text-xs sm:text-[13px] text-[#111315] leading-relaxed">
-                    {displayedDirectSummary}
-                    {!isTypingComplete && (
-                      <span className="inline-block ml-1 text-[#D97706] animate-pulse font-mono font-bold">
-                        ▍
+                  {/* Boxed Bold Header for "Hasil Analisis Komite Investasi" + New-Line Justified Narrative with Bold Metrics */}
+                  <div className="pt-1.5 space-y-2.5">
+                    <div>
+                      <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xs bg-[#D97706]/15 border-2 border-[#D97706]/60 text-[#D97706] bb-amber text-xs sm:text-sm font-extrabold uppercase tracking-wider shadow-2xs">
+                        <span className="w-2 h-2 rounded-xs bg-[#D97706] shrink-0" />
+                        <span>{parsedDirectSummary.header}</span>
                       </span>
-                    )}
-                  </p>
+                    </div>
 
-                  {/* Chain of Thought Reasoning Steps (Revealed Progressively) */}
+                    <p className="text-xs sm:text-[13px] text-neutral-700 leading-relaxed text-justify">
+                      {renderHighlightedFinancialNarrative(
+                        displayedDirectBody,
+                        activeStock.ticker
+                      )}
+                      {!isTypingComplete && (
+                        <span className="inline-block ml-1 text-[#D97706] animate-pulse font-mono font-bold">
+                          ▍
+                        </span>
+                      )}
+                    </p>
+                  </div>
+
+                  {/* Chain of Thought Reasoning Steps (Revealed Progressively with Bold Title + Newline Discussion) */}
                   {structuredReport.chainOfThoughtSteps &&
                     structuredReport.chainOfThoughtSteps.length > 0 &&
                     visibleCotCount > 0 && (
-                      <div className="pt-2.5 mt-2 border-t border-[#E4E2DD] space-y-1.5">
+                      <div className="pt-3 mt-2.5 border-t border-[#E4E2DD] space-y-2">
                         <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-neutral-500">
                           <Layers className="w-3.5 h-3.5 text-[#D97706]" />
                           <span>Alur Penalaran Kuantitatif-Fundamental (Chain-of-Thought):</span>
                         </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
                           {structuredReport.chainOfThoughtSteps
                             .slice(0, visibleCotCount)
-                            .map((step, idx) => (
-                              <div
-                                key={idx}
-                                className="px-2.5 py-1.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs text-[11px] font-mono tabular-nums text-neutral-700 leading-snug"
-                              >
-                                {step}
-                              </div>
-                            ))}
+                            .map((step, idx) => {
+                              const parsedStep = parseTitledCardStep(step, idx);
+                              return (
+                                <div
+                                  key={idx}
+                                  className="p-3 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between"
+                                >
+                                  {parsedStep.header && (
+                                    <div className="text-xs font-extrabold text-[#111315] pb-1.5 mb-2 border-b border-[#E4E2DD]/80 tracking-tight">
+                                      {parsedStep.header}
+                                    </div>
+                                  )}
+                                  <div className="text-[11px] font-mono tabular-nums text-neutral-700 leading-relaxed text-justify">
+                                    {renderHighlightedFinancialNarrative(
+                                      parsedStep.body,
+                                      activeStock.ticker
+                                    )}
+                                    {parsedStep.conclusion && (
+                                      <span className="font-bold text-[#D97706] bb-amber block mt-1.5">
+                                        → {parsedStep.conclusion}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
                         </div>
                       </div>
                     )}
@@ -1151,19 +1357,57 @@ export function EmitenFundamentalInspectorModal({
                               </div>
                             )}
 
-                            <p className="text-xs text-neutral-700 leading-relaxed">
-                              {sec.reasoningParagraph}
+                            <p className="text-xs text-neutral-700 leading-relaxed text-justify">
+                              {renderHighlightedFinancialNarrative(
+                                sec.reasoningParagraph,
+                                activeStock.ticker
+                              )}
                             </p>
                           </div>
 
                           {sec.bulletPoints && sec.bulletPoints.length > 0 && (
-                            <ul className="pt-2 border-t border-[#E4E2DD]/80 space-y-1 text-[11px] text-neutral-600">
-                              {sec.bulletPoints.map((pt, idx) => (
-                                <li key={idx} className="flex items-start gap-1.5 leading-snug">
-                                  <span className={`font-bold ${tone.bulletColor}`}>▸</span>
-                                  <span>{pt}</span>
-                                </li>
-                              ))}
+                            <ul className="pt-2.5 border-t border-[#E4E2DD]/80 space-y-2 text-[11px] text-neutral-600">
+                              {sec.bulletPoints.map((pt, idx) => {
+                                const parsedBullet = parseTitledCardStep(pt);
+                                return (
+                                  <li
+                                    key={idx}
+                                    className="flex items-start gap-2 leading-relaxed"
+                                  >
+                                    <span className={`font-bold mt-0.5 ${tone.bulletColor}`}>
+                                      ▸
+                                    </span>
+                                    <div className="flex-1 text-justify">
+                                      {parsedBullet.header ? (
+                                        <>
+                                          <span className="font-bold text-[#111315] block mb-0.5">
+                                            {parsedBullet.header}
+                                          </span>
+                                          <span className="block text-neutral-700">
+                                            {renderHighlightedFinancialNarrative(
+                                              parsedBullet.body,
+                                              activeStock.ticker
+                                            )}
+                                            {parsedBullet.conclusion && (
+                                              <span className="font-bold text-[#D97706] bb-amber">
+                                                {' '}
+                                                → {parsedBullet.conclusion}
+                                              </span>
+                                            )}
+                                          </span>
+                                        </>
+                                      ) : (
+                                        <span>
+                                          {renderHighlightedFinancialNarrative(
+                                            pt,
+                                            activeStock.ticker
+                                          )}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </li>
+                                );
+                              })}
                             </ul>
                           )}
                         </div>
@@ -1186,7 +1430,7 @@ export function EmitenFundamentalInspectorModal({
                           <span className="text-[10px] font-bold uppercase text-neutral-500 block">
                             Tindakan Utama
                           </span>
-                          <div className="font-bold text-[#111315] mt-1 leading-snug">
+                          <div className="font-bold text-[#111315] mt-1 leading-snug text-justify">
                             {structuredReport.executionStrategy.recommendedAction}
                           </div>
                         </div>
@@ -1204,7 +1448,7 @@ export function EmitenFundamentalInspectorModal({
                           <span className="text-[10px] font-bold uppercase text-[#9E2A2B] block">
                             Batas Invalidation / Risiko
                           </span>
-                          <div className="font-bold text-[#9E2A2B] mt-1 leading-snug">
+                          <div className="font-bold text-[#9E2A2B] mt-1 leading-snug text-justify">
                             {structuredReport.executionStrategy.InvalidationOrRiskLimit}
                           </div>
                         </div>
@@ -1213,7 +1457,7 @@ export function EmitenFundamentalInspectorModal({
                           <span className="text-[10px] font-bold uppercase text-[#0284C7] bb-cyan block">
                             Panduan Porsi Keranjang
                           </span>
-                          <div className="font-bold text-[#111315] mt-1 leading-snug">
+                          <div className="font-bold text-[#111315] mt-1 leading-snug text-justify">
                             {structuredReport.executionStrategy.portfolioAllocationGuide}
                           </div>
                         </div>
@@ -1227,13 +1471,37 @@ export function EmitenFundamentalInspectorModal({
                           <CheckCircle2 className="w-4 h-4 shrink-0" />
                           <span>Katalis Positif &amp; Kekuatan Fundamental ({activeStock.ticker})</span>
                         </div>
-                        <ul className="space-y-1.5 text-xs text-neutral-700 leading-relaxed">
-                          {structuredReport.bullishDrivers.map((str, i) => (
-                            <li key={i} className="flex items-start gap-2">
-                              <span className="text-[#0D5C46] font-bold">•</span>
-                              <span>{str}</span>
-                            </li>
-                          ))}
+                        <ul className="space-y-2 text-xs text-neutral-700 leading-relaxed">
+                          {structuredReport.bullishDrivers.map((str, i) => {
+                            const parsedStr = parseTitledCardStep(str);
+                            return (
+                              <li key={i} className="flex items-start gap-2">
+                                <span className="text-[#0D5C46] font-bold">•</span>
+                                <div className="flex-1 text-justify">
+                                  {parsedStr.header ? (
+                                    <>
+                                      <span className="font-bold text-[#111315] block mb-0.5">
+                                        {parsedStr.header}
+                                      </span>
+                                      <span className="block">
+                                        {renderHighlightedFinancialNarrative(
+                                          parsedStr.body,
+                                          activeStock.ticker
+                                        )}
+                                      </span>
+                                    </>
+                                  ) : (
+                                    <span>
+                                      {renderHighlightedFinancialNarrative(
+                                        str,
+                                        activeStock.ticker
+                                      )}
+                                    </span>
+                                  )}
+                                </div>
+                              </li>
+                            );
+                          })}
                         </ul>
                       </div>
 
@@ -1242,13 +1510,37 @@ export function EmitenFundamentalInspectorModal({
                           <ShieldAlert className="w-4 h-4 shrink-0" />
                           <span>Faktor Risiko, Valuasi &amp; Disiplin Eksekusi</span>
                         </div>
-                        <ul className="space-y-1.5 text-xs text-neutral-700 leading-relaxed">
-                          {structuredReport.bearishRisks.map((risk, i) => (
-                            <li key={i} className="flex items-start gap-2">
-                              <span className="text-[#9E2A2B] font-bold">•</span>
-                              <span>{risk}</span>
-                            </li>
-                          ))}
+                        <ul className="space-y-2 text-xs text-neutral-700 leading-relaxed">
+                          {structuredReport.bearishRisks.map((risk, i) => {
+                            const parsedRisk = parseTitledCardStep(risk);
+                            return (
+                              <li key={i} className="flex items-start gap-2">
+                                <span className="text-[#9E2A2B] font-bold">•</span>
+                                <div className="flex-1 text-justify">
+                                  {parsedRisk.header ? (
+                                    <>
+                                      <span className="font-bold text-[#111315] block mb-0.5">
+                                        {parsedRisk.header}
+                                      </span>
+                                      <span className="block">
+                                        {renderHighlightedFinancialNarrative(
+                                          parsedRisk.body,
+                                          activeStock.ticker
+                                        )}
+                                      </span>
+                                    </>
+                                  ) : (
+                                    <span>
+                                      {renderHighlightedFinancialNarrative(
+                                        risk,
+                                        activeStock.ticker
+                                      )}
+                                    </span>
+                                  )}
+                                </div>
+                              </li>
+                            );
+                          })}
                         </ul>
                       </div>
                     </div>
@@ -1256,7 +1548,7 @@ export function EmitenFundamentalInspectorModal({
                 )}
               </div>
             ) : aiAnalysisFallbackText ? (
-              <div className="p-4 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs space-y-2.5 text-xs text-[#111315] leading-relaxed whitespace-pre-line font-sans">
+              <div className="p-4 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs space-y-2.5 text-xs text-[#111315] leading-relaxed text-justify whitespace-pre-line font-sans">
                 {aiAnalysisFallbackText}
               </div>
             ) : (
@@ -1269,7 +1561,7 @@ export function EmitenFundamentalInspectorModal({
                   <div className="font-bold text-[#D97706] bb-amber">
                     Siap Membedah Fundamental &amp; Tesis Investasi {activeStock.ticker}
                   </div>
-                  <p className="text-[#111315]">
+                  <p className="text-[#111315] text-justify">
                     Klik tombol <strong>Bedah Komite AI</strong> di kanan atas atau pilih salah satu pertanyaan cepat untuk menjalankan audit dekomposisi DuPont ROE, spread SBN 10Y, validasi 4-Faktor OOS, dan berita terkini {activeStock.ticker}.
                   </p>
                 </div>
@@ -1320,7 +1612,7 @@ export function EmitenFundamentalInspectorModal({
                         {item.title}
                       </h5>
                       {item.summary && (
-                        <p className="text-[11px] text-neutral-600 mt-1 line-clamp-2 leading-relaxed">
+                        <p className="text-[11px] text-neutral-600 mt-1 line-clamp-2 leading-relaxed text-justify">
                           {item.summary}
                         </p>
                       )}

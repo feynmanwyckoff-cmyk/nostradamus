@@ -1759,13 +1759,93 @@ export function decodeHtmlEntities(input: string): string {
   return text;
 }
 
+export function stripInlineCrossLinks(raw: string): string {
+  if (!raw) return '';
+  return raw
+    .replace(/<(p|div|li|span|strong|b|a)[^>]*>\s*(baca|lihat|simak)\s+juga[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/\b(baca|lihat|simak)\s+juga\s*:?[^.\n\r]*(\.|$)/gi, ' ')
+    .replace(/\b(artikel|berita)\s+terkait\s*:?[^.\n\r]*(\.|$)/gi, ' ');
+}
+
 function stripHtmlTags(raw: string): string {
-  const withoutTags = raw
+  const withoutCrossLinks = stripInlineCrossLinks(raw);
+  const withoutTags = withoutCrossLinks
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gi, '$1')
     .replace(/<[^>]*>/g, ' ');
   return decodeHtmlEntities(withoutTags)
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+export function isArticleStrictlyAboutEmiten(
+  title: string,
+  url: string,
+  targetTicker: string,
+  companyName?: string
+): boolean {
+  const cleanTicker = targetTicker.trim().toUpperCase();
+  if (!cleanTicker) return true;
+
+  // Strip trailing publisher suffix like " - Kontan.co.id"
+  const headlineCore = String(title || '')
+    .replace(/\s+[-|]\s+[^-|]+$/, '')
+    .trim();
+  const urlLower = String(url || '').toLowerCase();
+
+  // 1. Direct ticker match in headline or URL slug
+  const tickerRegex = new RegExp(`\\b${cleanTicker}\\b`, 'i');
+  const hasTickerInTitleOrUrl =
+    tickerRegex.test(headlineCore) ||
+    new RegExp(`[-/_]${cleanTicker.toLowerCase()}[-/_.]`).test(urlLower);
+
+  // 2. Distinctive company name tokens match in headline or URL
+  const cleanedCompany = String(companyName || '')
+    .replace(
+      /\b(Tbk|PT|Persero|Indonesia|Internasional|Nusantara|Sejahtera|Pratama|Makmur|Sentosa|Abadi|Karya|Utama|Mandiri|Group|Grup|Investama|Corporindo|Korporindo)\b/gi,
+      ' '
+    )
+    .replace(/[^a-zA-Z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const companyTokens = cleanedCompany
+    .split(' ')
+    .map((w) => w.trim().toLowerCase())
+    .filter((w) => w.length >= 4);
+
+  const primaryTwoWords = companyTokens.slice(0, 2).join(' ');
+  const hasCompanyInTitleOrUrl =
+    (primaryTwoWords.length >= 5 &&
+      (headlineCore.toLowerCase().includes(primaryTwoWords) ||
+        urlLower.includes(primaryTwoWords.replace(/\s+/g, '-')))) ||
+    companyTokens.some(
+      (tok) =>
+        tok.length >= 6 &&
+        (new RegExp(`\\b${tok}\\b`, 'i').test(headlineCore) || urlLower.includes(tok))
+    );
+
+  // 3. Guard against articles primarily about ANOTHER 4-letter IDX ticker (e.g. "Profil Emiten TOBA" matching MPMX via inline "Baca Juga")
+  const foreignEmitenInTitle = headlineCore.match(
+    /\b(?:emiten|saham|dividen|laba|kinerja|prospek|profil|direksi)\s+([A-Z]{4})\b/
+  );
+  if (
+    foreignEmitenInTitle &&
+    foreignEmitenInTitle[1].toUpperCase() !== cleanTicker &&
+    !tickerRegex.test(headlineCore)
+  ) {
+    return false;
+  }
+
+  const foreignEmitenInUrl = urlLower.match(/\b(?:emiten|saham)-([a-z]{4})\b/);
+  if (
+    foreignEmitenInUrl &&
+    foreignEmitenInUrl[1].toUpperCase() !== cleanTicker &&
+    !tickerRegex.test(headlineCore)
+  ) {
+    return false;
+  }
+
+  return hasTickerInTitleOrUrl || hasCompanyInTitleOrUrl;
 }
 
 /**
@@ -2154,7 +2234,7 @@ export function buildEmitenCorporateActionRadarBaseline(
       publishedAt: `Evaluasi ≤ 3 Bulan · ${recentDateLabel}`,
       url: `https://finance.yahoo.com/quote/${clean}.JK`,
       region: 'DOMESTIC',
-      summary: `Emiten menahan laba ditahan atau fokus pada restrukturisasi/modal kerja. Menurut prinsip Joeliardi Sunendar, ketiadaan dividen menuntut kehati-hatian ekstra pada kualitas arus kas operasi.`,
+      summary: `Emiten menahan laba ditahan atau fokus pada restrukturisasi/modal kerja. Menurut disiplin Fundamental Kualitas Moat, ketiadaan dividen menuntut kehati-hatian ekstra pada kualitas arus kas operasi.`,
       sentiment: isHsc ? 'RISK_OFF' : 'NEUTRAL',
       impactedSectors: [sector],
       emitenCategory: 'DIVIDEN_RUPS'
@@ -2250,9 +2330,16 @@ export async function fetchLiveEmitenSpecificNews(
           for (const raw of data.items) {
             const cleanTitle = decodeHtmlEntities(String(raw.title || ''));
             const cleanSummary = raw.summary
-              ? decodeHtmlEntities(String(raw.summary))
+              ? stripInlineCrossLinks(decodeHtmlEntities(String(raw.summary)))
               : undefined;
+            const rawUrl = String(raw.url || '');
             if (!isNewsItemFreshWithin3Months(raw.publishedAt, cleanTitle, cleanSummary)) {
+              continue;
+            }
+            if (
+              !String(raw.source || '').includes('Yahoo Finance') &&
+              !isArticleStrictlyAboutEmiten(cleanTitle, rawUrl, cleanTicker, resolvedName)
+            ) {
               continue;
             }
             const { sentiment } = classifyHeadlineSentiment(
@@ -2267,7 +2354,7 @@ export async function fetchLiveEmitenSpecificNews(
               title: cleanTitle,
               source: raw.source || `Radar ${cleanTicker}`,
               publishedAt: formatRecentNewsTimestamp(raw.publishedAt),
-              url: raw.url || `https://finance.yahoo.com/quote/${cleanTicker}.JK`,
+              url: rawUrl || `https://finance.yahoo.com/quote/${cleanTicker}.JK`,
               region: 'DOMESTIC',
               summary: cleanSummary,
               sentiment,
@@ -2282,13 +2369,25 @@ export async function fetchLiveEmitenSpecificNews(
     }
   }
 
-  // 2. If running on static GitHub Pages or server returned empty, query rss2json on Google News Indonesia RSS with when:90d
+  // 2. If running on static GitHub Pages or server returned empty, query rss2json on Google News Indonesia RSS with intitle: & when:90d
   if (liveFetchedItems.length === 0) {
     try {
-      const cleanShort = resolvedName.replace(/\b(Tbk|PT|Persero|Indonesia)\b/gi, '').trim();
-      const query = cleanShort
-        ? `("${cleanTicker}" OR "${cleanShort}") saham BEI when:90d`
-        : `"${cleanTicker}" saham BEI when:90d`;
+      const cleanShort = resolvedName
+        .replace(
+          /\b(Tbk|PT|Persero|Indonesia|Internasional|Nusantara|Sejahtera|Pratama|Makmur|Sentosa|Abadi|Karya|Utama|Mandiri|Group|Grup)\b/gi,
+          ' '
+        )
+        .replace(/\s+/g, ' ')
+        .trim();
+      const primaryWords = cleanShort
+        .split(' ')
+        .filter((w) => w.length >= 3)
+        .slice(0, 2)
+        .join(' ');
+      const query =
+        primaryWords && primaryWords.length >= 4
+          ? `(intitle:"${cleanTicker}" OR intitle:"${primaryWords}") saham when:90d`
+          : `intitle:"${cleanTicker}" saham when:90d`;
       const gNewsUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(
         query
       )}&hl=id&gl=ID&ceid=ID:id`;
@@ -2296,10 +2395,13 @@ export async function fetchLiveEmitenSpecificNews(
         gNewsUrl,
         `Google News BEI (${cleanTicker})`,
         'DOMESTIC',
-        6
+        8
       );
       for (const item of rssItems) {
         if (!isNewsItemFreshWithin3Months(item.publishedAt, item.title, item.summary)) {
+          continue;
+        }
+        if (!isArticleStrictlyAboutEmiten(item.title, item.url, cleanTicker, resolvedName)) {
           continue;
         }
         liveFetchedItems.push({
@@ -2332,6 +2434,12 @@ export function stripRawMarkdownArtifacts(text: string): string {
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/\*\*/g, '')
     .replace(/^#{1,4}\s+/gm, '')
+    .replace(/Nilai Intrinsik\s+Joeliardi-Graham/gi, 'Nilai Intrinsik Wajar')
+    .replace(/Joeliardi-Graham/gi, 'Nilai Intrinsik Wajar')
+    .replace(/prinsip\s+Joeliardi\s+Sunendar/gi, 'disiplin Fundamental Kualitas Moat')
+    .replace(/kriteria\s+Joeliardi\s+Sunendar/gi, 'kriteria Fundamental Kualitas Moat')
+    .replace(/\s*\(Joeliardi\s+Sunendar\)/gi, '')
+    .replace(/Joeliardi\s+Sunendar/gi, 'Fundamental Kualitas Moat')
     .trim();
 }
 
@@ -2453,17 +2561,17 @@ function buildDeepAnalyticalConvictionReport(params: {
     verdictTitle = `Asimetri positif kuat pada ${stock.ticker}: ROA murni ${impliedRoaPct}% & dividen ${divYield.toFixed(2)}% diperoleh pada diskon intrinsik +${joeliardiEval.marginOfSafetyPct}%`;
   } else if (stock.dmuCompositeScore >= 6.8 && joeliardiEval.marginOfSafetyPct >= 0) {
     verdictBadge = 'BUY ON WEAKNESS // QUALITY CORE';
-    verdictTitle = `${stock.ticker} memenuhi kriteria compounder Joeliardi Sunendar (Top ${stock.dmuRankPct}% OOS) untuk akumulasi bertahap`;
+    verdictTitle = `${stock.ticker} memenuhi kriteria compounder Fundamental Kualitas Moat (Top ${stock.dmuRankPct}% OOS) untuk akumulasi bertahap`;
   }
 
   // Contextual Direct Analysis (No Question Echo / Repetition)
   let directAnswerSummary = '';
   if (stock.isHscFlagged) {
-    directAnswerSummary = `Hasil Analisis Komite Investasi: Saham ${stock.ticker} TIDAK layak diakumulasi karena terdeteksi dalam radar High Speculative Concentration (${stock.hscReason || 'fluktuasi tidak ditopang nilai intrinsik'}). Meskipun harga bergerak ${stock.change1D >= 0 ? '+' : ''}${stock.change1D}% (1D) dan ${stock.return30D >= 0 ? '+' : ''}${stock.return30D}% (30D), rasio pengembalian terhadap risiko gagal melewati ambang batas keamanan modal Joeliardi Sunendar.`;
+    directAnswerSummary = `Hasil Analisis Komite Investasi: Saham ${stock.ticker} TIDAK layak diakumulasi karena terdeteksi dalam radar High Speculative Concentration (${stock.hscReason || 'fluktuasi tidak ditopang nilai intrinsik'}). Meskipun harga bergerak ${stock.change1D >= 0 ? '+' : ''}${stock.change1D}% (1D) dan ${stock.return30D >= 0 ? '+' : ''}${stock.return30D}% (30D), rasio pengembalian terhadap risiko gagal melewati ambang batas keamanan modal Fundamental Kualitas Moat.`;
   } else if (isAskingTrapOrHsc) {
     directAnswerSummary = isValueTrapCandidate
       ? `Hasil Audit Value Trap & Solvabilitas: Meskipun ${stock.ticker} bersih dari manipulasi HSC dan tampak murah secara optik (PER ${joeliardiEval.impliedPer}x, MoS +${joeliardiEval.marginOfSafetyPct}%), komite mendeteksi risiko Value Trap karena ${isStructuralUnderperformer ? `ROE (${stock.roe}%) berada di bawah Cost of Equity Indonesia (10,5%), artinya modal kerja belum menciptakan nilai tambah ekonomi nyata` : `momentum 30 hari masih negatif (${stock.return30D}%) dengan skor momentum ${stock.dmuMomScore}/10`}. Hindari menangkap pisau jatuh sebelum ada konfirmasi pembalikan arus kas.`
-      : `Hasil Audit Value Trap & Solvabilitas: Emiten ${stock.ticker} BEBAS dari indikasi HSC/gorengan dan terbukti BUKAN Value Trap. Diskon +${joeliardiEval.marginOfSafetyPct}% terhadap nilai intrinsik Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} memiliki fondasi fundamental kokoh: dekomposisi DuPont menghasilkan ROA murni ${impliedRoaPct}% pada pengungkit ekuitas sangat rendah (${equityMultiplier}x / DER ${stock.debtToEquity}x), ditambah perlindungan arus kas dividen ${divYield.toFixed(2)}% per tahun.`;
+      : `Hasil Audit Value Trap & Solvabilitas: Emiten ${stock.ticker} BEBAS dari indikasi HSC/gorengan dan terbukti BUKAN Value Trap. Diskon +${joeliardiEval.marginOfSafetyPct}% terhadap Nilai Intrinsik Wajar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} memiliki fondasi fundamental kokoh: dekomposisi DuPont menghasilkan ROA murni ${impliedRoaPct}% pada pengungkit ekuitas sangat rendah (${equityMultiplier}x / DER ${stock.debtToEquity}x), ditambah perlindungan arus kas dividen ${divYield.toFixed(2)}% per tahun.`;
   } else if (isAskingNews) {
     const topHeadlines = recentNews
       .slice(0, 2)
@@ -2473,7 +2581,7 @@ function buildDeepAnalyticalConvictionReport(params: {
   } else if (isAskingDividendOrCash) {
     directAnswerSummary = `Hasil Bedah Kualitas Dividen & Arus Kas: Pada harga Rp ${stock.lastPrice.toLocaleString('id-ID')}, imbal hasil dividen TTM ${stock.ticker} tercatat ${divYield.toFixed(2)}% dengan Earnings Yield ${earningsYieldPct}%. ${isDividendTrapRisk ? `Waspadai potensi Dividend Trap pasca cum-date karena tren 30 hari sedang terkoreksi (${stock.return30D}%)` : divYield > 0 ? `Distribusi dividen ini sangat sehat karena ditopang oleh ROE organik ${stock.roe}% dan neraca konservatif (DER ${stock.debtToEquity}x), sehingga tidak menggerus modal kerja perusahaan.` : `Emiten saat ini menahan sebagian besar laba (dividen TTM 0%) untuk ekspansi nilai buku (BVPS ~Rp ${joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')}).`}`;
   } else {
-    directAnswerSummary = `Hasil Analisis Komite Investasi: Pada kuotasi Rp ${stock.lastPrice.toLocaleString('id-ID')}, komite menilai ${stock.ticker} ${joeliardiEval.marginOfSafetyPct >= 12 && !isValueTrapCandidate ? 'LAYAK DIAKUMULASI BERTAHAP' : joeliardiEval.marginOfSafetyPct >= 0 ? 'LAYAK KOLEKSI SELEKTIF SAAT KOREKSI' : 'LEBIH TEPAT DITUNGGU PADA AREA PULLBACK'}. Secara kausal, pasar saat ini menghargai ${stock.ticker} pada Implied PER ${joeliardiEval.impliedPer}x (Earnings Yield ${earningsYieldPct}% vs SBN 10Y ${sbnBenchmarkPct}%), padahal perusahaan mencetak ROA murni ${impliedRoaPct}% dan ROE ${stock.roe}% (${roeSpread >= 0 ? `+${roeSpread}% di atas` : `${roeSpread}% di bawah`} biaya modal 10,5%) dengan pengungkit utang DER ${stock.debtToEquity}x, sehingga nilai intrinsik wajarnya berada di Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (Margin of Safety ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%).`;
+    directAnswerSummary = `Hasil Analisis Komite Investasi: Pada kuotasi Rp ${stock.lastPrice.toLocaleString('id-ID')}, komite menilai ${stock.ticker} ${joeliardiEval.marginOfSafetyPct >= 12 && !isValueTrapCandidate ? 'LAYAK DIAKUMULASI BERTAHAP' : joeliardiEval.marginOfSafetyPct >= 0 ? 'LAYAK KOLEKSI SELEKTIF SAAT KOREKSI' : 'LEBIH TEPAT DITUNGGU PADA AREA PULLBACK'}. Secara kausal, pasar saat ini menghargai ${stock.ticker} pada Implied PER ${joeliardiEval.impliedPer}x (Earnings Yield ${earningsYieldPct}% vs SBN 10Y ${sbnBenchmarkPct}%), padahal perusahaan mencetak ROA murni ${impliedRoaPct}% dan ROE ${stock.roe}% (${roeSpread >= 0 ? `+${roeSpread}% di atas` : `${roeSpread}% di bawah`} biaya modal 10,5%) dengan pengungkit utang DER ${stock.debtToEquity}x, sehingga Nilai Intrinsik Wajarnya berada di Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (Margin of Safety ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%).`;
   }
 
   const idealBuyLow = Math.round(
@@ -2491,15 +2599,15 @@ function buildDeepAnalyticalConvictionReport(params: {
     convictionScore: joeliardiEval.totalConvictionScore,
     chainOfThoughtSteps: [
       `01. Dekomposisi DuPont & Moat: ROE ${stock.roe}% dibedah menjadi ROA murni ${impliedRoaPct}% × Equity Multiplier ${equityMultiplier}x (DER ${stock.debtToEquity}x) dengan Operating Margin ${stock.operatingMargin}% -> ${isHighQualityOrganicRoe ? 'Profitabilitas Organik Bermoat Kuat' : isLeveragedRoe ? 'Return Ditopang Leverage Utang' : 'Efisiensi Modal Moderat'}.`,
-      `02. Spread Valuasi vs SBN 10Y: Earnings Yield ${earningsYieldPct}% dibandingkan dengan bebas risiko SBN 10Y (${sbnBenchmarkPct}%) menghasilkan Equity Yield Spread ${yieldSpreadVsSbn >= 0 ? '+' : ''}${yieldSpreadVsSbn}% dan diskon PER ${perDiscountPct}% -> Nilai Intrinsik Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%).`,
+      `02. Spread Valuasi vs SBN 10Y: Earnings Yield ${earningsYieldPct}% dibandingkan dengan bebas risiko SBN 10Y (${sbnBenchmarkPct}%) menghasilkan Equity Yield Spread ${yieldSpreadVsSbn >= 0 ? '+' : ''}${yieldSpreadVsSbn}% dan diskon PER ${perDiscountPct}% -> Nilai Intrinsik Wajar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%).`,
       `03. Uji Silang Momentum & Value Trap: Memadukan Skor Value (${stock.dmuValueScore}/10) terhadap trajektori harga 30D (${stock.return30D >= 0 ? '+' : ''}${stock.return30D}%) & volatilitas tahunan (${stock.volatilityAnn}%) -> ${isValueTrapCandidate ? 'Terdeteksi Gejala Value Trap / Distribusi' : isInstitutionalReRating ? 'Konfirmasi Akumulasi & Re-Rating Sehat' : 'Konsolidasi Wajar'}.`,
       `04. Audit Katalis Berita & Eksekusi: Menyaring ${recentNews.length} berita korporasi terkini, imbal hasil dividen ${divYield.toFixed(2)}%, dan status ${stock.isHscFlagged ? 'Blokir HSC' : 'Clean Non-HSC'} pada rezim IHSG ${regimeStatus}.`
     ],
     sections: [
       {
-        id: 'joeliardi-moat',
+        id: 'fundamental-moat',
         badge: `01. DUPONT & MOAT // SKOR ${joeliardiEval.businessQualityScore}/100`,
-        title: 'Audit Kualitas Laba, Dekomposisi DuPont & Economic Moat (Joeliardi Sunendar)',
+        title: 'Audit Kualitas Laba, Dekomposisi DuPont & Fundamental Kualitas Moat',
         keyMetricHighlight: `ROE ${stock.roe.toFixed(1)}% (Spread ${roeSpread >= 0 ? '+' : ''}${roeSpread}% vs Ke) · ROA Murni ${impliedRoaPct}% · Op Margin ${stock.operatingMargin.toFixed(1)}% · DER ${stock.debtToEquity.toFixed(2)}x`,
         reasoningParagraph: `${sectorEconomicsNote} Berdasarkan bedah DuPont, ROE ${stock.ticker} sebesar ${stock.roe.toFixed(1)}% dihasilkan dari pengembalian atas aset (ROA) sebesar ${impliedRoaPct}% dengan pengali ekuitas (Equity Multiplier) ${equityMultiplier}x. ${isHighQualityOrganicRoe ? `Karena DER sangat rendah (${stock.debtToEquity.toFixed(2)}x), seluruh kelebihan ROE sebesar +${roeSpread}% di atas Cost of Equity (10,5%) murni berasal dari keunggulan margin operasional (${stock.operatingMargin.toFixed(1)}%) dan efisiensi perputaran aset, bukan rekayasa utang.` : `Dengan DER ${stock.debtToEquity.toFixed(2)}x, investor perlu memastikan arus kas operasional tetap disiplin menutup beban pendanaan agar margin bersih tidak tergerus saat suku bunga tinggi.`}`,
         bulletPoints: [
@@ -2517,9 +2625,9 @@ function buildDeepAnalyticalConvictionReport(params: {
       {
         id: 'oos-valuation',
         badge: `02. VALUASI & YIELD // MOS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%`,
-        title: 'Uji Valuasi Intrinsik vs. Risiko Value Trap (Spread Earnings Yield vs SBN)',
+        title: 'Uji Nilai Intrinsik Wajar vs. Risiko Value Trap (Spread Earnings Yield vs SBN)',
         keyMetricHighlight: `Earnings Yield ${earningsYieldPct}% (vs SBN 6,75%) · PER ${joeliardiEval.impliedPer}x (Wajar ${joeliardiEval.joeliardiFairPer}x) · PBV ${joeliardiEval.impliedPbv}x (Wajar ${joeliardiEval.joeliardiFairPbv}x)`,
-        reasoningParagraph: `Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, investor memperoleh Earnings Yield sebesar ${earningsYieldPct}% per tahun (${yieldSpreadVsSbn >= 0 ? `premi risiko ekuitas positif +${yieldSpreadVsSbn}% di atas` : `terdiskon ${Math.abs(yieldSpreadVsSbn)}% di bawah`} obligasi negara SBN 10Y ${sbnBenchmarkPct}%) dengan Total Shareholder Yield mencapai ${totalShareholderYieldPct}%. Dibandingkan Nilai Intrinsik Joeliardi-Graham di Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')}, saham ini memiliki Margin of Safety ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%.`,
+        reasoningParagraph: `Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, investor memperoleh Earnings Yield sebesar ${earningsYieldPct}% per tahun (${yieldSpreadVsSbn >= 0 ? `premi risiko ekuitas positif +${yieldSpreadVsSbn}% di atas` : `terdiskon ${Math.abs(yieldSpreadVsSbn)}% di bawah`} obligasi negara SBN 10Y ${sbnBenchmarkPct}%) dengan Total Shareholder Yield mencapai ${totalShareholderYieldPct}%. Dibandingkan Nilai Intrinsik Wajar di Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')}, saham ini memiliki Margin of Safety ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%.`,
         bulletPoints: [
           `Validasi Silang 4-Faktor OOS: Skor Komposit ${stock.dmuCompositeScore.toFixed(2)}/10 (Peringkat Top ${stock.dmuRankPct}% JCI) dengan bobot faktor Value ${stock.dmuValueScore.toFixed(1)}/10 dan Low-Vol ${stock.dmuLowVolScore.toFixed(1)}/10.`,
           `Uji Diagnostik Value Trap: ${isValueTrapCandidate ? 'PERINGATAN: Diskon harga saat ini diiringi pelemahan momentum 30D atau ROE di bawah biaya modal — tunggu katalis perbaikan laba sebelum akumulasi penuh.' : isMomentumOverextended ? 'Harga pasar sudah berlari melampaui nilai wajar intrinsik; risiko mean-reversion meningkat jika laba kuartal depan meleset.' : 'Bukan Value Trap: diskon valuasi didukung langsung oleh ROA organik dan arus kas positif.'}`,

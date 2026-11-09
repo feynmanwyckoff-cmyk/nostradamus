@@ -1638,7 +1638,7 @@ export function ScreeningTable({
                                 ? onInspectTicker(stock.ticker)
                                 : setInspectedTicker(stock.ticker)
                             }
-                            title={`Inspect Fundamental (Joeliardi Sunendar & OOS) + Analisis AI & Berita Terkini ${stock.ticker}`}
+                            title={`Inspect Fundamental Kualitas Moat & OOS + Analisis AI & Berita Terkini ${stock.ticker}`}
                             className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-bold bg-[#D97706]/10 hover:bg-[#D97706] text-[#D97706] hover:text-white border border-[#D97706]/40 rounded-xs transition-colors cursor-pointer"
                           >
                             <Scale className="w-3 h-3" />
