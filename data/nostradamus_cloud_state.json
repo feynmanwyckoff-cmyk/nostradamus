@@ -1,11 +1,11 @@
 {
   "schemaVersion": "3.0-DEMIGUEL-MF24",
-  "updatedAt": "2026-11-09T10:12:58.283Z",
+  "updatedAt": "2026-11-09T10:15:25.898Z",
   "strategyName": "Vol-Managed Multifactor + 40% Buffer",
   "rebalanceBufferPct": 40,
   "thresholdAnnVol": 18,
-  "capitalIdr": 16213177,
-  "cashReserveIdr": 4,
+  "capitalIdr": 16311777,
+  "cashReserveIdr": 4398777,
   "holdings": [
     {
       "ticker": "BRIS",
@@ -31,7 +31,7 @@
     {
       "ticker": "NISP",
       "lots": 16,
-      "avgBuyPrice": 1113.25,
+      "avgBuyPrice": 1133.25,
       "addedAt": "2026-11-09",
       "notes": "Active Multifactor Position"
     },
@@ -31649,9 +31649,9 @@
     "version": 1,
     "saltBase64": "VnsorMcDCpdVWdhPJy1n1A==",
     "verifierHashBase64": "4n2Mmvj0WYbqgIZRTAlg7solExkFmaKEMwbBRhc0KNM=",
-    "ivBase64": "VJgbeH/HTuGVUlEY",
-    "cipherTextBase64": "HlSASltZwbek2aT6JVOoaFdVmD8mUQv38edV4+al9MJ/1WrycAqzeFuEppmF+XpFmL70Ck540PqhEx2Z5m1LAKjh14tq++GRxh25v9dQeDYC6UH1D/Z1EkffBNaSFBvLdOQxnMzdCciI9IoRZhHHr3KbSjh45KKU4DyeYmN1mDu6nN++LsiHmwrIAtCxjdEtd1oe2Q0avTiYt0KBhdl19Jkdktu0lZFADdtXk67fAfJuDxDwWJ2gVq2+HhThrQhz4tQvwzkc+7kjROK3NnvOUCelSjaGmT2sw4wXKmt7V380ZIbMNOyKi6EvkqqpG49KrYvdkbjbeQ3i20PDKfBQfMNd17q6QK6XatU1PIpO5xAjBOXA/gxOqabIdJG3EbQnTYy8V5s86E68otns+uEQXVAEhveAEBS3YNy8GvBbLXCk0AoBy4nkMsnKCfBk16Tnu6DuqeKWtNfTW1vN8DOxlUUMoq5CcNVq3SwsW8Vbe0O9e9eEx0JU6sSBJcu0AYByhP9gzDiYTkEtJOzJpomLrs0qJGj1GplTVmbVTiyGtWeJaZYQAzoEF+l8emyu3Dj01GQKW4Q31EGLIROo3+xbZJnwhWE5+wrLW3D/10cKwO99z1Ot+oTpsb2M35VcukosZP6Tnm5ue/j0muwuJdDiRXIRxQCOuvy3ZXFmcex2m62B5cppgVggSQ2Jy92qpy/ncgHwW+c4YDuzZ9pKLbZcu4Jq5nc5Xg10UAVntc5uRRSEyf1KhJl9Gm+BtN02c8CIC94J0kQbkSnQJbhlcLi7OfABD1C6R2/bDFYTfN+eyockIge79rStJn1zu0JVh9Vs57QiP2tif9IueCw4J2a7Sd+Tau4WR7jvMNYJQa2JTEp8SSAlCoETt/pfjGVfIhmv/6N+Djz1knXMVrZ6d0u+ihY2Qiqg6z9x4zJoaSxd9dBTIgz+9Sz+av8OO5JcCcuDIi2cVyrf1C1bM3HS/0aBDzSoYjRy8TR0PvhQ10MYAluCkr0L2DhUX2LgK0qylOBnzvgFFQ7pcN/RP96IhX8NOKUsdxD92jLy2HifKnsbjv3NyAYjGclvDbmIWlsBYImjys20YHBtiskuPCdRGBmJt2ZrJ51z5pRERacAG4eOF1b1LQH7gxVCTLpq5x7U2FxS21tjNZ90GxSUr7lIqO+R2+Qyn6AIRBz/Di2FXOcd6GbmBlZF8RbqVJEuosZLzbvgv7kNkmwy7e+PWew/yzyFBwAL/Hj4sqGzSI4Kw2VibNHMK6PjHrkQIzIdaaoDGMcxjr7Rh5vtk5eCshW4ykEgVf/DAo0lNLmDcMubKXlCBM+LQH1tQCxvIsxQA7BA3mxcEgW6KkQrd9ubXNrBwTrLGR17JmUfmQT05MEN8wEsq1hQw9MibccQ4/ewCJoxQU2VGf2yNqZ6pyUXae3n3Q==",
-    "updatedAt": "2026-11-09T10:11:43.271Z",
+    "ivBase64": "CU2qPVHdpNHKlXg+",
+    "cipherTextBase64": "Jz/MDDhqn8LoGtw3DvITX5urRBvEUpYuVjikcxZsDTzAN6xKOGcNfvTd5LHWaoepjwzVgUGBdpIP/G4+QloE4ruNg6db+po+WSLIaueJTB7HH2aVV6FMN+Hw+Wxz5TNYday4WB/oTptDNsvQIp/ixukbceLZH5fATMestuhSwAVnCc+NPJ6Wcnn4vftP/+xTJk1MDQ8PFhB7M1uvAZiOkHtOEdO+DZzyOUaMnSjzaasNWvaAphotKnLJ3uIXE3Gbxf9NDlKw6qd1DzZWZVnKaxkcdxIdq8M1hxqRX3an864AIOiPgjgDXTW0ccGzYEAGb4hb+be5n3I8yr3GFAMr5zNrc7qac2WXTBxOdPTdHnR0apG3n/Q1BIfYYCLDfYLFIS31MyQXOhD3GSmyMZTIIHPsl70j6BmmeqBLboCiPbdXMTsPfmbQKK8RVrpbaq54sw5/H7xc+OtspVrvSB/4X1EA8vvLsyaVoSZKprsbNxDXl9LuIn53ryhpzm8oKqTTYjjVkSl6xg5qb30qT4t0agjPPxFW3ByvTQVSpozScL8h/temGCR+6m9qzLitQDWmzhbFQNHEon00HxrEDSYATX3kHcU/aUwo2FS7nuoK8sUzuGz3LG50G9YrbWihtrsNJycVPmqZMbjjeO7eVrh2Xc6rx3NO2Na3FOLoIUWu6luJ/eOnx9iAw1vXyfLwljYeHq2NyYJaCgZlXotsNUbiFg9RLibZZEh1WkVfpkN0SyIZvhz7cWncN4ij5TGBsj+BO+lEiqpepRetRA4gmshABkNg8BPPvD9nisSRaH2GD6MltBZwPjaytNUs6d0fERGnuAdZFNjXe1ApRP+GtZ43F72sBeNiba9J57UNC/ukD82gUWTdbeunmtmAg9eKF0YTrTvNIPt/kKt+D/mR6MnIEUhHeFE7a/RL7cShG2K3ZgHe8Qj4JuAQIrZLoyYM11QOgmDB7otWbK7CmVNlEXYzRCWSiGbemrEcrmZJo2JeKhnjJWRzdxrfKNea912VOTfUL2Ehm3m0q5uLQmrpJ6y9gKZvFNAdjF5ZVaFaPxOvTImQeyPhjLo8nRVu+G/POiJh+mvwL094yYd2ykUizPufSVGCUir/2M/ARA7ybPh8uMhdusvwjuDccWjNTwlVWCPOLT2qbFa8hC3YNNUK3DzX19oRx/ssLtFPQjnD1vwEELRcqWoTL9g30rO2Xm7XEXqeJVasjchxZnMp+yA6rtSQu3gfpMxfgx4cqwYAMPYtN7J+x5igX1n8gGIE+vTLVtuNDgbJq74RvRCNSf+xFGh9neUZbm44uyiD4W48CSo718xdDTYTBSwjx3hzQFz+/4w45IKxcsO/hRUTJXCCd814TKqY2+FwKORTje/ezgQZYKrDE6G/4djMsO9C4vpw1liUFlyxNTW2t98TsfTsww==",
+    "updatedAt": "2026-11-09T10:13:00.365Z",
     "scopeHash": "16183f276edb0072818f889699df444fbc598e280371cccb5181968464c88546",
     "originHash": "f3a7d76bbb9d13f907952d46bed14f67d329db4e664ede97c181f9d289e94aa3",
     "repoScope": "feynmanwyckoff-cmyk/nostradamus",
