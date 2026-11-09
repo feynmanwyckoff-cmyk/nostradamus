@@ -1,6 +1,6 @@
 {
   "schemaVersion": "3.0-DEMIGUEL-MF24",
-  "updatedAt": "2026-11-09T09:58:32.154Z",
+  "updatedAt": "2026-11-09T10:04:51.919Z",
   "strategyName": "Vol-Managed Multifactor + 40% Buffer",
   "rebalanceBufferPct": 40,
   "thresholdAnnVol": 18,
@@ -61,13 +61,6 @@
       "lots": 2,
       "avgBuyPrice": 3625,
       "addedAt": "2026-11-07",
-      "notes": "Active Multifactor Position"
-    },
-    {
-      "ticker": "ESSA",
-      "lots": 22,
-      "avgBuyPrice": 493.46,
-      "addedAt": "2026-11-09",
       "notes": "Active Multifactor Position"
     },
     {
