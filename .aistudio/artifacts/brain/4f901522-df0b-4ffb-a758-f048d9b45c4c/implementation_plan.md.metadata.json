@@ -1,0 +1,6 @@
+{
+  "summary":  "Rencana perbaikan menyeluruh ekstraksi harga terkini Yahoo Finance (mengutamakan regularMarketPrice & fulldayPrice beserta regularMarketChangePercent/fulldayChangePercent), penyegaran snapshot pasar live 956+ emiten hari ini, sinkronisasi harga di cloud state JSON, dan penguatan jadwal cron GitHub Actions selama jam bursa BEI.",
+  "updatedAt":  "2026-11-09T03:08:24.231617243Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

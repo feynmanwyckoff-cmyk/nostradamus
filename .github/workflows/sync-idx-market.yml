@@ -1,0 +1,40 @@
+name: Sync IDX Market Snapshot & Global Macro (Yahoo Finance)
+
+on:
+  schedule:
+    # Automatically refresh Yahoo Finance Full JCI Stocks + Global Macro + News RSS across IDX trading hours (09:05, 10:05, 12:05, 14:05, 15:05, 16:05 WIB)
+    - cron: '5 2,3,5,7,8,9 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  sync-market-snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Dependencies
+        run: npm install --legacy-peer-deps --no-audit --no-fund
+
+      - name: Fetch Live Yahoo Finance Full JCI Snapshot, Macro & RSS
+        run: node scripts/generate-static-market-bundle.mjs
+
+      - name: Commit Updated Market Snapshot to Repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add public/static-market-snapshot.json src/data/staticMarketSnapshot.json static-market-snapshot.json data/nostradamus_cloud_state.json
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(market): auto-sync IDX 956+ emiten & global macro snapshot [skip ci]"
+            git push
+          fi

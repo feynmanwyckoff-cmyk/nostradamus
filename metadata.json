@@ -1,0 +1,6 @@
+{
+  "name": "IHSG Quant-Barbell Portfolio Dashboard",
+  "description": "Quantitative portfolio engine tracking Volatility, Beta, and Quality-Minus-Junk (QMJ) scores for IDX equities with Google Sheets, Google Apps Script, and GitHub Pages architecture.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,298 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: 'Montserrat', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-serif: 'Lora', Georgia, Cambria, serif;
+  }
+
+  html,
+  body {
+    font-family: var(--font-sans);
+    color: #111315;
+    background-color: #F4F5F7;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    overflow-x: clip;
+  }
+}
+
+.font-editorial {
+  font-family: var(--font-serif);
+}
+
+.font-tabular,
+.tabular-nums {
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* Hide scrollbars on non-table elements */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Dedicated Sticky Table Scrollbar (Theme-Aware for Light & Dark) */
+.table-scroll-container {
+  scrollbar-width: thin;
+  scrollbar-color: #CBD5E1 #F8FAFC;
+}
+
+.table-scroll-container::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+.table-scroll-container::-webkit-scrollbar-track {
+  background: #F1F5F9;
+}
+
+.table-scroll-container::-webkit-scrollbar-thumb {
+  background-color: #94A3B8;
+  border-radius: 3px;
+}
+
+.table-scroll-container::-webkit-scrollbar-thumb:hover {
+  background-color: #D97706;
+}
+
+.theme-dark .table-scroll-container {
+  scrollbar-color: #334155 #0F172A;
+}
+
+.theme-dark .table-scroll-container::-webkit-scrollbar-track {
+  background: #0D131C;
+}
+
+.theme-dark .table-scroll-container::-webkit-scrollbar-thumb {
+  background-color: #334155;
+  border-radius: 3px;
+}
+
+.theme-dark .table-scroll-container::-webkit-scrollbar-thumb:hover {
+  background-color: #F59E0B;
+}
+
+/* ============================================================================
+ * CONTINUOUS RUNNING TEXT MARQUEE FOR GLOBAL MACRO WIRE (NO SCROLLBAR)
+ * ============================================================================ */
+@keyframes macroMarquee {
+  0% {
+    transform: translate3d(0%, 0, 0);
+  }
+  100% {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+.animate-macro-marquee {
+  display: flex;
+  width: max-content;
+  animation: macroMarquee 38s linear infinite;
+}
+
+.animate-macro-marquee:hover {
+  animation-play-state: paused;
+}
+
+@keyframes heartbeat {
+  0%, 100% {
+    transform: scale(1);
+  }
+  15% {
+    transform: scale(1.28);
+  }
+  30% {
+    transform: scale(0.96);
+  }
+  45% {
+    transform: scale(1.22);
+  }
+  60% {
+    transform: scale(1);
+  }
+}
+
+.animate-heartbeat {
+  display: inline-block;
+  animation: heartbeat 1.35s ease-in-out infinite;
+  transform-origin: center;
+}
+
+@keyframes flameBlaze {
+  0%, 100% {
+    transform: scale(1) rotate(0deg);
+    filter: drop-shadow(0 0 2px rgba(245, 158, 11, 0.55));
+  }
+  25% {
+    transform: scale(1.22, 1.28) rotate(-4deg);
+    filter: drop-shadow(0 0 6px rgba(249, 115, 22, 0.85));
+  }
+  50% {
+    transform: scale(1.06, 1.15) rotate(3deg);
+    filter: drop-shadow(0 0 4px rgba(239, 68, 68, 0.75));
+  }
+  75% {
+    transform: scale(1.24, 1.3) rotate(-2deg);
+    filter: drop-shadow(0 0 7px rgba(245, 158, 11, 0.9));
+  }
+}
+
+.animate-flame {
+  display: inline-block;
+  animation: flameBlaze 1.25s ease-in-out infinite;
+  transform-origin: bottom center;
+}
+
+/* ============================================================================
+ * DUAL-MODE BLOOMBERG TERMINAL THEME ENGINE (LIGHT DAYLIGHT & CLASSIC DARK)
+ * ============================================================================ */
+
+/* Classic Dark Bloomberg Terminal (Hitam-Amber-Cyan-Emerald-Crimson) */
+.theme-dark {
+  background-color: #090C10 !important;
+  color: #E5E7EB !important;
+}
+
+.theme-dark header,
+.theme-dark section,
+.theme-dark table,
+.theme-dark .bg-\[\#FFFFFF\],
+.theme-dark .bg-\[\#FFFFFF\]\/95 {
+  background-color: #11161F !important;
+  border-color: #222C3C !important;
+  color: #E5E7EB !important;
+}
+
+.theme-dark thead,
+.theme-dark thead tr,
+.theme-dark thead th,
+.theme-dark .bg-\[\#FAF9F6\],
+.theme-dark .bg-\[\#FAF9F6\]\/90,
+.theme-dark .bg-\[\#FAF9F6\]\/80,
+.theme-dark .bg-\[\#FAF9F6\]\/70,
+.theme-dark .bg-\[\#FAF9F6\]\/60,
+.theme-dark .bg-\[\#FAF9F6\]\/50,
+.theme-dark .bg-\[\#F3F1EC\],
+.theme-dark .bg-\[\#F3F1EC\]\/70 {
+  background-color: #161D2A !important;
+  border-color: #263244 !important;
+}
+
+.theme-dark .border-\[\#E4E2DD\],
+.theme-dark .border-\[\#E4E2DD\]\/80,
+.theme-dark .border-\[\#E4E2DD\]\/70,
+.theme-dark .border-\[\#E4E2DD\]\/60,
+.theme-dark .divide-\[\#E4E2DD\] > :not([hidden]) ~ :not([hidden]),
+.theme-dark .divide-\[\#E4E2DD\]\/70 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #222C3C !important;
+}
+
+.theme-dark .text-\[\#111315\],
+.theme-dark .text-neutral-800 {
+  color: #F3F4F6 !important;
+}
+
+.theme-dark .text-neutral-700,
+.theme-dark .text-neutral-600 {
+  color: #9CA3AF !important;
+}
+
+.theme-dark .text-neutral-500,
+.theme-dark .text-neutral-400 {
+  color: #6B7280 !important;
+}
+
+/* Bloomberg Semantic Colors in Dark Mode */
+.theme-dark .text-\[\#0D5C46\] {
+  color: #10B981 !important; /* Terminal Emerald */
+}
+
+.theme-dark .text-\[\#9E2A2B\] {
+  color: #F43F5E !important; /* Terminal Crimson */
+}
+
+.theme-dark .text-\[\#B45309\],
+.theme-dark .text-\[\#9A6B26\],
+.theme-dark .bb-amber {
+  color: #F59E0B !important; /* Classic Bloomberg Amber */
+}
+
+.theme-dark .bb-cyan {
+  color: #38BDF8 !important; /* Classic Bloomberg Cyan */
+}
+
+.theme-dark input,
+.theme-dark select {
+  background-color: #0D1117 !important;
+  border-color: #2D3A4F !important;
+  color: #FBBF24 !important;
+}
+
+.theme-dark input::placeholder {
+  color: #64748B !important;
+}
+
+.theme-dark tbody tr {
+  background-color: #11161F !important;
+}
+
+.theme-dark tbody tr:hover {
+  background-color: #1C2536 !important;
+}
+
+/* Bloomberg Amber Primary Action Button in Dark Mode */
+.theme-dark .bb-btn-primary {
+  background-color: #F59E0B !important;
+  color: #090C10 !important;
+  border-color: #F59E0B !important;
+  font-weight: 700 !important;
+}
+
+.theme-dark .bb-btn-primary:hover {
+  background-color: #FBBF24 !important;
+}
+
+/* Light Mode Sticky Table Polish */
+.theme-light thead,
+.theme-light thead tr,
+.theme-light thead th {
+  background-color: #FAF9F6;
+}
+
+.theme-light tbody tr {
+  background-color: #FFFFFF;
+}
+
+.theme-light tbody tr:hover {
+  background-color: #FAF9F6;
+}
+
+/* SweetAlert2 Institutional Popup Overrides */
+.swal2-popup {
+  font-family: var(--font-sans) !important;
+  background-color: #FFFFFF !important;
+  border-radius: 0.25rem !important;
+  border: 2px solid #D97706 !important;
+  padding: 1.75rem !important;
+  box-shadow: 0 20px 30px -10px rgba(17, 19, 21, 0.25) !important;
+}
+
+.swal2-title {
+  font-family: var(--font-sans) !important;
+  font-size: 1.15rem !important;
+  font-weight: 700 !important;
+  color: #111315 !important;
+  letter-spacing: -0.02em !important;
+}
+
+.swal2-html-container {
+  font-family: var(--font-sans) !important;
+  color: #2D3036 !important;
+  font-size: 0.85rem !important;
+  line-height: 1.55 !important;
+}
