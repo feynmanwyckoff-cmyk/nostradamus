@@ -1,10 +1,10 @@
 {
   "schemaVersion": "3.0-DEMIGUEL-MF24",
-  "updatedAt": "2026-11-09T10:07:07.751Z",
+  "updatedAt": "2026-11-09T10:07:33.632Z",
   "strategyName": "Vol-Managed Multifactor + 40% Buffer",
   "rebalanceBufferPct": 40,
   "thresholdAnnVol": 18,
-  "capitalIdr": 3789878,
+  "capitalIdr": 5339878,
   "cashReserveIdr": 2397878,
   "holdings": [
     {
@@ -18,6 +18,13 @@
       "ticker": "AMFG",
       "lots": 5,
       "avgBuyPrice": 2896.33,
+      "addedAt": "2026-11-09",
+      "notes": "Active Multifactor Position"
+    },
+    {
+      "ticker": "AUTO",
+      "lots": 4,
+      "avgBuyPrice": 3169.74,
       "addedAt": "2026-11-09",
       "notes": "Active Multifactor Position"
     }
@@ -31600,9 +31607,9 @@
     "version": 1,
     "saltBase64": "VnsorMcDCpdVWdhPJy1n1A==",
     "verifierHashBase64": "4n2Mmvj0WYbqgIZRTAlg7solExkFmaKEMwbBRhc0KNM=",
-    "ivBase64": "TKDR0pxz9GZjvhZ9",
-    "cipherTextBase64": "fsDEEFK7Auh8MoMZUgRaJk+gvUL/NF7vZH4zSjRWo+/yPCEipATwfb43N2zRZ1lMyVVfPktl9lotzoN9KLm6m0N6ANxBxCs2xiliFzphd6hqXysLGFryjV0trW3dntz3ia8NjQfIhN5vkMMv3j3Dfggn/njU/GIWKvFY+ZTPvnpOPHXaCsfxGnaMHZr28VU6nsQl13VZImBJshwbLyJspqr04guFm0I2LOPrVtXdx9+fbYOaum21VWprcg==",
-    "updatedAt": "2026-11-09T10:06:15.933Z",
+    "ivBase64": "VrivJxhQFmkWCCFI",
+    "cipherTextBase64": "mTklz/kFxT+qE+l+EveGnYaASPFwbspyHcspOKbY8svNPn2AIOBMK5xLmrkM1yBW5gm0ZtU9mW42XtMr6JX48iAglS7+ghyVNvDEN5VA7C3L9JnnSk8X9fEfQXtEoqVkk4K6NCQxm0xExbLX5J1nkcxUMN6sl5ppNzSzscQ3oGZf7M4ZLbNY5mf2eD6S7rz+RiqDe5kuI8J/ax4WdCY8doMLK2x7veabwp/7oworblSjEuwE6N69RbaBDrDoWdzkNsTvZbxZ+3Lz4g19Jq27OZhVknyEfBzMXfC/2JtQ5Mo0ACYfDfTfYFQsmpzcK0nCp6oxVbkdAyloJDr+kwLnsNsaucjJVNYxyANlWmcIcDedPCKid0r2xFpj1XVLB9atOcL4Mm+QDw0U",
+    "updatedAt": "2026-11-09T10:07:07.808Z",
     "scopeHash": "16183f276edb0072818f889699df444fbc598e280371cccb5181968464c88546",
     "originHash": "f3a7d76bbb9d13f907952d46bed14f67d329db4e664ede97c181f9d289e94aa3",
     "repoScope": "feynmanwyckoff-cmyk/nostradamus",
