@@ -1,26 +1,29 @@
 import { useState } from 'react';
 import { MarketRegime } from '../types/quant';
+import { SimRegimeMode } from '../utils/quantEngine';
 import { MetricTooltip } from './MetricTooltip';
 import { SlidersHorizontal, ArrowUpRight, ArrowDownRight, RefreshCw } from 'lucide-react';
 
 interface MarketRegimeBannerProps {
   regime: MarketRegime;
+  simRegimeMode: SimRegimeMode;
   dataSourceLabel: string;
   rebalanceBufferPct: number;
   isIhsgSynced?: boolean;
   onUpdateRebalanceBuffer: (nextBuffer: number) => void;
-  onToggleSimulatedRegime: () => void;
+  onSelectSimRegime: (mode: SimRegimeMode) => void;
   onUpdateThreshold: (newThreshold: number) => void;
   onOpenStrategyModal: () => void;
 }
 
 export function MarketRegimeBanner({
   regime,
+  simRegimeMode,
   dataSourceLabel,
   rebalanceBufferPct,
   isIhsgSynced = true,
   onUpdateRebalanceBuffer,
-  onToggleSimulatedRegime,
+  onSelectSimRegime,
   onUpdateThreshold,
   onOpenStrategyModal
 }: MarketRegimeBannerProps) {
@@ -81,20 +84,69 @@ export function MarketRegimeBanner({
 
           <p className="mt-1.5 text-xs sm:text-sm text-neutral-600 leading-relaxed">
             {isVolatile
-              ? `Volatilitas realisasi 30D IHSG (${regime.annualizedVol30D.toFixed(1)}%) melampaui target kalibrasi c (${regime.thresholdAnnVol.toFixed(1)}%). Eksposur ekuitas multifaktor diturunkan ke ${regime.aggressiveWeight}% dan ${regime.defensiveWeight}% ditempatkan di kas/pasar uang.`
-              : `Volatilitas realisasi 30D IHSG (${regime.annualizedVol30D.toFixed(1)}%) berada di bawah batas ${regime.thresholdAnnVol.toFixed(1)}%. Model mengalokasikan ${regime.aggressiveWeight}% pada saham Top Multifaktor (Low-Vol, Momentum 12-1, Value, Size) dengan Rebalancing Buffer ${rebalanceBufferPct}%.`}
+              ? `Volatilitas realisasi 30D IHSG (${regime.annualizedVol30D.toFixed(1)}%) & tekanan makro (${regime.macroStressScore.toFixed(1)}/100) melampaui batas toleransi c (${regime.thresholdAnnVol.toFixed(1)}%). Eksposur ekuitas multifaktor diturunkan ke ${regime.aggressiveWeight}% dan ${regime.defensiveWeight}% diamankan di kas/pasar uang.`
+              : isCaution
+              ? `Volatilitas efektif (${regime.effectiveRegimeVol.toFixed(1)}%) & indeks tekanan makro (${regime.macroStressScore.toFixed(1)}/100) berada di zona transisi Waspada terhadap target c (${regime.thresholdAnnVol.toFixed(1)}%). Model menyeimbangkan ${regime.aggressiveWeight}% ekuitas multifaktor berkualitas dan ${regime.defensiveWeight}% perisai kas/RDPU.`
+              : `Volatilitas realisasi 30D IHSG (${regime.annualizedVol30D.toFixed(1)}%) terkendali di bawah batas ${regime.thresholdAnnVol.toFixed(1)}%. Model mengalokasikan ${regime.aggressiveWeight}% pada saham Top Multifaktor (Low-Vol, Momentum 12-1, Value, Size) dengan Rebalancing Buffer ${rebalanceBufferPct}%.`}
           </p>
         </div>
 
-        {/* Action Buttons */}
+        {/* Action Buttons: 3-Mode Sentiment Simulation Switch + Calibration */}
         <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={onToggleSimulatedRegime}
-            className="px-3 py-1.5 text-xs font-semibold text-[#111315] bg-[#FAF9F6] border border-[#E4E2DD] hover:border-[#F59E0B] rounded-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            Simulasi Sentimen: {isVolatile ? 'Ubah ke Pasar Tenang' : 'Uji Stres Volatil'}
-          </button>
+          <div className="inline-flex items-center bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs p-0.5 gap-0.5">
+            <span className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-neutral-500">
+              Simulasi:
+            </span>
+            <button
+              type="button"
+              onClick={() => onSelectSimRegime('LIVE')}
+              title="Gunakan data pasar IHSG & Makro Live Real-Time"
+              className={`px-2.5 py-1 text-xs font-bold rounded-xs transition-colors cursor-pointer whitespace-nowrap ${
+                simRegimeMode === 'LIVE'
+                  ? 'bg-[#0284C7] text-white'
+                  : 'text-neutral-500 hover:text-[#111315]'
+              }`}
+            >
+              Live
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelectSimRegime('TENANG')}
+              title="Simulasikan rezim pasar Tenang (Volatilitas rendah, eksposur ekuitas maksimal)"
+              className={`px-2.5 py-1 text-xs font-bold rounded-xs transition-colors cursor-pointer whitespace-nowrap ${
+                simRegimeMode === 'TENANG'
+                  ? 'bg-[#059669] text-white'
+                  : 'text-neutral-500 hover:text-[#0D5C46]'
+              }`}
+            >
+              Tenang
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelectSimRegime('WASPADA')}
+              title="Simulasikan rezim pasar Waspada (Transisi skala volatilitas & selektivitas sektoral)"
+              className={`px-2.5 py-1 text-xs font-bold rounded-xs transition-colors cursor-pointer whitespace-nowrap ${
+                simRegimeMode === 'WASPADA'
+                  ? 'bg-[#D97706] text-white'
+                  : 'text-neutral-500 hover:text-[#D97706]'
+              }`}
+            >
+              Waspada
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelectSimRegime('VOLATIL')}
+              title="Simulasikan rezim pasar Volatil (Uji stres guncangan makro & pemangkasan eksposur)"
+              className={`px-2.5 py-1 text-xs font-bold rounded-xs transition-colors cursor-pointer whitespace-nowrap ${
+                simRegimeMode === 'VOLATIL'
+                  ? 'bg-[#E11D48] text-white'
+                  : 'text-neutral-500 hover:text-[#9E2A2B]'
+              }`}
+            >
+              Volatil
+            </button>
+          </div>
+
           <button
             type="button"
             onClick={() => setShowCalibration(!showCalibration)}

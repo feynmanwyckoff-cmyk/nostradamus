@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan to eliminate heavy upfront stock batch syncing on login/sync (fetching only IHSG & Global Macro on Sync and loading individual emiten data lazily on Inspect click), keep all Inspect buttons active at all times, and upgrade the AI Pre-Buy Conviction Analysis into Structured Investment Committee Cards with deep financial reasoning.",
-  "updatedAt":  "2026-11-09T06:33:38.526816309Z",
+  "summary":  "Rencana implementasi komprehensif untuk 8 penyempurnaan UI/UX dan fungsionalitas Nostradamus Quant Terminal: (1) Pembersihan header/footer pada halaman Login, (2) Penempatan tombol tutup X di pojok kanan atas modal & dark scrollbar, (3) Penghapusan pengulangan pertanyaan pada Komite AI disertai animasi berpikir & efek mengetik bertahap, (4) Filter kesegaran berita emiten maksimal 3 bulan terakhir (<= 90 hari), (5) Fitur Export HD Image (PNG) & Export PDF ber-watermark Nostradamus Quant Terminal, (6) Penambahan tooltip edukatif pada seluruh indikator hasil Inspect Emiten, (7) Segmented switch simulasi 3 rezim pasar (Tenang, Waspada, Volatil + Live Real-Time), serta (8) Perbaikan kontras kotak informasi pra-analisis Komite AI pada mode gelap.",
+  "updatedAt":  "2026-11-09T10:54:33.346775770Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

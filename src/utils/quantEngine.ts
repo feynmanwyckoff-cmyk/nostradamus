@@ -163,6 +163,8 @@ export const DEFAULT_GLOBAL_MACRO: MacroIndicator[] = [
   }
 ];
 
+export type SimRegimeMode = 'LIVE' | 'TENANG' | 'WASPADA' | 'VOLATIL';
+
 export const CALM_GLOBAL_MACRO: MacroIndicator[] = DEFAULT_GLOBAL_MACRO.map((item) => {
   if (item.id === 'usdidr') {
     return {
@@ -194,10 +196,87 @@ export const CALM_GLOBAL_MACRO: MacroIndicator[] = DEFAULT_GLOBAL_MACRO.map((ite
   return item;
 });
 
+export const CAUTION_GLOBAL_MACRO: MacroIndicator[] = DEFAULT_GLOBAL_MACRO.map((item) => {
+  if (item.id === 'usdidr') {
+    return {
+      ...item,
+      value: 16580,
+      change1D: 0.42,
+      ihsgImpact: 'NEUTRAL',
+      transmissionNote: 'Fluktuasi moderat Rupiah di kisaran Rp16.500 menuntut disiplin selektivitas sektoral.'
+    };
+  }
+  if (item.id === 'us10y') {
+    return {
+      ...item,
+      value: 4.48,
+      change1D: 0.15,
+      ihsgImpact: 'BEARISH',
+      transmissionNote: 'Yield US 10Y mendekati 4,5% menahan ekspansi multipel valuasi secara agresif.'
+    };
+  }
+  if (item.id === 'vix') {
+    return {
+      ...item,
+      value: 19.40,
+      change1D: 2.10,
+      ihsgImpact: 'NEUTRAL',
+      transmissionNote: 'VIX di zona 18–21 mencerminkan fase transisi / kewaspadaan terukur.'
+    };
+  }
+  if (item.id === 'dxy') {
+    return {
+      ...item,
+      value: 103.85,
+      change1D: 0.25,
+      ihsgImpact: 'BEARISH',
+      transmissionNote: 'Penguatan terbatas DXY memicu rotasi sebagian ke saham defensif berdividen.'
+    };
+  }
+  return item;
+});
+
+export const VOLATILE_GLOBAL_MACRO: MacroIndicator[] = DEFAULT_GLOBAL_MACRO.map((item) => {
+  if (item.id === 'usdidr') {
+    return {
+      ...item,
+      value: 18150,
+      change1D: 1.85,
+      ihsgImpact: 'BEARISH',
+      transmissionNote: 'Tekanan depresiasi Rupiah memicu penyesuaian eksposur ekuitas ke cadangan kas.'
+    };
+  }
+  if (item.id === 'us10y') {
+    return {
+      ...item,
+      value: 4.95,
+      change1D: 0.85,
+      ihsgImpact: 'BEARISH',
+      transmissionNote: 'Lonjakan yield US 10Y memperketat likuiditas global & memicu arus keluar EM.'
+    };
+  }
+  if (item.id === 'vix') {
+    return {
+      ...item,
+      value: 26.80,
+      change1D: 12.40,
+      ihsgImpact: 'BEARISH',
+      transmissionNote: 'VIX > 25 menandakan rezim volatilitas tinggi; skala risiko wajib diturunkan.'
+    };
+  }
+  return item;
+});
+
 export const REAL_IHSG_30D_RETURNS = [
   -0.90, -1.51, -0.43, -0.83, -1.02, 0.46, 1.36, 1.21, -0.75, -1.88,
   1.04, -2.59, -0.17, 0.29, -1.33, -11.57, -3.64, 5.65, 0.94, 1.12,
   0.95, -1.22, -1.99, 0.31, -3.49, -0.80, 0.79, -3.78, 0.32, 2.23
+];
+
+export const CAUTION_IHSG_30D_RETURNS = [
+  0.85, -1.12, 0.64, -0.95, 1.18, -0.78, 0.42, -1.34, 0.91, -0.88,
+  1.05, -1.22, 0.55, -0.92, 1.30, -1.45, 0.76, -0.84, 1.12, -1.08,
+  0.68, -1.15, 0.94, -0.72, 1.02, -1.28, 0.81, -0.96, 0.74, -0.65
 ];
 
 export const CALM_IHSG_30D_RETURNS = [
@@ -225,7 +304,8 @@ export function computeMarketRegime(
   customDailyReturns?: number[],
   thresholdAnnVol: number = 18.0,
   macroIndicators: MacroIndicator[] = DEFAULT_GLOBAL_MACRO,
-  liveIhsgQuote?: { lastPrice: number; change1D: number }
+  liveIhsgQuote?: { lastPrice: number; change1D: number },
+  forcedSimRegime: SimRegimeMode = 'LIVE'
 ): MarketRegime {
   const returns =
     customDailyReturns && customDailyReturns.length >= 5
@@ -243,16 +323,26 @@ export function computeMarketRegime(
   const effectiveRegimeVol = Number((0.75 * annualizedVol30D + 0.25 * macroImpliedVol).toFixed(2));
 
   let status: MarketRegimeStatus = 'TENANG';
-  if (effectiveRegimeVol > thresholdAnnVol || macroStressScore >= 68) {
+  if (forcedSimRegime === 'TENANG' || forcedSimRegime === 'WASPADA' || forcedSimRegime === 'VOLATIL') {
+    status = forcedSimRegime;
+  } else if (effectiveRegimeVol > thresholdAnnVol || macroStressScore >= 68) {
     status = 'VOLATIL';
   } else if (effectiveRegimeVol > thresholdAnnVol - 2.2 || macroStressScore >= 52) {
     status = 'WASPADA';
   }
 
-  const rawScaleRatio = Math.min(
+  let rawScaleRatio = Math.min(
     1.0,
     Math.max(0.35, thresholdAnnVol / Math.max(10, effectiveRegimeVol))
   );
+  if (forcedSimRegime === 'TENANG') {
+    rawScaleRatio = Math.max(0.85, rawScaleRatio);
+  } else if (forcedSimRegime === 'WASPADA') {
+    rawScaleRatio = Math.min(0.75, Math.max(0.60, rawScaleRatio));
+  } else if (forcedSimRegime === 'VOLATIL') {
+    rawScaleRatio = Math.min(0.50, Math.max(0.35, rawScaleRatio));
+  }
+
   const activeEquityPct = Math.round((rawScaleRatio * 100) / 5) * 5;
   const clampedEquityPct = Math.max(35, Math.min(90, activeEquityPct));
   const cashAndLowVolBufferPct = 100 - clampedEquityPct;

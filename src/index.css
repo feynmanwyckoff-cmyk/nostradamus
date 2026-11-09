@@ -36,7 +36,7 @@
   scrollbar-width: none;
 }
 
-/* Dedicated Sticky Table Scrollbar (Theme-Aware for Light & Dark) */
+/* Dedicated Sticky Table & Modal Scrollbar (Theme-Aware for Light & Dark) */
 .table-scroll-container {
   scrollbar-width: thin;
   scrollbar-color: #CBD5E1 #F8FAFC;
@@ -60,19 +60,31 @@
   background-color: #D97706;
 }
 
+.theme-dark,
+.theme-dark *,
 .theme-dark .table-scroll-container {
-  scrollbar-color: #334155 #0F172A;
+  scrollbar-width: thin;
+  scrollbar-color: #334155 #0D131C;
 }
 
+.theme-dark *::-webkit-scrollbar,
+.theme-dark .table-scroll-container::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+.theme-dark *::-webkit-scrollbar-track,
 .theme-dark .table-scroll-container::-webkit-scrollbar-track {
   background: #0D131C;
 }
 
+.theme-dark *::-webkit-scrollbar-thumb,
 .theme-dark .table-scroll-container::-webkit-scrollbar-thumb {
   background-color: #334155;
   border-radius: 3px;
 }
 
+.theme-dark *::-webkit-scrollbar-thumb:hover,
 .theme-dark .table-scroll-container::-webkit-scrollbar-thumb:hover {
   background-color: #F59E0B;
 }
@@ -162,7 +174,9 @@
 .theme-dark section,
 .theme-dark table,
 .theme-dark .bg-\[\#FFFFFF\],
-.theme-dark .bg-\[\#FFFFFF\]\/95 {
+.theme-dark .bg-\[\#FFFFFF\]\/95,
+.theme-dark .bg-\[\#FFFFFF\]\/90,
+.theme-dark .bg-\[\#FFFFFF\]\/80 {
   background-color: #11161F !important;
   border-color: #222C3C !important;
   color: #E5E7EB !important;

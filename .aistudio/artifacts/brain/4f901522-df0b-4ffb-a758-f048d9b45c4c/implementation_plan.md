@@ -1,51 +1,91 @@
-# Rencana Implementasi: Optimasi Lazy-Load Inspect & Redesign Komite Investasi AI
+# Penyempurnaan UI/UX, Komite AI Bertahap, Ekspor Laporan Ber-Watermark & Simulasi 3 Rezim Pasar — Nostradamus Quant Terminal
 
-## 1. Ringkasan Masalah & Tujuan Utama
-Berdasarkan evaluasi terhadap perilaku aplikasi saat ini dan umpan balik Anda:
-1. **Beban Jaringan Berat Saat Login / Sync (`app.js` Batch Proxy Loop)**:
-   - Saat ini, pemanggilan `fetchYahooSparkBatch` masih memicu antrean request ke berbagai CORS proxy publik (`api.allorigins.win`, `api.codetabs.com`) untuk ratusan saham sekaligus ketika sinkronisasi dijalankan, sehingga membebani tab Network dan memperlambat respons awal.
-   - Selain itu, bundle statis di `docs/assets/app.js` (yang digunakan oleh GitHub Pages) perlu diperbarui dan disinkronkan agar repositori hasil fork (`feynmanwyckoff-cmyk/nostradamus`) tidak lagi menjalankan kode lama (`Syncing 571/957`).
-2. **Tombol `Inspect` Harus Selalu Aktif & Menarik Data Emiten Secara *Lazy / On-Demand***:
-   - Saat pengguna login atau menekan tombol **Sync**, aplikasi **hanya** akan menarik data **IHSG (`^JKSE`), Indikator Makro Global, dan RSS Berita Pasar Umum**.
-   - Tombol **Inspect** pada seluruh tab tidak boleh pernah dimatikan (*disabled*). Saat tombol **Inspect** diklik pada suatu saham, barulah aplikasi menarik data harga live terbaru (`.JK`), imbal hasil dividen, berita spesifik emiten, dan analisis AI secara instan untuk saham tersebut.
-3. **Peningkatan Kedalaman Penalaran AI & Tampilan *Structured Investment Committee Cards***:
-   - Tampilan analisis AI di dalam modal Inspect saat ini masih berupa blok teks bernomor dengan tanda bintang markdown mentah (`**...**`) yang tampak kaku seperti *template*.
-   - Akan dirombak menjadi antarmuka **Komite Investasi Terstruktur (*Structured Investment Committee Cards*)** dengan penalaran finansial mendalam (*deep causal reasoning*) yang menghubungkan kualitas laba (dekomposisi ROE DuPont & prinsip Joeliardi Sunendar), pendeteksian *Value Trap* vs diskon intrinsik, dampak katalis berita terkini, serta rencana eksekusi taktis (*Bull/Bear Case, Entry Zone, Sizing, & Invalidation Risk*).
+Rencana pembaruan terarah untuk menyempurnakan antarmuka, ketajaman analisis Komite Investasi AI, validitas waktu berita emiten, fitur ekspor laporan ber-watermark, serta kontrol simulasi rezim pasar pada **Nostradamus Quant Terminal**.
 
 ---
 
-## 2. Arsitektur Perubahan Teknis
+## User Review & Critical Decisions
 
-### A. Optimasi Sinkronisasi Ringan (IHSG & Makro Saja Saat Sync, Emiten Saat Klik Inspect)
-- **File Target**: `/src/App.tsx`, `/src/utils/liveMarketFetcher.ts`, `/src/components/ScreeningTable.tsx`, `/src/components/BarbellAllocatorCard.tsx`, `/src/components/ActivePortfolioManager.tsx`
-- **Perubahan Spesifik**:
-  1. **Zero Batch Emiten Fetch pada Login & Master Sync**:
-     - Memastikan `handleMasterSyncAll` di `/src/App.tsx` hanya memanggil sinkronisasi **IHSG (`^JKSE`) + 10 Indikator Makro Global** (`refreshLiveGlobalMacroAndIhsg`) dan **Berita Pasar (`fetchLiveMarketNewsAndSentiment`)**, selesai dalam `< 1.5 detik` tanpa memicu loop ratusan saham ke CORS proxy.
-     - Menonaktifkan pemanggilan jaringan massal di `fetchYahooSparkBatch` saat inisialisasi atau reset katalog JCI; data dasar 957 saham langsung dimuat secara instan (0ms) dari *snapshot* terkurasi (`public/static-market-snapshot.json` & katalog sektor BEI).
-  2. **On-Demand Emiten Sync Saat Klik `Inspect`**:
-     - Memastikan seluruh tombol **Inspect** di `BarbellAllocatorCard`, `ScreeningTable` (baik di tabel utama maupun matriks komparasi), `ActivePortfolioManager`, dan `MarketNewsSentiment` selalu aktif (`disabled={false}`).
-     - Ketika pengguna mengklik **Inspect** pada emiten mana pun, `EmitenFundamentalInspectorModal` langsung terbuka tanpa jeda dan secara paralel melakukan *single-ticker live fetch* (`fetchLiveIdxTicker`), menarik berita terbaru emiten tersebut (`fetchLiveEmitenSpecificNews`), memperbarui state harga saham di aplikasi, serta menyusun analisis mendalam Komite Investasi AI.
-  3. **Sinkronisasi Bundle Terbaru ke GitHub Pages (`docs/assets/app.js`)**:
-     - Memperbarui `/src/utils/githubCloudSync.ts` (`syncForkUpstreamAndRebuildPages`) agar ketika pengguna menekan tombol **Sync Fork & Update UI** atau **Push ke GitHub**, aplikasi juga dapat menyinkronkan file bundle statis terbaru (`index.html`, `docs/index.html`, `docs/assets/app.js`, `docs/assets/index.css`) sehingga halaman GitHub Pages milik pengguna langsung menjalankan versi terbaru tanpa tertinggal di versi lama.
-
-### B. Redesign *AI Pre-Buy Conviction Engine* (Structured Investment Committee Cards & Deep Reasoning)
-- **File Target**: `/server.ts`, `/src/utils/liveMarketFetcher.ts`, `/src/components/EmitenFundamentalInspectorModal.tsx`, `/src/types/quant.ts`
-- **Perubahan Spesifik**:
-  1. **Pembaruan Model Gemini Server-Side & Struktur Output JSON Terstruktur**:
-     - Mengubah model pada endpoint `/api/ai/inspect-emiten` di `/server.ts` menjadi `'gemini-3.8-flash'` dengan `responseSchema` terstruktur untuk menghasilkan analisis Komite Investasi yang tajam, kontekstual terhadap pertanyaan pengguna, dan mengkritisi hubungan antar-metrik.
-  2. **Mesin Sintesis Komite Investasi Dual-Mode (Server Gemini + Deep Reasoning Client Engine)**:
-     - Membangun struktur data `StructuredCommitteeAnalysis` di `/src/utils/liveMarketFetcher.ts` yang bekerja baik di AI Studio (via Gemini API) maupun di GitHub Pages statis (melalui mesin *deep quantitative-fundamental synthesis* yang menganalisis kausalitas rasio spesifik emiten, rezim pasar saat ini, anomali antara valuasi vs momentum, dan substansi berita aktual).
-  3. **Antarmuka *Structured Investment Committee Cards* di `EmitenFundamentalInspectorModal.tsx`**:
-     - Menghilangkan teks mentah bertanda `**...**` dan menggantinya dengan tata letak kartu eksekutif:
-       - **Header Keputusan Komite (*Executive Verdict Banner*)**: Menampilkan *Conviction Grade* (`A+` s/d `F`), Skor Keyakinan (`0–100`), Rekomendasi Tindakan, dan **Jawaban Langsung atas Pertanyaan Spesifik Pengguna**.
-       - **Kartu 01 — Bedah Kualitas Laba & DuPont ROE (Prinsip Joeliardi Sunendar)**: Analisis kausalitas antara *Operating Margin*, *Debt-to-Equity (DER)*, dan *ROE* terhadap *Cost of Equity* Indonesia (`10,5%`), serta daya tahan arus kas dividen.
-       - **Kartu 02 — Uji Valuasi Intrinsik vs Risiko *Value Trap***: Membedah selisih Harga Pasar vs Nilai Intrinsik Joeliardi-Graham (*Implied PER/PBV* vs *Fair PER/PBV*, *Margin of Safety*) yang dikalibrasi dengan tren harga 1D/30D dan volatilitas tahunan untuk membedakan saham *undervalued* sejati dari *value trap*.
-       - **Kartu 03 — Sintesis Katalis Berita, Aksi Korporasi & Struktur Mikro/HSC**: Mengevaluasi dampak berita terkini (Laba, Dividen/RUPS, Buyback/Ekspansi) serta audit kebersihan saham dari indikasi manipulasi/HSC.
-       - **Kartu 04 — Skenario *Bull vs. Bear* & Strategi Eksekusi Taktis**: Menyajikan skenario optimis (*Bull Catalyst*), risiko pembatalan tesis (*Bear / Invalidation Trigger*), rentang harga akumulasi ideal (IDR), serta panduan porsi alokasi di Keranjang 1 atau Keranjang 2.
+* **Confirmed Requirements**:
+  * **Ekspor Laporan Hasil Inspect Emiten**: Menyediakan **kedua tombol** sekaligus di bilah atas jendela *Fundamental & AI Inspector*, yaitu **Export HD Image (PNG)** dan **Export PDF**, lengkap dengan *watermark* resmi **Nostradamus Quant Terminal**.
+  * **Kontrol Simulasi Sentimen Pasar**: Menggunakan **Segmented Button 3 Mode Langsung** (`Tenang`, `Waspada`, `Volatil`) berdampingan dengan tombol kembali ke **`Live Real-Time`** pada *Market Regime Banner*.
+  * **Halaman Login Minimalis**: Menghapus *header* dan *footer* penuh pada `TerminalSecurityGate` sehingga layar kunci tampil fokus di tengah layar, dengan tombol pengubah tema (*Daylight/Dark*) ringkas di sudut kartu.
+  * **Posisi Tombol Tutup (`X`) & Scrollbar Tema Gelap**: Memisahkan tata letak tombol tutup (`X`) agar selalu terkunci di pojok kanan atas jendela modal (seperti jendela aplikasi desktop standar) dan menyesuaikan warna *scrollbar* modal agar mengikuti tema gelap (`theme-dark`).
+  * **Komite AI Tanpa Pengulangan Pertanyaan + Animasi Berpikir & Typing**: Menghapus kalimat pembuka yang mengulang pertanyaan pengguna, serta menambahkan tahapan visualisasi berpikir (*multi-step quantitative synthesis*) yang diikuti efek ketikan bertahap (*typewriter animation*).
+  * **Filter Berita Maksimal 3 Bulan (90 Hari)**: Menyaring tanggal publikasi RSS (`pubDate` dan `when:90d`) baik di sisi klien maupun server agar berita yang kadaluarsa (> 90 hari) otomatis tereliminasi.
+  * **Tooltip Indikator & Kontras Kotak Pra-Analisis**: Menambahkan `MetricTooltip` pada seluruh metrik di jendela *Emiten Inspector* dan memperbaiki kontras kotak informasi sebelum tombol *Bedah Komite AI* ditekan pada mode gelap.
 
 ---
 
-## 3. Verifikasi & Pengujian
-1. **Audit Jaringan (Network Tab)**: Memastikan saat login dan saat tombol `SYNC LIVE` diklik, hanya request IHSG + Makro Global + RSS Berita yang berjalan (0 antrean request batch saham `.JK` yang menggantung di konsol Network).
-2. **Uji Responsivitas Tombol Inspect**: Memastikan tombol `Inspect` di seluruh tab selalu aktif dan langsung membuka modal serta menarik data *live* emiten yang dipilih.
-3. **Uji Visual & Kompilasi**: Menjalankan `compile_applet` dan `lint_applet` untuk memastikan tidak ada galat TypeScript/ESLint dan bundle statis `docs/assets/app.js` serta `docs/assets/index.css` terkompilasi dengan bersih.
+## 1. Overview & Core Concept
+
+Pembaruan ini berfokus pada peningkatan ergonomi terminal kuantitatif dan kredibilitas penyajian data riset emiten:
+
+1. **Ergonomi Jendela & Fokus Visual**: Memastikan halaman *Security Gate* bebas dari distraksi navigasi utama, mengunci tombol tutup (`X`) di sudut kanan atas jendela *Inspector*, menghitamkan *scrollbar* pada mode gelap, serta memperbaiki keterbacaan kotak panduan pra-analisis Komite AI.
+2. **Pengalaman Komite Investasi AI yang Hidup & Langsung ke Inti**: Menghilangkan kalimat pengulangan pertanyaan yang kaku dan menghadirkan transisi *Chain-of-Thought Thinking* ke *Progressive Typing Effect* sehingga pengguna merasakan proses sintesis data fundamental, *spread* SBN 10Y, dan berita secara cerdas.
+3. **Integritas Data & Portabilitas Riset Institusional**: Memastikan seluruh berita emiten berusia maksimal 3 bulan terakhir ($\le 90\text{ hari}$), melengkapi setiap indikator di modal *Inspector* dengan *tooltip* penjelasan rumus/makna, menyediakan simulasi lengkap 3 rezim pasar (`Tenang`, `Waspada`, `Volatil`), dan memungkinkan ekspor riset ke **HD PNG** maupun **PDF** ber-*watermark*.
+
+---
+
+## 2. User Experience & Visual Design
+
+* **Halaman Login (`TerminalSecurityGate`)**:
+  * Hanya menampilkan kartu otentikasi terpusat di tengah layar (`min-h-screen flex items-center justify-center`) tanpa *top header bar* maupun *bottom footer*. Tombol *toggle* tema diletakkan secara elegan di pojok kanan atas kartu login.
+* **Header Modal Inspect Emiten & Dark Scrollbar**:
+  * Tombol tutup (`X`) diposisikan secara permanen di pojok kanan atas *header* modal (`top-right corner`), terpisah dari baris tombol aksi (`Refresh Emiten`, `Export HD PNG`, `Export PDF`, `Label HSC`) sehingga tidak pernah turun ke baris bawah di sebelah kiri.
+  * Kontainer gulir (*scroll container*) modal menggunakan gaya *dark scrollbar* khusus pada `.theme-dark` (latar *track* `#0E1117` dan *thumb* `#2D3545` dengan *hover* `#475569`).
+* **Animasi Berpikir & Efek Mengetik Komite AI**:
+  * Saat modal dibuka atau tombol **Bedah Komite AI** diklik, sistem menampilkan tahapan berpikir aktif (*"01. Membedah dekomposisi DuPont ROE & ROA murni..."* $\rightarrow$ *"02. Mengukur spread Earnings Yield vs SBN 10Y..."* $\rightarrow$ *"03. Memverifikasi saringan OOS & berita 90 hari terakhir..."*) sebelum merender teks kesimpulan dan poin penalaran dengan animasi *typing* bertahap yang dilengkapi tombol *Skip Animasi* jika pengguna ingin langsung melihat seluruh teks.
+* **Kotak Informasi Pra-Analisis (Perbaikan Lampiran 3)**:
+  * Mengganti kelas latar `bg-[#FFFFFF]/80` yang sebelumnya luput dari aturan `.theme-dark` menjadi permukaan adaptif ber-kontras tinggi (`bg-[#FAF9F6]` dengan teks `#111315` di mode terang, dan `#161B26` dengan teks `#E2E8F0` di mode gelap) agar terbaca jelas sebelum pengguna menekan tombol **Bedah Komite AI**.
+* **Tooltip Indikator Lengkap di Modal Inspector**:
+  * Menambahkan ikon informasi dan `MetricTooltip` interaktif pada:
+    1. Empat kartu utama: *Harga Pasar Live (BEI)*, *Nilai Intrinsik (Joeliardi-Graham)*, *Margin of Safety (MoS)*, dan *Valuasi Multipel (Implied PER & PBV vs Wajar)*.
+    2. Empat skor pilar: *1. Kualitas Bisnis & Moat*, *2. Kesehatan Neraca*, *3. Keamanan Valuasi*, dan *4. Ketahanan OOS Quant*.
+    3. Empat metrik *strip* Komite AI: *ROA Murni (DuPont)*, *Earnings Yield vs SBN 10Y*, *Total Shareholder Yield*, dan *Spread Nilai Intrinsik*.
+* **Segmented Control Simulasi 3 Rezim Pasar**:
+  * Pada `MarketRegimeBanner`, tombol simulasi tunggal diganti dengan kontrol bersegmen 4 status: **`Live Real-Time`**, **`Simulasi: Tenang`**, **`Simulasi: Waspada`**, dan **`Simulasi: Volatil`**, lengkap dengan warna aksen semantik (Hijau *Emerald* untuk Tenang, Kuning *Amber* untuk Waspada, Merah *Rose* untuk Volatil).
+
+---
+
+## 3. Key Product Decisions & Trade-Offs
+
+* **Render Ekspor HD Image (PNG) & PDF Ber-Watermark Secara Native di Klien**:
+  * *Keputusan*: Membangun mesin *renderer* kanvas resolusi tinggi (`2x Retina scale` via HTML5 Canvas 2D + pembungkus PDF vektor/raster presisi) yang menggambar seluruh metrik fundamental emiten, 4 pilar Joeliardi, dekomposisi DuPont, kesimpulan Komite AI, serta *watermark* diagonal dan *footer* resmi **Nostradamus Quant Terminal**.
+  * *Alasan*: Menghindari masalah pemotongan area gulir (*scroll clipping*) pada modal panjang, menjamin kecepatan ekspor instan tanpa ketergantungan *headless browser* eksternal, serta menghasilkan tata letak laporan riset institusional yang rapi dan siap dibagikan.
+* **Validasi Ganda Kesegaran Berita ($\le 90\text{ Hari}$)**:
+  * *Keputusan*: Menambahkan parameter pencarian `when:90d` pada kueri Google News RSS sekaligus menerapkan fungsi validator tanggal `isWithinThreeMonths(pubDate)` yang membuang artikel dengan usia $> 90\text{ hari}$ dari tanggal saat ini, serta memperbarui *timestamp* item radar aksi korporasi agar mencerminkan periode kuartal berjalan.
+  * *Alasan*: Menjamin tidak ada berita usang dari tahun-tahun sebelumnya yang masuk ke *Radar Berita & Isu Spesifik Emiten*.
+
+---
+
+## 4. Technical Architecture & Data Strategy
+
+```
++-----------------------------------------------------------------------------------+
+|                           NOSTRADAMUS QUANT TERMINAL                              |
++-----------------------------------------------------------------------------------+
+         |                                  |                                 |
+         v                                  v                                 v
++------------------------+     +----------------------------+    +--------------------------+
+|  Market Regime Engine  |     | Emiten Inspector & AI Flow |    | HD PNG & PDF Exporter    |
+|------------------------|     |----------------------------|    |--------------------------|
+| Mode:                  |     | 1. 90-Day News Filter      |    | - High-DPI Canvas (2x)   |
+| - LIVE (Actual Market) |     |    (when:90d + Date Check) |    | - Diagonal & Header/     |
+| - TENANG (Vol ~11.5%)  |     | 2. Strip Question Prefix   |    |   Footer Watermark:      |
+| - WASPADA (Vol ~16.8%) |     |    (Direct Causal Summary) |    |   "NOSTRADAMUS QUANT     |
+| - VOLATIL (Vol ~34.5%) |     | 3. Staged Thinking Stepper |    |    TERMINAL"             |
+|                        |     |    + Progressive Typing    |    | - Direct PNG Download    |
+| Dynamically updates    |     | 4. MetricTooltip on all    |    | - Multi-Section A4 PDF   |
+| Equity/SBN/Cash split  |     |    12 Inspector Indicators |    |   Generator              |
++------------------------+     +----------------------------+    +--------------------------+
+```
+
+1. **State Rezim Pasar (`SimRegimeMode`)**:
+   * Mengubah *state* boolean `isCalmSim` menjadi tipe terstruktur `'LIVE' | 'TENANG' | 'WASPADA' | 'VOLATIL'`.
+   * Menambahkan profil kalibrasi `CAUTION_GLOBAL_MACRO` dan `CAUTION_IHSG_30D_RETURNS` pada mesin kuantitatif sehingga mode `WASPADA` menghasilkan volatilitas IHSG di rentang moderat ($\sim 16{,}8\%$, di atas ambang tenang $14{,}2\%$ namun di bawah batas krisis) dengan alokasi ekuitas berimbang.
+2. **Pembersihan Kalimat Pengulangan & Mesin Animasi Ketikan**:
+   * Menghapus awalan `"Keputusan Komite atas pertanyaan Anda (...):"` dan `"Menjawab fokus Anda (...):"` baik pada *engine* analitis lokal maupun instruksi *prompt* server Gemini, serta menambahkan pembersih *regex* otomatis agar `directAnswerSummary` langsung menampilkan substansi analisis.
+   * Mengimplementasikan *hook/state* animasi berpikir multi-tahap (`thinkingStageIndex`) dan *progressive text reveal* (`typedCharCount`) yang berjalan mulus saat analisis dimuat.
+3. **Filter Tanggal Berita Maksimal 3 Bulan (`90 Hari`)**:
+   * Pada `server.ts` dan `liveMarketFetcher.ts`, kueri RSS dilengkapi `when:90d` dan setiap item diuji selisih waktunya (`Date.now() - Date.parse(pubDate) <= 90 * 24 * 60 * 60 * 1000`). Selain itu, judul/ringkasan diperiksa agar tidak memuat referensi tahun lampau yang sudah kadaluarsa.

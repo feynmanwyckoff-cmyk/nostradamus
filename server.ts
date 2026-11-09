@@ -316,6 +316,42 @@ function extractXmlTag(block: string, tag: string): string {
   return match ? stripTags(match[1]) : '';
 }
 
+function isNewsItemWithin90DaysServer(pubDateRaw: string, title: string, desc: string): boolean {
+  const MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000; // 90 days (3 months)
+  const now = Date.now();
+  if (pubDateRaw) {
+    const parsed = Date.parse(pubDateRaw);
+    if (!Number.isNaN(parsed)) {
+      if (now - parsed > MAX_AGE_MS) {
+        return false;
+      }
+    }
+  }
+  const currentYear = new Date().getFullYear();
+  const staleYearsRegex = new RegExp(`\\b(201[5-9]|202[0-${Math.max(0, (currentYear % 10) - 2)}])\\b`);
+  if (staleYearsRegex.test(title) && !title.includes(String(currentYear))) {
+    return false;
+  }
+  return true;
+}
+
+function formatRecentPubDateServer(pubDateRaw: string): string {
+  if (!pubDateRaw) return 'Terkini (≤ 3 Bulan)';
+  const parsed = Date.parse(pubDateRaw);
+  if (Number.isNaN(parsed)) return pubDateRaw.slice(0, 22);
+  const diffMs = Math.max(0, Date.now() - parsed);
+  const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
+  const dateStr = new Date(parsed).toLocaleDateString('id-ID', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric'
+  });
+  if (diffDays === 0) return `Hari ini · ${dateStr}`;
+  if (diffDays <= 7) return `${diffDays} hari lalu · ${dateStr}`;
+  if (diffDays <= 30) return `${Math.ceil(diffDays / 7)} minggu lalu · ${dateStr}`;
+  return `${Math.min(3, Math.ceil(diffDays / 30))} bulan lalu · ${dateStr}`;
+}
+
 async function fetchRssXmlDirect(
   rssUrl: string,
   sourceLabel: string,
@@ -336,21 +372,39 @@ async function fetchRssXmlDirect(
     if (!res.ok) return [];
     const xml = await res.text();
     const itemMatches = xml.match(/<item[\s\S]*?<\/item>/gi) || [];
-    return itemMatches.slice(0, limit).map((itemXml, idx) => {
+    const validItems: Array<{
+      id: string;
+      title: string;
+      source: string;
+      publishedAt: string;
+      url: string;
+      region: 'DOMESTIC' | 'GLOBAL';
+      summary?: string;
+    }> = [];
+
+    for (let idx = 0; idx < itemMatches.length; idx++) {
+      if (validItems.length >= limit) break;
+      const itemXml = itemMatches[idx];
       const title = extractXmlTag(itemXml, 'title') || 'Market Update';
       const link = extractXmlTag(itemXml, 'link') || 'https://www.idx.co.id';
-      const pubDate = (extractXmlTag(itemXml, 'pubDate') || 'Hari ini · Live RSS').slice(0, 22);
+      const rawPubDate = extractXmlTag(itemXml, 'pubDate');
       const desc = extractXmlTag(itemXml, 'description').slice(0, 175);
-      return {
+
+      if (!isNewsItemWithin90DaysServer(rawPubDate, title, desc)) {
+        continue;
+      }
+
+      validItems.push({
         id: `${region.toLowerCase()}_srv_${Date.now()}_${idx}`,
         title,
         source: sourceLabel,
-        publishedAt: pubDate,
+        publishedAt: formatRecentPubDateServer(rawPubDate),
         url: link,
         region,
         summary: desc ? `${desc}...` : undefined
-      };
-    });
+      });
+    }
+    return validItems;
   } catch {
     return [];
   }
@@ -488,8 +542,8 @@ async function startServer() {
         .replace(/\b(Tbk|PT|Persero|Indonesia)\b/gi, '')
         .trim();
       const queryTerm = cleanCompanyShort
-        ? `"${rawTicker}" OR "${cleanCompanyShort}" saham BEI dividen aksi korporasi`
-        : `"${rawTicker}" saham BEI emiten`;
+        ? `("${rawTicker}" OR "${cleanCompanyShort}") saham BEI when:90d`
+        : `"${rawTicker}" saham BEI emiten when:90d`;
 
       const googleNewsRssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(
         queryTerm
@@ -596,7 +650,7 @@ PERTANYAAN / FOKUS UTAMA INVESTOR:
 INSTRUKSI PENALARAN KOMITE INVESTASI WAJIB (ANTI-TEMPLATE & BEBAS SIMBOL MARKDOWN **):
 1. Berpikirlah secara kausal dan kritis layaknya Chief Investment Officer: bedah hubungan sebab-akibat antar metrik spesifik sektor ${stock.sector}. Jelaskan apakah ROE ${stock.roe}% berasal dari keunggulan margin operasional (${stock.operatingMargin}%) atau sekadar daya ungkit utang (DER ${stock.debtToEquity}x).
 2. Uji hipotesis Value Trap vs Diskon Asimetris: bandingkan Earnings Yield terhadap imbal hasil bebas risiko SBN 10Y (6,75%), dan jelaskan mengapa pasar saat ini menghargai ${stock.ticker} pada PER ${joeliardiEval?.impliedPer ?? '-'}x / PBV ${joeliardiEval?.impliedPbv ?? '-'}x dengan tren 30 hari ${stock.return30D}%.
-3. Jawab pertanyaan spesifik investor ("${activePromptFocus}") secara langsung, tajam, dan terukur pada directAnswerSummary.
+3. Jawab fokus analisis secara langsung, tajam, dan terukur pada directAnswerSummary TANPA mengulang kalimat pertanyaan pengguna (jangan pernah menulis awalan seperti "Keputusan Komite atas pertanyaan Anda..." atau "Menjawab pertanyaan Anda..."). Langsung mulai dengan hasil analisis komite.
 4. Jangan pernah menulis simbol bintang ganda (**) atau sintaks markdown mentah di dalam nilai string JSON.
 `.trim();
 
@@ -605,7 +659,7 @@ INSTRUKSI PENALARAN KOMITE INVESTASI WAJIB (ANTI-TEMPLATE & BEBAS SIMBOL MARKDOW
         contents: promptText,
         config: {
           systemInstruction:
-            'Anda adalah Kepala Komite Investasi Kuantitatif & Fundamental Pasar Modal Indonesia (BEI) yang memadukan prinsip nilai intrinsik Joeliardi Sunendar, dekomposisi DuPont, dan disiplin faktor Out-of-Sample (OOS) DeMiguel. Analisis Anda bersifat kausal, spesifik terhadap dinamika sektor emiten, membongkar kontradiksi antara harga dan fundamental, serta bebas dari template generik maupun simbol markdown mentah (**).',
+            'Anda adalah Kepala Komite Investasi Kuantitatif & Fundamental Pasar Modal Indonesia (BEI) yang memadukan prinsip nilai intrinsik Joeliardi Sunendar, dekomposisi DuPont, dan disiplin faktor Out-of-Sample (OOS) DeMiguel. Analisis Anda bersifat kausal, spesifik terhadap dinamika sektor emiten, membongkar kontradiksi antara harga dan fundamental, langsung menyajikan kesimpulan analisis tanpa mengulang pertanyaan pengguna, serta bebas dari template generik maupun simbol markdown mentah (**).',
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
@@ -620,7 +674,7 @@ INSTRUKSI PENALARAN KOMITE INVESTASI WAJIB (ANTI-TEMPLATE & BEBAS SIMBOL MARKDOW
               },
               directAnswerSummary: {
                 type: Type.STRING,
-                description: 'Jawaban analitis mendalam 3-4 kalimat atas pertanyaan spesifik pengguna dengan penalaran kausal lintas-metrik (tanpa simbol **)'
+                description: 'Hasil analisis mendalam 3-4 kalimat secara langsung tanpa mengulang pertanyaan pengguna, dengan penalaran kausal lintas-metrik (tanpa simbol **)'
               },
               convictionScore: {
                 type: Type.NUMBER,

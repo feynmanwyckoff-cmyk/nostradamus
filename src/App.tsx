@@ -15,6 +15,8 @@ import {
   buildQuantStockList,
   CALM_GLOBAL_MACRO,
   CALM_IHSG_30D_RETURNS,
+  CAUTION_GLOBAL_MACRO,
+  CAUTION_IHSG_30D_RETURNS,
   computeMarketRegime,
   computeOptimalHRPBarbellPortfolio,
   DEFAULT_GLOBAL_MACRO,
@@ -22,7 +24,9 @@ import {
   DEFAULT_USER_PORTFOLIO_HOLDINGS,
   rankUniverseWithBuffer,
   REAL_IHSG_30D_RETURNS,
-  toggleManualHscTicker
+  SimRegimeMode,
+  toggleManualHscTicker,
+  VOLATILE_GLOBAL_MACRO
 } from './utils/quantEngine';
 import {
   buildIdx100StockUniverse,
@@ -149,7 +153,7 @@ export default function App() {
   const [isChangePassModalOpen, setIsChangePassModalOpen] = useState<boolean>(false);
 
   // Multifactor + 40% Rebalancing Buffer State
-  const [isCalmSim, setIsCalmSim] = useState<boolean>(false);
+  const [simRegimeMode, setSimRegimeMode] = useState<SimRegimeMode>('LIVE');
   const [thresholdAnnVol, setThresholdAnnVol] = useState<number>(18.0);
   const [rebalanceBufferPct, setRebalanceBufferPct] = useState<number>(
     () => initialPortfolioCache?.rebalanceBufferPct ?? 40
@@ -664,7 +668,7 @@ export default function App() {
 
   // Keep instant local fallback synced with full Indonesian Date + Time (HH:MM:SS WIB)
   useEffect(() => {
-    if (isCalmSim) return;
+    if (simRegimeMode !== 'LIVE') return;
     try {
       const nowFullStr = formatFullIndonesianDateTime(new Date());
       const payload: ScreenerCachePayload = {
@@ -679,7 +683,7 @@ export default function App() {
     } catch {
       // ignore
     }
-  }, [stocks, macroIndicators, liveIhsgQuote, liveIhsgReturns, isCalmSim, lastFullSyncDateTime]);
+  }, [stocks, macroIndicators, liveIhsgQuote, liveIhsgReturns, simRegimeMode, lastFullSyncDateTime]);
 
   useEffect(() => {
     try {
@@ -755,27 +759,52 @@ export default function App() {
     }
   };
 
-  // Toggle between current Real Market Sentiment and Simulated Calm Sentiment
-  const handleToggleSimulatedRegime = () => {
-    const nextCalmState = !isCalmSim;
-    setIsCalmSim(nextCalmState);
-    const nextMacro = nextCalmState ? CALM_GLOBAL_MACRO : DEFAULT_GLOBAL_MACRO;
-    const nextRets = nextCalmState ? CALM_IHSG_30D_RETURNS : liveIhsgReturns;
-    const nextQuote = nextCalmState
-      ? { lastPrice: 5180.25, change1D: 0.85 }
-      : liveIhsgQuote;
+  // Switch between Live Real-Time and 3 Simulated Market Regimes (TENANG, WASPADA, VOLATIL)
+  const handleSelectSimulatedRegime = (nextMode: SimRegimeMode) => {
+    setSimRegimeMode(nextMode);
+    const nextMacro =
+      nextMode === 'TENANG'
+        ? CALM_GLOBAL_MACRO
+        : nextMode === 'WASPADA'
+        ? CAUTION_GLOBAL_MACRO
+        : nextMode === 'VOLATIL'
+        ? VOLATILE_GLOBAL_MACRO
+        : DEFAULT_GLOBAL_MACRO;
+
+    const nextRets =
+      nextMode === 'TENANG'
+        ? CALM_IHSG_30D_RETURNS
+        : nextMode === 'WASPADA'
+        ? CAUTION_IHSG_30D_RETURNS
+        : nextMode === 'VOLATIL'
+        ? REAL_IHSG_30D_RETURNS
+        : liveIhsgReturns;
+
+    const nextQuote =
+      nextMode === 'TENANG'
+        ? { lastPrice: 5180.25, change1D: 0.85 }
+        : nextMode === 'WASPADA'
+        ? { lastPrice: 5095.60, change1D: -0.24 }
+        : nextMode === 'VOLATIL'
+        ? { lastPrice: 4890.15, change1D: -2.18 }
+        : liveIhsgQuote;
 
     setMacroIndicators(nextMacro);
     const nextRegime = computeMarketRegime(
       nextRets,
       thresholdAnnVol,
       nextMacro,
-      nextQuote
+      nextQuote,
+      nextMode
     );
     setRegime(nextRegime);
     setDataSourceLabel(
-      nextCalmState
+      nextMode === 'TENANG'
         ? 'Mode: Simulasi Sentimen Tenang'
+        : nextMode === 'WASPADA'
+        ? 'Mode: Simulasi Sentimen Waspada'
+        : nextMode === 'VOLATIL'
+        ? 'Mode: Simulasi Uji Stres Volatil'
         : isGitHubCloudConfigured(githubConfig)
         ? `GitHub Cloud: ${githubConfig.owner}/${githubConfig.repo}`
         : 'Feed: Yahoo Finance Spark Batch'
@@ -784,11 +813,28 @@ export default function App() {
 
   const handleUpdateThreshold = (newThreshold: number) => {
     setThresholdAnnVol(newThreshold);
+    const nextRets =
+      simRegimeMode === 'TENANG'
+        ? CALM_IHSG_30D_RETURNS
+        : simRegimeMode === 'WASPADA'
+        ? CAUTION_IHSG_30D_RETURNS
+        : simRegimeMode === 'VOLATIL'
+        ? REAL_IHSG_30D_RETURNS
+        : liveIhsgReturns;
+    const nextQuote =
+      simRegimeMode === 'TENANG'
+        ? { lastPrice: 5180.25, change1D: 0.85 }
+        : simRegimeMode === 'WASPADA'
+        ? { lastPrice: 5095.60, change1D: -0.24 }
+        : simRegimeMode === 'VOLATIL'
+        ? { lastPrice: 4890.15, change1D: -2.18 }
+        : liveIhsgQuote;
     const nextRegime = computeMarketRegime(
-      isCalmSim ? CALM_IHSG_30D_RETURNS : liveIhsgReturns,
+      nextRets,
       newThreshold,
       macroIndicators,
-      isCalmSim ? { lastPrice: 5180.25, change1D: 0.85 } : liveIhsgQuote
+      nextQuote,
+      simRegimeMode
     );
     setRegime(nextRegime);
   };
@@ -837,13 +883,14 @@ export default function App() {
       const activeRets = ihsgReturns30D || liveIhsgReturns;
       setLiveIhsgQuote(activeQuote);
       setLiveIhsgReturns(activeRets);
-      setIsCalmSim(false);
+      setSimRegimeMode('LIVE');
 
       const nextRegime = computeMarketRegime(
         activeRets,
         thresholdAnnVol,
         updatedMacro,
-        activeQuote
+        activeQuote,
+        'LIVE'
       );
       setRegime(nextRegime);
 
@@ -1297,11 +1344,12 @@ export default function App() {
               <div className="space-y-6">
                 <MarketRegimeBanner
                   regime={regime}
+                  simRegimeMode={simRegimeMode}
                   dataSourceLabel={dataSourceLabel}
                   rebalanceBufferPct={rebalanceBufferPct}
                   isIhsgSynced={liveSyncedStockCount > 0}
                   onUpdateRebalanceBuffer={handleUpdateRebalanceBuffer}
-                  onToggleSimulatedRegime={handleToggleSimulatedRegime}
+                  onSelectSimRegime={handleSelectSimulatedRegime}
                   onUpdateThreshold={handleUpdateThreshold}
                   onOpenStrategyModal={() => handleGenerateStrategyModal()}
                 />
