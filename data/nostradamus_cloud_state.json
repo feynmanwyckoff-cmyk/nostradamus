@@ -1,10 +1,10 @@
 {
   "schemaVersion": "3.0-DEMIGUEL-MF24",
-  "updatedAt": "2026-11-09T10:09:59.006Z",
+  "updatedAt": "2026-11-09T10:10:28.870Z",
   "strategyName": "Vol-Managed Multifactor + 40% Buffer",
   "rebalanceBufferPct": 40,
   "thresholdAnnVol": 18,
-  "capitalIdr": 9654878,
+  "capitalIdr": 11134878,
   "cashReserveIdr": 2397878,
   "holdings": [
     {
@@ -46,6 +46,13 @@
       "ticker": "PRDA",
       "lots": 4,
       "avgBuyPrice": 3655.47,
+      "addedAt": "2026-11-09",
+      "notes": "Active Multifactor Position"
+    },
+    {
+      "ticker": "ARNA",
+      "lots": 31,
+      "avgBuyPrice": 496.74,
       "addedAt": "2026-11-09",
       "notes": "Active Multifactor Position"
     }
@@ -31628,9 +31635,9 @@
     "version": 1,
     "saltBase64": "VnsorMcDCpdVWdhPJy1n1A==",
     "verifierHashBase64": "4n2Mmvj0WYbqgIZRTAlg7solExkFmaKEMwbBRhc0KNM=",
-    "ivBase64": "zPTkmHi9LXNsYQ0/",
-    "cipherTextBase64": "SHVlfb2ky9dWVfG8jdrqx8Dhpl0xxVntlSCQ0vmj+wLYdFnDGUlaaQlL3Sy1/wUTNGPOn+Tl7kIAsWigcXPZyhvIQps4NtUIH8O5Pu3tNgtnQz7d61bjKDgekw+uU+csPllgWlDNdqLXaO9faMrpAo5yDGuq3AZHb71zCyDmdOcfWd5v/XTVOKKCcWQeL/hJXc/Qc5yry4+xUgc6hklTtH5semEimuT55LXYuldleRUMYfuxSqF+PdSbu4AD446JSUkTOckY65pI1czGmGgkA6/7u6f0mNfp0tRLrztGeUmpkw4ZVSxtvFzfWQIv+sDGK+ovuSyxHJTSjYeWSFiZLbtSB0VT1+jrD0XtSIvG9ipq4QIrDwZAFcgRrFkGV36ifjNWJYHI6O6U2ltkNH/0Ex2/JexxNWoDcQXaRDZDW4Fmt8CC+nin01wkm3MxV5qTbyXXbbOyET4dIu9aul/1SUDPQ7V5DNnN405mUZUHaG9Wb6hfpw4o8iFyNfganXYmEzR8j0OudTtqJUyHOX4ogN5ArQcHZ2bqt7CTSZQ9nDKKUfLXANntAKPlSCeiko58ys2Mxif5tks/VQmgGuOzCGhtlrqGKF+gqcYvgAG7ntAhs5JBsA8LVudOPW/KcrJpvrfCcXEcghKVf6hR4Ysxm1LNYnV88maHunxXOudWwl4i955iWUIw2sz8NJ264IQkK0h/o30lTO+OikQcbK8t8PKWxWKQVNbVwmWmAV6Qw7H35ubJsJ2nhCyU9eSYC1mROw17PAToTtr+cLQTiVh1CTfzBH8ECK+g7+Onod4kb7OWyn4UUDNHDSNI1KVrZ7bAIllcDw==",
-    "updatedAt": "2026-11-09T10:09:10.191Z",
+    "ivBase64": "rHQJN+bIZVDQLd3L",
+    "cipherTextBase64": "z0jXMBBf989UlVEihg2OW4Nv8tUCMe353Y99C+Omv8DkD/tq2TeNBpZfKfYtwqUM++Z4Eo8AvpsObZXxxClwpRH8BLwRWBlZ731isnt7rMt/RvyHwfk3tW//2LU5QJkkPlCarHhBgxpQ5iWj6XngQKVPLDr+2qzupqfhHmPa94lw5VtXuLwuwGESffKjMJU4zdB00nXMK6IesoxNxMH0QcVxol+v5QkrBYKWtd1yLTpuv/gSe94STaxRvBRB8ZZOllUxF6xybSoG5/H7v2ZnR4S5jQutS3KmZyGr9LioOUSLB0iX25paprGWM4RA2oGO06hXWxT2QmCWkKZuhErLVudS6ozho/2oF0tktfAxXQbF4g8WjZC07d4sXDQGwUWOZarRD5ZxVCCpjsxEzPvvs3A5gYEZZfTuJI9UJb9plW5dBMftD+tG42BzxWwWR7ZsotiLwXT0z6LWazSI6CISjMRnzb8rUsjCuHtjZlaBmSHbiO7cQOPIeFo9W8x8C+P52DgT0Gm7qFSVLYpIJIDzfbk35qKjoUXgSXaEK8pq8zvP9vtXO2G/E3L+LGfy5r/UoN5ujkpYqYMYYb8DuiFhVB79fPPCtojTgdV5grcBySAeACkEcwnSNuzAE0fKJ/QyCt8a24vHG7ztCYAIJU5HlwbCji5M8+I9AdZIBOX5V9iFRkw3Mwu2QRDhS02fdtFi6SnyVkTGDHvYKx51iw9A8AwdN00RS9Fxdj7jgk++k54/HOubU7ytcpOblQkzyeolLpOhsqHlpBmHH7kltWl1EaoLkHgjdpoDiSlY3PpSSE/GEqeJhQqL3WbpNVoSL3KBSDJaVGHxBZUKEI/vlZUGVZTXOFaOrZLCb50bSEfzXIb0Sppuy+gAk8CobI+C+sVzpMbHAWA45/xNpXfIB/xCfnLvldltT+vf21Bb4Fg62daW3Dw0bXyZHojc8eNjkD8VbQPhoRjFEfaFqqE+OSYHjnjJkA==",
+    "updatedAt": "2026-11-09T10:09:59.039Z",
     "scopeHash": "16183f276edb0072818f889699df444fbc598e280371cccb5181968464c88546",
     "originHash": "f3a7d76bbb9d13f907952d46bed14f67d329db4e664ede97c181f9d289e94aa3",
     "repoScope": "feynmanwyckoff-cmyk/nostradamus",
