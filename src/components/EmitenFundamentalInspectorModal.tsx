@@ -3,28 +3,32 @@ import {
   EmitenNewsCategory,
   MarketRegimeStatus,
   NewsSentimentItem,
-  StockMetrics
+  StockMetrics,
+  StructuredAiConvictionReport
 } from '../types/quant';
 import { evaluateJoeliardiOosFundamental } from '../utils/quantEngine';
 import {
   fetchLiveEmitenSpecificNews,
-  requestEmitenAiInspection
+  fetchLiveIdxTicker,
+  requestEmitenAiInspection,
+  stripRawMarkdownArtifacts
 } from '../utils/liveMarketFetcher';
 import { formatIdrPriceDisplay } from '../utils/numberFormat';
 import {
   X,
   ShieldAlert,
-  ShieldCheck,
   Sparkles,
   Newspaper,
   Scale,
-  TrendingUp,
-  Award,
   ExternalLink,
   RefreshCw,
   AlertTriangle,
   CheckCircle2,
-  BookOpen
+  BookOpen,
+  BrainCircuit,
+  Target,
+  TrendingUp,
+  Layers
 } from 'lucide-react';
 
 interface EmitenFundamentalInspectorModalProps {
@@ -32,53 +36,172 @@ interface EmitenFundamentalInspectorModalProps {
   regimeStatus?: MarketRegimeStatus;
   onClose: () => void;
   onToggleHscFlag?: (ticker: string, currentlyFlagged: boolean) => void;
+  onStockSynced?: (updatedStock: StockMetrics) => void;
 }
 
 export function EmitenFundamentalInspectorModal({
   stock,
   regimeStatus = 'WASPADA',
   onClose,
-  onToggleHscFlag
+  onToggleHscFlag,
+  onStockSynced
 }: EmitenFundamentalInspectorModalProps) {
+  const [liveStockOverride, setLiveStockOverride] = useState<StockMetrics | null>(null);
+  const [isSyncingOnDemand, setIsSyncingOnDemand] = useState<boolean>(false);
   const [recentNews, setRecentNews] = useState<NewsSentimentItem[]>([]);
   const [isLoadingNews, setIsLoadingNews] = useState<boolean>(false);
   const [userQuestion, setUserQuestion] = useState<string>('');
-  const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
+  const [structuredReport, setStructuredReport] =
+    useState<StructuredAiConvictionReport | null>(null);
+  const [aiAnalysisFallbackText, setAiAnalysisFallbackText] = useState<string | null>(null);
   const [isAiGenerated, setIsAiGenerated] = useState<boolean>(false);
   const [aiGeneratedAt, setAiGeneratedAt] = useState<string | null>(null);
   const [isAnalyzingAi, setIsAnalyzingAi] = useState<boolean>(false);
 
-  const joeliardiEval = useMemo(() => {
+  // Active stock merges initial prop with on-demand live quote fetched when modal opens
+  const activeStock = useMemo(() => {
     if (!stock) return null;
-    return evaluateJoeliardiOosFundamental(stock);
-  }, [stock]);
+    if (liveStockOverride && liveStockOverride.ticker === stock.ticker) {
+      return {
+        ...stock,
+        ...liveStockOverride,
+        isHscFlagged: stock.isHscFlagged,
+        hscSource: stock.hscSource,
+        hscReason: stock.hscReason
+      };
+    }
+    return stock;
+  }, [stock, liveStockOverride]);
 
+  const joeliardiEval = useMemo(() => {
+    if (!activeStock) return null;
+    return evaluateJoeliardiOosFundamental(activeStock);
+  }, [activeStock]);
+
+  // Lazy On-Demand Fetch: Only pulls live quote, news, and initial AI synthesis when user opens Inspect modal
   useEffect(() => {
     if (!stock) return;
     let isMounted = true;
+    setLiveStockOverride(null);
+    setIsSyncingOnDemand(true);
     setIsLoadingNews(true);
-    setAiAnalysis(null);
-    setUserQuestion('');
+    setStructuredReport(null);
+    setAiAnalysisFallbackText(null);
+    const defaultQuestion = `Apakah ${stock.ticker} layak dibeli pada harga Rp ${stock.lastPrice.toLocaleString('id-ID')} menurut prinsip Joeliardi Sunendar?`;
+    setUserQuestion(defaultQuestion);
 
-    fetchLiveEmitenSpecificNews(stock.ticker, stock.name, stock.sector, stock)
-      .then((items) => {
+    const runLazyOnDemandInspect = async () => {
+      let currentStock = stock;
+
+      // 1. Pull fresh single-ticker quote on demand without blocking the rest of the app
+      const quotePromise = fetchLiveIdxTicker(stock.ticker)
+        .then((fresh) => {
+          if (isMounted && fresh && fresh.lastPrice > 0) {
+            currentStock = {
+              ...stock,
+              ...fresh,
+              isHscFlagged: stock.isHscFlagged,
+              hscSource: stock.hscSource,
+              hscReason: stock.hscReason
+            };
+            setLiveStockOverride(currentStock);
+            onStockSynced?.(currentStock);
+          }
+        })
+        .catch(() => {
+          // Keep existing snapshot metrics if offline
+        })
+        .finally(() => {
+          if (isMounted) setIsSyncingOnDemand(false);
+        });
+
+      // 2. Pull emiten-specific news & corporate actions on demand
+      const newsPromise = fetchLiveEmitenSpecificNews(
+        stock.ticker,
+        stock.name,
+        stock.sector,
+        stock
+      )
+        .then((items) => {
+          if (isMounted) {
+            setRecentNews(items);
+            setIsLoadingNews(false);
+          }
+          return items;
+        })
+        .catch(() => {
+          if (isMounted) {
+            setIsLoadingNews(false);
+          }
+          return [] as NewsSentimentItem[];
+        });
+
+      const [, fetchedNews] = await Promise.all([quotePromise, newsPromise]);
+      if (!isMounted) return;
+
+      // 3. Automatically run deep AI conviction analysis on demand for this inspected ticker
+      setIsAnalyzingAi(true);
+      try {
+        const evalObj = evaluateJoeliardiOosFundamental(currentStock);
+        const qText = `Apakah ${currentStock.ticker} layak dibeli pada harga Rp ${currentStock.lastPrice.toLocaleString('id-ID')} menurut prinsip Joeliardi Sunendar?`;
+        setUserQuestion(qText);
+        const aiRes = await requestEmitenAiInspection({
+          stock: currentStock,
+          joeliardiEval: evalObj,
+          recentNews: fetchedNews,
+          userQuestion: qText,
+          regimeStatus
+        });
         if (isMounted) {
-          setRecentNews(items);
-          setIsLoadingNews(false);
+          setStructuredReport(aiRes.structuredReport);
+          setAiAnalysisFallbackText(stripRawMarkdownArtifacts(aiRes.analysis));
+          setIsAiGenerated(aiRes.isAiGenerated);
+          setAiGeneratedAt(aiRes.generatedAt);
         }
-      })
-      .catch(() => {
+      } finally {
         if (isMounted) {
-          setIsLoadingNews(false);
+          setIsAnalyzingAi(false);
         }
-      });
+      }
+    };
+
+    runLazyOnDemandInspect();
 
     return () => {
       isMounted = false;
     };
-  }, [stock]);
+  }, [stock?.ticker]);
 
-  if (!stock || !joeliardiEval) return null;
+  if (!activeStock || !joeliardiEval) return null;
+
+  const handleManualRefreshSingleTicker = async () => {
+    setIsSyncingOnDemand(true);
+    setIsLoadingNews(true);
+    try {
+      const [freshStock, freshNews] = await Promise.all([
+        fetchLiveIdxTicker(activeStock.ticker).catch(() => activeStock),
+        fetchLiveEmitenSpecificNews(
+          activeStock.ticker,
+          activeStock.name,
+          activeStock.sector,
+          activeStock
+        ).catch(() => recentNews)
+      ]);
+      const mergedStock: StockMetrics = {
+        ...activeStock,
+        ...freshStock,
+        isHscFlagged: activeStock.isHscFlagged,
+        hscSource: activeStock.hscSource,
+        hscReason: activeStock.hscReason
+      };
+      setLiveStockOverride(mergedStock);
+      setRecentNews(freshNews);
+      onStockSynced?.(mergedStock);
+    } finally {
+      setIsSyncingOnDemand(false);
+      setIsLoadingNews(false);
+    }
+  };
 
   const handleRunAiAnalysis = async (customPromptOverride?: string) => {
     const activeQuestion =
@@ -90,13 +213,14 @@ export function EmitenFundamentalInspectorModal({
     setIsAnalyzingAi(true);
     try {
       const result = await requestEmitenAiInspection({
-        stock,
+        stock: activeStock,
         joeliardiEval,
         recentNews,
         userQuestion: activeQuestion,
         regimeStatus
       });
-      setAiAnalysis(result.analysis);
+      setStructuredReport(result.structuredReport);
+      setAiAnalysisFallbackText(stripRawMarkdownArtifacts(result.analysis));
       setIsAiGenerated(result.isAiGenerated);
       setAiGeneratedAt(result.generatedAt);
     } finally {
@@ -134,7 +258,42 @@ export function EmitenFundamentalInspectorModal({
     }
   };
 
-  const gradeBadgeCls = stock.isHscFlagged
+  const getToneStyles = (
+    tone?: 'POSITIVE' | 'NEUTRAL' | 'CAUTION' | 'NEGATIVE'
+  ) => {
+    switch (tone) {
+      case 'POSITIVE':
+        return {
+          border: 'border-[#059669]/40',
+          badgeBg: 'bg-[#059669]/15 text-[#0D5C46] border-[#059669]/40',
+          accentText: 'text-[#0D5C46]',
+          bulletColor: 'text-[#059669]'
+        };
+      case 'CAUTION':
+        return {
+          border: 'border-[#F59E0B]/50',
+          badgeBg: 'bg-[#F59E0B]/15 text-[#D97706] border-[#F59E0B]/40',
+          accentText: 'text-[#D97706]',
+          bulletColor: 'text-[#D97706]'
+        };
+      case 'NEGATIVE':
+        return {
+          border: 'border-[#E11D48]/50',
+          badgeBg: 'bg-[#E11D48]/15 text-[#9E2A2B] border-[#E11D48]/40',
+          accentText: 'text-[#9E2A2B]',
+          bulletColor: 'text-[#E11D48]'
+        };
+      default:
+        return {
+          border: 'border-[#0284C7]/40',
+          badgeBg: 'bg-[#0284C7]/15 text-[#0284C7] border-[#0284C7]/40',
+          accentText: 'text-[#0284C7]',
+          bulletColor: 'text-[#0284C7]'
+        };
+    }
+  };
+
+  const gradeBadgeCls = activeStock.isHscFlagged
     ? 'bg-[#E11D48]/15 text-[#9E2A2B] border-[#E11D48]/50'
     : joeliardiEval.totalConvictionScore >= 75
     ? 'bg-[#059669]/15 text-[#0D5C46] border-[#059669]/50'
@@ -154,32 +313,57 @@ export function EmitenFundamentalInspectorModal({
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-[#D97706] bb-amber">
-                  PRE-BUY FUNDAMENTAL &amp; OOS QUANT INSPECTOR // PRINSIP JOELIARDI SUNENDAR
+                  ON-DEMAND FUNDAMENTAL &amp; AI INSPECTOR // PRINSIP JOELIARDI SUNENDAR
                 </span>
                 <span
                   className={`text-[10px] font-bold px-2 py-0.5 rounded-xs border ${gradeBadgeCls}`}
                 >
                   {joeliardiEval.convictionGrade} · SKOR {joeliardiEval.totalConvictionScore}/100
                 </span>
+                {isSyncingOnDemand ? (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-[#0284C7] bg-[#0284C7]/10 border border-[#0284C7]/30 px-2 py-0.5 rounded-xs">
+                    <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                    <span>Menarik Kuotasi Live {activeStock.ticker}.JK...</span>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-[#0D5C46] bg-[#059669]/10 border border-[#059669]/30 px-2 py-0.5 rounded-xs">
+                    <span>✓ Live On-Demand Active</span>
+                  </span>
+                )}
               </div>
               <h3 className="text-base sm:text-lg font-bold text-[#111315] flex flex-wrap items-center gap-2 mt-0.5">
-                <span className="font-mono">{stock.ticker}</span>
+                <span className="font-mono">{activeStock.ticker}</span>
                 <span className="text-neutral-400 font-normal">·</span>
-                <span>{stock.name}</span>
+                <span>{activeStock.name}</span>
                 <span className="text-xs font-normal text-neutral-500">
-                  ({stock.sector})
+                  ({activeStock.sector})
                 </span>
               </h3>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleManualRefreshSingleTicker}
+              disabled={isSyncingOnDemand}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold text-[#0284C7] bb-cyan bg-[#FFFFFF] border border-[#E4E2DD] hover:border-[#0284C7] rounded-xs transition-colors cursor-pointer disabled:opacity-60"
+              title="Tarik ulang kuotasi live Yahoo Finance & berita terbaru khusus emiten ini"
+            >
+              <RefreshCw
+                className={`w-3.5 h-3.5 ${isSyncingOnDemand ? 'animate-spin' : ''}`}
+              />
+              <span>Refresh Emiten</span>
+            </button>
+
             {onToggleHscFlag && (
               <button
                 type="button"
-                onClick={() => onToggleHscFlag(stock.ticker, Boolean(stock.isHscFlagged))}
+                onClick={() =>
+                  onToggleHscFlag(activeStock.ticker, Boolean(activeStock.isHscFlagged))
+                }
                 className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xs border transition-colors cursor-pointer ${
-                  stock.isHscFlagged
+                  activeStock.isHscFlagged
                     ? 'bg-[#E11D48] text-white border-[#E11D48] hover:bg-[#BE123C]'
                     : 'bg-[#FFFFFF] text-[#9E2A2B] border-[#E11D48]/40 hover:bg-[#E11D48]/10'
                 }`}
@@ -187,7 +371,9 @@ export function EmitenFundamentalInspectorModal({
               >
                 <ShieldAlert className="w-3.5 h-3.5" />
                 <span>
-                  {stock.isHscFlagged ? 'Berlabel HSC (Klik Lepas)' : 'Tandai sebagai HSC'}
+                  {activeStock.isHscFlagged
+                    ? 'Berlabel HSC (Klik Lepas)'
+                    : 'Tandai sebagai HSC'}
                 </span>
               </button>
             )}
@@ -206,7 +392,7 @@ export function EmitenFundamentalInspectorModal({
         {/* Scrollable Content Body */}
         <div className="p-5 sm:p-6 overflow-y-auto space-y-6">
           {/* HSC Warning Banner if Flagged */}
-          {stock.isHscFlagged && (
+          {activeStock.isHscFlagged && (
             <div className="p-3.5 bg-[#E11D48]/10 border border-[#E11D48]/40 rounded-xs flex items-start gap-3">
               <AlertTriangle className="w-5 h-5 text-[#9E2A2B] shrink-0 mt-0.5" />
               <div className="text-xs text-[#9E2A2B] space-y-1">
@@ -214,7 +400,7 @@ export function EmitenFundamentalInspectorModal({
                   PERINGATAN SAHAM HSC (HIGH SPECULATIVE / CORNERED RISK) — DIBLOKIR DARI TOP DECILE BUY
                 </div>
                 <p className="leading-relaxed">
-                  {stock.hscReason ||
+                  {activeStock.hscReason ||
                     'Saham ini terindikasi memiliki karakteristik spekulatif tinggi atau fundamental yang tidak mendukung reli harga.'}{' '}
                   Sesuai prinsip perlindungan modal Joeliardi Sunendar &amp; filter Out-of-Sample DeMiguel, emiten ini dikunci pada zona <strong>Rotate Out</strong>.
                 </p>
@@ -229,16 +415,16 @@ export function EmitenFundamentalInspectorModal({
                 HARGA PASAR LIVE (BEI)
               </span>
               <div className="text-lg font-bold font-mono text-[#111315] mt-1">
-                Rp {formatIdrPriceDisplay(stock.lastPrice)}
+                Rp {formatIdrPriceDisplay(activeStock.lastPrice)}
               </div>
               <span
                 className={`text-[11px] font-bold font-mono ${
-                  stock.change1D >= 0 ? 'text-[#0D5C46]' : 'text-[#9E2A2B]'
+                  activeStock.change1D >= 0 ? 'text-[#0D5C46]' : 'text-[#9E2A2B]'
                 }`}
               >
-                1D: {stock.change1D >= 0 ? '+' : ''}
-                {stock.change1D.toFixed(2)}% · 30D: {stock.return30D >= 0 ? '+' : ''}
-                {stock.return30D.toFixed(1)}%
+                1D: {activeStock.change1D >= 0 ? '+' : ''}
+                {activeStock.change1D.toFixed(2)}% · 30D: {activeStock.return30D >= 0 ? '+' : ''}
+                {activeStock.return30D.toFixed(1)}%
               </span>
             </div>
 
@@ -311,9 +497,9 @@ export function EmitenFundamentalInspectorModal({
                 />
               </div>
               <div className="text-[11px] text-neutral-600 font-mono space-y-0.5">
-                <div>ROE: {stock.roe.toFixed(1)}% (vs Ke 10,5%)</div>
-                <div>Op. Margin: {stock.operatingMargin.toFixed(1)}%</div>
-                <div>Div. Yield TTM: {(stock.dividendYieldPct ?? 0).toFixed(2)}%</div>
+                <div>ROE: {activeStock.roe.toFixed(1)}% (vs Ke 10,5%)</div>
+                <div>Op. Margin: {activeStock.operatingMargin.toFixed(1)}%</div>
+                <div>Div. Yield TTM: {(activeStock.dividendYieldPct ?? 0).toFixed(2)}%</div>
               </div>
             </div>
 
@@ -331,12 +517,13 @@ export function EmitenFundamentalInspectorModal({
                 />
               </div>
               <div className="text-[11px] text-neutral-600 font-mono space-y-0.5">
-                <div>DER: {stock.debtToEquity.toFixed(2)}x</div>
+                <div>DER: {activeStock.debtToEquity.toFixed(2)}x</div>
                 <div>
-                  Status Neraca: {stock.debtToEquity <= 0.8 ? 'Konservatif' : 'Moderat/Tinggi'}
+                  Status Neraca:{' '}
+                  {activeStock.debtToEquity <= 0.8 ? 'Konservatif' : 'Moderat/Tinggi'}
                 </div>
                 <div>
-                  Saringan HSC: {stock.isHscFlagged ? 'Terindikasi HSC' : 'Bebas HSC'}
+                  Saringan HSC: {activeStock.isHscFlagged ? 'Terindikasi HSC' : 'Bebas HSC'}
                 </div>
               </div>
             </div>
@@ -355,7 +542,7 @@ export function EmitenFundamentalInspectorModal({
                 />
               </div>
               <div className="text-[11px] text-neutral-600 font-mono space-y-0.5">
-                <div>Skor Faktor Value: {stock.dmuValueScore.toFixed(1)}/10</div>
+                <div>Skor Faktor Value: {activeStock.dmuValueScore.toFixed(1)}/10</div>
                 <div>Margin of Safety: {joeliardiEval.marginOfSafetyPct}%</div>
                 <div>Bobot Value OOS: 35% (Prioritas #1)</div>
               </div>
@@ -376,89 +563,150 @@ export function EmitenFundamentalInspectorModal({
               </div>
               <div className="text-[11px] text-neutral-600 font-mono space-y-0.5">
                 <div>
-                  Komposit: {stock.dmuCompositeScore.toFixed(2)}/10 (Top {stock.dmuRankPct}%)
+                  Komposit: {activeStock.dmuCompositeScore.toFixed(2)}/10 (Top{' '}
+                  {activeStock.dmuRankPct}%)
                 </div>
                 <div>
-                  Low-Vol: {stock.dmuLowVolScore.toFixed(1)} · Mom: {stock.dmuMomScore.toFixed(1)}
+                  Low-Vol: {activeStock.dmuLowVolScore.toFixed(1)} · Mom:{' '}
+                  {activeStock.dmuMomScore.toFixed(1)}
                 </div>
                 <div>
-                  Volatilitas: {stock.volatilityAnn.toFixed(1)}% (β {stock.beta1Y.toFixed(2)}x)
+                  Volatilitas: {activeStock.volatilityAnn.toFixed(1)}% (β{' '}
+                  {activeStock.beta1Y.toFixed(2)}x)
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Strengths & Risks Summary (Joeliardi Sunendar Checklist) */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="p-4 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs space-y-2">
-              <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#0D5C46]">
-                <CheckCircle2 className="w-4 h-4 shrink-0" />
-                <span>Kekuatan Fundamental &amp; Kuantitatif OOS</span>
-              </div>
-              <ul className="space-y-1.5 text-xs text-neutral-700 leading-relaxed">
-                {joeliardiEval.keyStrengths.map((str, i) => (
-                  <li key={i} className="flex items-start gap-2">
-                    <span className="text-[#0D5C46] font-bold">•</span>
-                    <span>{str}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            <div className="p-4 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs space-y-2">
-              <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#9E2A2B]">
-                <ShieldAlert className="w-4 h-4 shrink-0" />
-                <span>Catatan Risiko, Valuasi &amp; Disiplin Eksekusi</span>
-              </div>
-              <ul className="space-y-1.5 text-xs text-neutral-700 leading-relaxed">
-                {joeliardiEval.keyRisks.map((risk, i) => (
-                  <li key={i} className="flex items-start gap-2">
-                    <span className="text-[#9E2A2B] font-bold">•</span>
-                    <span>{risk}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-
-          {/* Interactive AI Fundamental & News Analysis Section */}
-          <div className="p-4 sm:p-5 bg-[#FAF9F6] border-2 border-[#D97706]/40 rounded-xs space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-[#D97706] bb-amber shrink-0" />
+          {/* Interactive AI Fundamental & News Analysis Section (Structured Investment Committee Cards) */}
+          <div className="p-4 sm:p-5 bg-[#FAF9F6] border border-[#D97706]/50 rounded-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E4E2DD] pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-1.5 rounded-xs bg-[#D97706]/15 border border-[#D97706]/40 text-[#D97706]">
+                  <BrainCircuit className="w-4 h-4" />
+                </div>
                 <div>
                   <span className="text-[10px] font-bold uppercase tracking-wider text-[#D97706] bb-amber block">
-                    CONVICTION ENGINE // JOELIARDI SUNENDAR FUNDAMENTAL + OOS QUANT + LIVE NEWS
+                    INVESTMENT COMMITTEE ENGINE // DUPONT ROE DECOMPOSITION + OOS QUANT + LIVE NEWS
                   </span>
-                  <h4 className="text-sm font-bold text-[#111315]">
-                    Analisis AI Kesehatan Fundamental &amp; Berita Terkini Sebelum Membeli ({stock.ticker})
+                  <h4 className="text-sm sm:text-base font-bold text-[#111315]">
+                    Komite Investasi AI: Bedah DuPont ROE, Spread SBN 10Y &amp; Strategi Pra-Beli ({activeStock.ticker})
                   </h4>
                 </div>
               </div>
               {aiGeneratedAt && (
-                <span className="text-[10px] font-mono text-neutral-500">
-                  {isAiGenerated ? 'Gemini AI Live Synthesis' : 'Quant-Fundamental Synthesis'} ·{' '}
-                  {new Date(aiGeneratedAt).toLocaleTimeString('id-ID')}
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-mono tabular-nums font-bold bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs text-neutral-600">
+                  <Sparkles className="w-3 h-3 text-[#D97706]" />
+                  <span>
+                    {isAiGenerated
+                      ? 'Gemini 3.8 Flash Committee Engine'
+                      : 'Investment Committee Analytical Engine'}{' '}
+                    · {new Date(aiGeneratedAt).toLocaleTimeString('id-ID')}
+                  </span>
                 </span>
               )}
+            </div>
+
+            {/* Quantitative DuPont & Risk-Free Spread Strip */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+              {(() => {
+                const safeDer = Math.max(0, activeStock.debtToEquity);
+                const eqMult = 1 + safeDer;
+                const roaDuPont = activeStock.roe / Math.max(1, eqMult);
+                const earningsYield =
+                  joeliardiEval.impliedPer > 0 ? (1 / joeliardiEval.impliedPer) * 100 : 0;
+                const sbnSpread = earningsYield - 6.75;
+                const divYield = Math.max(0, activeStock.dividendYieldPct ?? 0);
+                const totalYield = earningsYield + divYield;
+
+                return (
+                  <>
+                    <div className="p-2.5 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 block">
+                        ROA Murni (DuPont)
+                      </span>
+                      <div className="text-xs sm:text-sm font-mono tabular-nums font-bold text-[#111315] mt-0.5">
+                        {roaDuPont.toFixed(1)}%{' '}
+                        <span className="text-[10px] font-normal text-neutral-500">
+                          (ROE {activeStock.roe.toFixed(1)}% / {eqMult.toFixed(2)}x)
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 block">
+                        Earnings Yield vs SBN 10Y
+                      </span>
+                      <div
+                        className={`text-xs sm:text-sm font-mono tabular-nums font-bold mt-0.5 ${
+                          sbnSpread >= 2
+                            ? 'text-[#0D5C46]'
+                            : sbnSpread >= 0
+                            ? 'text-[#D97706]'
+                            : 'text-[#9E2A2B]'
+                        }`}
+                      >
+                        {earningsYield.toFixed(2)}%{' '}
+                        <span className="text-[10px] font-normal text-neutral-500">
+                          ({sbnSpread >= 0 ? '+' : ''}
+                          {sbnSpread.toFixed(2)}% vs 6,75%)
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 block">
+                        Total Shareholder Yield
+                      </span>
+                      <div className="text-xs sm:text-sm font-mono tabular-nums font-bold text-[#0284C7] bb-cyan mt-0.5">
+                        {totalYield.toFixed(2)}%{' '}
+                        <span className="text-[10px] font-normal text-neutral-500">
+                          (Div {divYield.toFixed(2)}%)
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 block">
+                        Spread Nilai Intrinsik
+                      </span>
+                      <div
+                        className={`text-xs sm:text-sm font-mono tabular-nums font-bold mt-0.5 ${
+                          joeliardiEval.marginOfSafetyPct >= 15
+                            ? 'text-[#0D5C46]'
+                            : joeliardiEval.marginOfSafetyPct >= 0
+                            ? 'text-[#D97706]'
+                            : 'text-[#9E2A2B]'
+                        }`}
+                      >
+                        {joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}
+                        {joeliardiEval.marginOfSafetyPct.toFixed(1)}%{' '}
+                        <span className="text-[10px] font-normal text-neutral-500">
+                          (Rp {joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')})
+                        </span>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
 
             {/* Quick Prompt Chips */}
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-[11px] font-bold text-neutral-500 mr-1">
-                Pertanyaan Cepat:
+                Sudut Bedah Komite:
               </span>
               {[
-                `Apakah ${stock.ticker} layak dibeli pada harga Rp ${stock.lastPrice.toLocaleString('id-ID')} menurut prinsip Joeliardi Sunendar?`,
-                `Bagaimana dampak berita dan corporate action terbaru terhadap prospek ${stock.ticker}?`,
-                `Apakah ${stock.ticker} aman dari jebakan value trap atau indikasi HSC?`
+                `Apakah ${activeStock.ticker} layak dibeli pada harga Rp ${activeStock.lastPrice.toLocaleString('id-ID')} menurut prinsip Joeliardi Sunendar?`,
+                `Bagaimana dampak berita dan corporate action terbaru terhadap prospek ${activeStock.ticker}?`,
+                `Apakah ${activeStock.ticker} aman dari jebakan value trap atau indikasi HSC?`
               ].map((preset) => (
                 <button
                   key={preset}
                   type="button"
                   onClick={() => handleRunAiAnalysis(preset)}
                   disabled={isAnalyzingAi}
-                  className="px-2.5 py-1 text-[11px] bg-[#FFFFFF] border border-[#E4E2DD] hover:border-[#D97706] text-neutral-700 rounded-xs transition-colors cursor-pointer"
+                  className="px-2.5 py-1 text-[11px] bg-[#FFFFFF] border border-[#E4E2DD] hover:border-[#D97706] text-neutral-700 rounded-xs transition-colors cursor-pointer disabled:opacity-60"
                 >
                   {preset}
                 </button>
@@ -471,7 +719,13 @@ export function EmitenFundamentalInspectorModal({
                 type="text"
                 value={userQuestion}
                 onChange={(e) => setUserQuestion(e.target.value)}
-                placeholder={`Tulis fokus analisis untuk ${stock.ticker} (contoh: Evaluasi kelayakan beli sebelum cum dividen / cek kesehatan arus kas)...`}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !isAnalyzingAi) {
+                    e.preventDefault();
+                    handleRunAiAnalysis();
+                  }
+                }}
+                placeholder={`Tulis fokus analisis untuk ${activeStock.ticker} (contoh: Bedah arus kas, dividen, atau valuasi vs SBN)...`}
                 className="flex-1 px-3 py-2 text-xs bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs text-[#111315] focus:outline-none focus:border-[#D97706]"
               />
               <button
@@ -483,27 +737,210 @@ export function EmitenFundamentalInspectorModal({
                 {isAnalyzingAi ? (
                   <>
                     <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>Menganalisis Fundamental &amp; Berita...</span>
+                    <span>Menjalankan Penalaran AI...</span>
                   </>
                 ) : (
                   <>
                     <Sparkles className="w-3.5 h-3.5" />
-                    <span>Buat Analisis AI Pra-Beli</span>
+                    <span>Bedah Komite AI</span>
                   </>
                 )}
               </button>
             </div>
 
-            {/* Rendered AI Conviction Report */}
-            {aiAnalysis ? (
+            {/* Rendered Structured AI Conviction Cards (Zero Raw Markdown Asterisks) */}
+            {isAnalyzingAi && !structuredReport ? (
+              <div className="p-6 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs flex flex-col items-center justify-center gap-2 text-center">
+                <RefreshCw className="w-6 h-6 text-[#D97706] animate-spin" />
+                <div className="text-xs font-bold text-[#111315]">
+                  Membedah Dekomposisi ROE DuPont, Spread Earnings Yield vs SBN 10Y &amp; Katalis {activeStock.ticker}...
+                </div>
+                <p className="text-[11px] text-neutral-500 max-w-lg">
+                  Menyusun tesis Komite Investasi berbasis rasio keuangan terkalibrasi, faktor Out-of-Sample, dan saringan keamanan HSC.
+                </p>
+              </div>
+            ) : structuredReport ? (
+              <div className="space-y-4">
+                {/* 1. Executive Verdict & Direct Answer Banner */}
+                <div className="p-4 bg-[#FFFFFF] border border-[#D97706]/50 rounded-xs space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`px-2.5 py-0.5 text-[10px] font-mono tabular-nums font-bold uppercase tracking-wider rounded-xs border ${gradeBadgeCls}`}
+                      >
+                        {structuredReport.verdictBadge}
+                      </span>
+                      <span className="text-xs font-bold text-[#111315]">
+                        {structuredReport.verdictTitle}
+                      </span>
+                    </div>
+                    <span className="text-xs font-mono tabular-nums font-bold text-[#D97706] bb-amber">
+                      AI Conviction Score: {structuredReport.convictionScore}/100
+                    </span>
+                  </div>
+
+                  <p className="text-xs sm:text-[13px] text-[#111315] leading-relaxed">
+                    {structuredReport.directAnswerSummary}
+                  </p>
+
+                  {/* Chain of Thought Reasoning Steps */}
+                  {structuredReport.chainOfThoughtSteps &&
+                    structuredReport.chainOfThoughtSteps.length > 0 && (
+                      <div className="pt-2.5 mt-2 border-t border-[#E4E2DD] space-y-1.5">
+                        <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-neutral-500">
+                          <Layers className="w-3.5 h-3.5 text-[#D97706]" />
+                          <span>Alur Penalaran Kuantitatif-Fundamental (Chain-of-Thought):</span>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
+                          {structuredReport.chainOfThoughtSteps.map((step, idx) => (
+                            <div
+                              key={idx}
+                              className="px-2.5 py-1.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs text-[11px] font-mono tabular-nums text-neutral-700 leading-snug"
+                            >
+                              {step}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                </div>
+
+                {/* 2. 2x2 Grid of Deep Analytical Pillar Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                  {structuredReport.sections.map((sec) => {
+                    const tone = getToneStyles(sec.sentimentTone);
+                    return (
+                      <div
+                        key={sec.id}
+                        className={`p-4 bg-[#FFFFFF] border ${tone.border} rounded-xs flex flex-col justify-between space-y-2.5`}
+                      >
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span
+                              className={`px-2 py-0.5 text-[10px] font-mono font-bold uppercase rounded-xs border ${tone.badgeBg}`}
+                            >
+                              {sec.badge}
+                            </span>
+                          </div>
+
+                          <h5 className="text-xs sm:text-sm font-bold text-[#111315] leading-snug">
+                            {sec.title}
+                          </h5>
+
+                          {sec.keyMetricHighlight && (
+                            <div className="px-2.5 py-1.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs text-[11px] font-mono font-bold text-[#111315]">
+                              {sec.keyMetricHighlight}
+                            </div>
+                          )}
+
+                          <p className="text-xs text-neutral-700 leading-relaxed">
+                            {sec.reasoningParagraph}
+                          </p>
+                        </div>
+
+                        {sec.bulletPoints && sec.bulletPoints.length > 0 && (
+                          <ul className="pt-2 border-t border-[#E4E2DD]/80 space-y-1 text-[11px] text-neutral-600">
+                            {sec.bulletPoints.map((pt, idx) => (
+                              <li key={idx} className="flex items-start gap-1.5 leading-snug">
+                                <span className={`font-bold ${tone.bulletColor}`}>▸</span>
+                                <span>{pt}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* 3. Tactical Execution & Position Sizing Strategy Card */}
+                <div className="p-4 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs space-y-3">
+                  <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#0284C7] bb-cyan">
+                    <Target className="w-4 h-4 shrink-0" />
+                    <span>Strategi Eksekusi Pra-Beli &amp; Manajemen Risiko Portofolio</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                    <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
+                      <span className="text-[10px] font-bold uppercase text-neutral-500 block">
+                        Tindakan Utama
+                      </span>
+                      <div className="font-bold text-[#111315] mt-1 leading-snug">
+                        {structuredReport.executionStrategy.recommendedAction}
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
+                      <span className="text-[10px] font-bold uppercase text-[#0D5C46] block">
+                        Zona Akumulasi Ideal
+                      </span>
+                      <div className="font-mono font-bold text-[#0D5C46] mt-1 leading-snug">
+                        {structuredReport.executionStrategy.idealEntryZone}
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
+                      <span className="text-[10px] font-bold uppercase text-[#9E2A2B] block">
+                        Batas Invalidation / Risiko
+                      </span>
+                      <div className="font-bold text-[#9E2A2B] mt-1 leading-snug">
+                        {structuredReport.executionStrategy.InvalidationOrRiskLimit}
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
+                      <span className="text-[10px] font-bold uppercase text-[#0284C7] bb-cyan block">
+                        Panduan Porsi Keranjang
+                      </span>
+                      <div className="font-bold text-[#111315] mt-1 leading-snug">
+                        {structuredReport.executionStrategy.portfolioAllocationGuide}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. Bullish Catalysts vs Bearish Risks Checklist */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                  <div className="p-3.5 bg-[#FFFFFF] border border-[#059669]/35 rounded-xs space-y-2">
+                    <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#0D5C46]">
+                      <CheckCircle2 className="w-4 h-4 shrink-0" />
+                      <span>Katalis Positif &amp; Kekuatan Fundamental ({activeStock.ticker})</span>
+                    </div>
+                    <ul className="space-y-1.5 text-xs text-neutral-700 leading-relaxed">
+                      {structuredReport.bullishDrivers.map((str, i) => (
+                        <li key={i} className="flex items-start gap-2">
+                          <span className="text-[#0D5C46] font-bold">•</span>
+                          <span>{str}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div className="p-3.5 bg-[#FFFFFF] border border-[#E11D48]/35 rounded-xs space-y-2">
+                    <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#9E2A2B]">
+                      <ShieldAlert className="w-4 h-4 shrink-0" />
+                      <span>Faktor Risiko, Valuasi &amp; Disiplin Eksekusi</span>
+                    </div>
+                    <ul className="space-y-1.5 text-xs text-neutral-700 leading-relaxed">
+                      {structuredReport.bearishRisks.map((risk, i) => (
+                        <li key={i} className="flex items-start gap-2">
+                          <span className="text-[#9E2A2B] font-bold">•</span>
+                          <span>{risk}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            ) : aiAnalysisFallbackText ? (
               <div className="p-4 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs space-y-2.5 text-xs text-[#111315] leading-relaxed whitespace-pre-line font-sans">
-                {aiAnalysis}
+                {aiAnalysisFallbackText}
               </div>
             ) : (
               <div className="p-3.5 bg-[#FFFFFF]/80 border border-dashed border-[#E4E2DD] rounded-xs text-xs text-neutral-500 flex items-center gap-2">
                 <BookOpen className="w-4 h-4 text-[#D97706] shrink-0" />
                 <span>
-                  Klik tombol <strong>Buat Analisis AI Pra-Beli</strong> atau pilih salah satu pertanyaan cepat di atas untuk membedah kesehatan fundamental {stock.ticker} berdasarkan prinsip Joeliardi Sunendar, validasi OOS, dan berita terkini.
+                  Klik tombol <strong>Buat Analisis AI Pra-Beli</strong> atau pilih salah satu pertanyaan cepat di atas untuk membedah kesehatan fundamental {activeStock.ticker} berdasarkan prinsip Joeliardi Sunendar, validasi OOS, dan berita terkini.
                 </span>
               </div>
             )}
@@ -515,7 +952,7 @@ export function EmitenFundamentalInspectorModal({
               <div className="flex items-center gap-2">
                 <Newspaper className="w-4 h-4 text-[#0284C7] bb-cyan" />
                 <h4 className="text-xs font-bold uppercase tracking-wider text-[#111315]">
-                  Berita Terkini, Corporate Action &amp; Radar Isu Spesifik Emiten ({stock.ticker})
+                  Berita Terkini, Corporate Action &amp; Radar Isu Spesifik Emiten ({activeStock.ticker})
                 </h4>
               </div>
               <span className="text-[11px] font-bold text-[#0284C7] bb-cyan">
@@ -553,7 +990,7 @@ export function EmitenFundamentalInspectorModal({
                       )}
                     </div>
                     <div className="mt-2 pt-2 border-t border-[#E4E2DD]/60 flex items-center justify-between text-[10px] font-bold text-[#D97706]">
-                      <span>Sektor: {stock.sector}</span>
+                      <span>Sektor: {activeStock.sector}</span>
                       <span className="inline-flex items-center gap-1 group-hover:underline">
                         <span>Buka Sumber</span>
                         <ExternalLink className="w-3 h-3" />

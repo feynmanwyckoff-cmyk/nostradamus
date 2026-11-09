@@ -6,6 +6,7 @@ import {
   StockMetrics
 } from '../types/quant';
 import {
+  buildEmitenCorporateActionRadarBaseline,
   classifyHeadlineSentiment,
   decodeHtmlEntities,
   fetchLiveEmitenSpecificNews
@@ -30,6 +31,8 @@ interface MarketNewsSentimentProps {
   stocks?: StockMetrics[];
   regimeStatus?: MarketRegimeStatus;
   onToggleHscFlag?: (ticker: string, currentlyFlagged: boolean) => void;
+  onInspectTicker?: (ticker: string) => void;
+  onStockSynced?: (updatedStock: StockMetrics) => void;
 }
 
 type SentimentFilterType = 'ALL' | NewsSentimentItem['sentiment'];
@@ -53,7 +56,9 @@ export function MarketNewsSentiment({
   isLoadingNews = false,
   stocks = [],
   regimeStatus = 'WASPADA',
-  onToggleHscFlag
+  onToggleHscFlag,
+  onInspectTicker,
+  onStockSynced
 }: MarketNewsSentimentProps) {
   const [sentimentFilter, setSentimentFilter] = useState<SentimentFilterType>('ALL');
 
@@ -62,6 +67,8 @@ export function MarketNewsSentiment({
   const [emitenInputQuery, setEmitenInputQuery] = useState<string>('BBCA');
   const [emitenNewsItems, setEmitenNewsItems] = useState<NewsSentimentItem[]>([]);
   const [isLoadingEmitenNews, setIsLoadingEmitenNews] = useState<boolean>(false);
+  const [hasUserRequestedLiveEmiten, setHasUserRequestedLiveEmiten] =
+    useState<boolean>(false);
   const [emitenCategoryFilter, setEmitenCategoryFilter] =
     useState<EmitenCategoryFilter>('ALL');
   const [inspectedStock, setInspectedStock] = useState<StockMetrics | null>(null);
@@ -70,10 +77,24 @@ export function MarketNewsSentiment({
     return stocks.find((s) => s.ticker === selectedEmitenTicker) || null;
   }, [stocks, selectedEmitenTicker]);
 
+  // Instantaneous baseline hydration on mount; only fetches live network RSS when user clicks Cek Emiten or a chip
   useEffect(() => {
     let isMounted = true;
-    setIsLoadingEmitenNews(true);
+    const baseline = buildEmitenCorporateActionRadarBaseline(
+      selectedEmitenTicker,
+      selectedStockObj?.name || `${selectedEmitenTicker} Tbk`,
+      selectedStockObj?.sector || 'Financials',
+      selectedStockObj || undefined
+    );
+    setEmitenNewsItems(baseline);
 
+    if (!hasUserRequestedLiveEmiten) {
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    setIsLoadingEmitenNews(true);
     fetchLiveEmitenSpecificNews(
       selectedEmitenTicker,
       selectedStockObj?.name,
@@ -95,7 +116,7 @@ export function MarketNewsSentiment({
     return () => {
       isMounted = false;
     };
-  }, [selectedEmitenTicker, selectedStockObj]);
+  }, [selectedEmitenTicker, selectedStockObj, hasUserRequestedLiveEmiten]);
 
   const handleSearchEmitenSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -106,6 +127,7 @@ export function MarketNewsSentiment({
       .replace(/[^A-Z]/g, '')
       .slice(0, 4);
     if (clean.length === 4) {
+      setHasUserRequestedLiveEmiten(true);
       setSelectedEmitenTicker(clean);
       setEmitenInputQuery(clean);
     }
@@ -297,7 +319,11 @@ export function MarketNewsSentiment({
             {selectedStockObj && (
               <button
                 type="button"
-                onClick={() => setInspectedStock(selectedStockObj)}
+                onClick={() =>
+                  onInspectTicker
+                    ? onInspectTicker(selectedStockObj.ticker)
+                    : setInspectedStock(selectedStockObj)
+                }
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-[#D97706] hover:bg-[#B45309] text-white rounded-xs transition-colors cursor-pointer"
               >
                 <Scale className="w-3.5 h-3.5" />
@@ -335,7 +361,7 @@ export function MarketNewsSentiment({
                 ) : (
                   <Search className="w-3.5 h-3.5" />
                 )}
-                <span>Cek Emiten</span>
+                <span>Tarik Berita Emiten</span>
               </button>
             </form>
 
@@ -353,6 +379,7 @@ export function MarketNewsSentiment({
                     key={tk}
                     type="button"
                     onClick={() => {
+                      setHasUserRequestedLiveEmiten(true);
                       setSelectedEmitenTicker(tk);
                       setEmitenInputQuery(tk);
                     }}
@@ -637,6 +664,7 @@ export function MarketNewsSentiment({
           regimeStatus={regimeStatus}
           onClose={() => setInspectedStock(null)}
           onToggleHscFlag={onToggleHscFlag}
+          onStockSynced={onStockSynced}
         />
       )}
     </div>

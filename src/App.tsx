@@ -62,6 +62,7 @@ import {
   TerminalSecurityGate,
   ChangePassphraseModal
 } from './components/TerminalSecurityGate';
+import { EmitenFundamentalInspectorModal } from './components/EmitenFundamentalInspectorModal';
 import { Sun, Moon, Cloud, RefreshCw, Lock, KeyRound } from 'lucide-react';
 
 const SCREENER_CACHE_KEY = 'nostradamus_dmu24_screener_v12_hsc_value';
@@ -221,6 +222,13 @@ export default function App() {
   const [isMasterSyncing, setIsMasterSyncing] = useState<boolean>(false);
   const [syncStatusLabel, setSyncStatusLabel] = useState<string | null>(null);
   const [isLoadingNews, setIsLoadingNews] = useState<boolean>(false);
+  const [globalInspectedTicker, setGlobalInspectedTicker] = useState<string | null>(null);
+
+  const globalInspectedStockObj = useMemo(() => {
+    if (!globalInspectedTicker) return null;
+    const clean = globalInspectedTicker.trim().toUpperCase();
+    return stocks.find((s) => s.ticker.toUpperCase() === clean) || null;
+  }, [stocks, globalInspectedTicker]);
 
   const liveSyncedStockCount = useMemo(
     () => stocks.filter((s) => s.isLiveFetched).length,
@@ -787,7 +795,8 @@ export default function App() {
 
   /**
    * Unified Single Master Sync Button Handler
-   * Simultaneously updates IHSG (^JKSE), All Stocks (19 or 100+ stocks), Global Macro Wire, and Live News RSS.
+   * Lightweight Sync Architecture: Fetches IHSG (^JKSE), Global Macro Wire, and Live News RSS rapidly.
+   * Individual emiten quotes, specific news, and AI Committee analysis are fetched lazily on-demand when clicking Inspect.
    */
   const handleMasterSyncAll = async (
     silent: boolean = false,
@@ -796,17 +805,15 @@ export default function App() {
     const targetStocks = overrideStockList ?? stocks;
     setIsMasterSyncing(true);
     setIsLoadingNews(true);
-    setSyncStatusLabel(`Menyinkronkan 0/${targetStocks.length} Saham...`);
+    setSyncStatusLabel('Syncing IHSG (^JKSE) & Global Macro...');
 
     try {
       const [marketResult, liveNews] = await Promise.all([
         refreshLiveGlobalMacroAndIhsg(
           macroIndicators,
           targetStocks,
-          (syncedCount, totalCount, tickerLabel) => {
-            setSyncStatusLabel(
-              `Syncing ${syncedCount}/${totalCount} (${tickerLabel})...`
-            );
+          (_syncedCount, _totalCount, tickerLabel) => {
+            setSyncStatusLabel(`Syncing ${tickerLabel}...`);
           },
           true
         ),
@@ -849,7 +856,6 @@ export default function App() {
       }
 
       if (!silent) {
-        const liveCount = rerankedStocks.filter((s) => s.isLiveFetched).length;
         const activeQuotedCount = rerankedStocks.filter((s) => s.lastPrice > 0).length;
         const liquidCount = rerankedStocks.filter(
           (s) => s.isLiquid !== false && s.lastPrice >= 68
@@ -857,15 +863,18 @@ export default function App() {
         const illiquidCount = rerankedStocks.length - liquidCount;
         Swal.fire({
           icon: 'success',
-          title: `✓ ${liveCount}/${rerankedStocks.length} Emiten JCI (100%) & Makro Berhasil Sync`,
+          title: '✓ IHSG & Makro Global Berhasil Sync (Mode Ringan)',
           html: `
             <div style="text-align:left;font-size:12.5px;line-height:1.65;color:#374151;">
               <div><strong>Waktu Update Sistem:</strong> ${fullTimestampStr}</div>
               <div><strong>IHSG (^JKSE):</strong> ${activeQuote.lastPrice.toLocaleString('id-ID', {
                 minimumFractionDigits: 2
               })} (${activeQuote.change1D >= 0 ? '+' : ''}${activeQuote.change1D.toFixed(2)}%)</div>
-              <div><strong>Total Universe BEI Terverifikasi:</strong> ✓ <strong>${liveCount}/${rerankedStocks.length} Emiten JCI (100% Synced)</strong></div>
-              <div><strong>Status Kuotasi & Likuiditas:</strong> ${activeQuotedCount} Aktif Diperdagangkan · <strong>${liquidCount} Saham Likuid</strong> · <span style="color:#9E2A2B;font-weight:700;">${illiquidCount} Saham Gocap/Suspensi Diblokir dari Keranjang 1 & 2</span></div>
+              <div><strong>Arsitektur Sync Ringan:</strong> ✓ <strong>IHSG &amp; 8 Indikator Makro Live</strong> · <strong>${rerankedStocks.length} Emiten JCI Siap (On-Demand Inspect)</strong></div>
+              <div><strong>Status Likuiditas Universe:</strong> ${activeQuotedCount} Aktif · <strong>${liquidCount} Saham Likuid</strong> · <span style="color:#9E2A2B;font-weight:700;">${illiquidCount} Saham Gocap/Suspensi Diblokir</span></div>
+              <div style="margin-top:6px;padding:6px 8px;background:#FAF9F6;border:1px solid #E4E2DD;border-radius:2px;font-size:11.5px;color:#0D5C46;">
+                ⚡ <strong>On-Demand Inspect Aktif:</strong> Kuotasi live emiten, berita spesifik, dan Komite Investasi AI kini ditarik secara instan hanya saat Anda mengklik tombol <strong>Inspect</strong> agar aplikasi tetap ringan tanpa beban antrean network.
+              </div>
             </div>
           `,
           confirmButtonColor: '#D97706'
@@ -878,14 +887,15 @@ export default function App() {
     }
   };
 
-  // Load 100 Liquid BEI Stocks (IDX100) and immediately run high-speed batch sync
+  // Load Full BEI Universe instantaneously without heavy network batching
   const handleLoadIdx100Universe = () => {
     const idx100 = buildIdx100StockUniverse(rebalanceBufferPct);
     setStocks(idx100);
-    handleMasterSyncAll(false, idx100);
+    setLastCacheSavedAt(formatFullIndonesianDateTime(new Date()));
   };
 
-  // On initial mount: pull portfolio state from GitHub Repo if configured, or check deployed static/cloud snapshot for scope-matched vault, then run Master Sync
+  // On initial mount: hydrate instantaneously from calibrated snapshot / GitHub Cloud state without blocking initial load with 956-stock batch fetches.
+  // Detailed single-ticker quotes, news & AI analysis are fetched lazily on-demand when the user clicks Inspect (or when Sync is clicked manually).
   useEffect(() => {
     const initSync = async () => {
       const cfg = loadGitHubCloudConfig();
@@ -918,7 +928,6 @@ export default function App() {
           }
         }
       }
-      await handleMasterSyncAll(true);
     };
     initSync();
   }, []);
@@ -1304,6 +1313,7 @@ export default function App() {
                   actualPortfolioNavIdr={actualPortfolioNavIdr}
                   onChangeCapital={setCapitalIdr}
                   onLoadIdx100Universe={handleLoadIdx100Universe}
+                  onInspectTicker={(tk) => setGlobalInspectedTicker(tk)}
                   onTriggerSweetAlert={(cap, picks, mode) =>
                     handleGenerateStrategyModal(cap, picks, mode)
                   }
@@ -1322,6 +1332,7 @@ export default function App() {
                 onRemoveStock={handleRemoveStock}
                 onResetUniverse={handleResetUniverse}
                 onToggleHscFlag={handleToggleHscFlag}
+                onInspectTicker={(tk) => setGlobalInspectedTicker(tk)}
               />
             )}
 
@@ -1345,6 +1356,7 @@ export default function App() {
                 onExportBackupJson={handleExportBackupJson}
                 onImportBackupJson={handleImportBackupJson}
                 onResetCacheAndPortfolio={handleResetCacheAndPortfolio}
+                onInspectTicker={(tk) => setGlobalInspectedTicker(tk)}
               />
             )}
 
@@ -1359,11 +1371,24 @@ export default function App() {
                 stocks={stocks}
                 regimeStatus={regime.status}
                 onToggleHscFlag={handleToggleHscFlag}
+                onInspectTicker={(tk) => setGlobalInspectedTicker(tk)}
+                onStockSynced={handleAddStock}
               />
             )}
           </>
         )}
       </main>
+
+      {/* Global On-Demand Fundamental & AI Conviction Inspector Modal (Accessible from All Tabs) */}
+      {globalInspectedStockObj && (
+        <EmitenFundamentalInspectorModal
+          stock={globalInspectedStockObj}
+          regimeStatus={regime.status}
+          onClose={() => setGlobalInspectedTicker(null)}
+          onToggleHscFlag={handleToggleHscFlag}
+          onStockSynced={handleAddStock}
+        />
+      )}
 
       {/* GitHub Repository JSON + PAT Cloud Configuration Modal */}
       <GitHubCloudSyncModal

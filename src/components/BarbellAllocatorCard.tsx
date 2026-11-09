@@ -11,7 +11,7 @@ import {
   formatIndonesianIntegerInput,
   parseIndonesianNumber
 } from '../utils/numberFormat';
-import { Calculator, SlidersHorizontal, RefreshCw } from 'lucide-react';
+import { Calculator, SlidersHorizontal, RefreshCw, Scale } from 'lucide-react';
 
 interface BarbellAllocatorCardProps {
   regime: MarketRegime;
@@ -20,6 +20,7 @@ interface BarbellAllocatorCardProps {
   actualPortfolioNavIdr?: number;
   onChangeCapital: (capital: number) => void;
   onLoadIdx100Universe?: () => void;
+  onInspectTicker?: (ticker: string) => void;
   onTriggerSweetAlert: (
     capital: number,
     picksPerSleeve?: number,
@@ -33,6 +34,7 @@ export function BarbellAllocatorCard({
   capitalIdr,
   actualPortfolioNavIdr,
   onChangeCapital,
+  onInspectTicker,
   onTriggerSweetAlert
 }: BarbellAllocatorCardProps) {
   const [rawInput, setRawInput] = useState(() =>
@@ -419,13 +421,26 @@ export function BarbellAllocatorCard({
                       Dasar: {reasonText}
                     </div>
                   </div>
-                  <div className="text-right shrink-0">
-                    <div className="font-bold text-[#111315]">
-                      {pos.lots.toLocaleString('id-ID')} Lot
+                  <div className="text-right shrink-0 flex flex-col items-end gap-1">
+                    <div>
+                      <div className="font-bold text-[#111315]">
+                        {pos.lots.toLocaleString('id-ID')} Lot
+                      </div>
+                      <div className="text-[11px] text-neutral-500">
+                        Rp {pos.allocatedIdr.toLocaleString('id-ID')}
+                      </div>
                     </div>
-                    <div className="text-[11px] text-neutral-500">
-                      Rp {pos.allocatedIdr.toLocaleString('id-ID')}
-                    </div>
+                    {onInspectTicker && (
+                      <button
+                        type="button"
+                        onClick={() => onInspectTicker(pos.stock.ticker)}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold text-[#D97706] bb-amber bg-[#FFFFFF] border border-[#D97706]/50 hover:bg-[#D97706] hover:text-white rounded-xs transition-colors cursor-pointer"
+                        title={`Inspect Fundamental Joeliardi, Berita & AI untuk ${pos.stock.ticker}`}
+                      >
+                        <Scale className="w-2.5 h-2.5" />
+                        <span>Inspect</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -542,13 +557,26 @@ export function BarbellAllocatorCard({
                       Dasar: {reasonText}
                     </div>
                   </div>
-                  <div className="text-right shrink-0">
-                    <div className="font-bold text-[#111315]">
-                      {pos.lots.toLocaleString('id-ID')} Lot
+                  <div className="text-right shrink-0 flex flex-col items-end gap-1">
+                    <div>
+                      <div className="font-bold text-[#111315]">
+                        {pos.lots.toLocaleString('id-ID')} Lot
+                      </div>
+                      <div className="text-[11px] text-neutral-500">
+                        Rp {pos.allocatedIdr.toLocaleString('id-ID')}
+                      </div>
                     </div>
-                    <div className="text-[11px] text-neutral-500">
-                      Rp {pos.allocatedIdr.toLocaleString('id-ID')}
-                    </div>
+                    {onInspectTicker && (
+                      <button
+                        type="button"
+                        onClick={() => onInspectTicker(pos.stock.ticker)}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold text-[#D97706] bb-amber bg-[#FFFFFF] border border-[#D97706]/50 hover:bg-[#D97706] hover:text-white rounded-xs transition-colors cursor-pointer"
+                        title={`Inspect Fundamental Joeliardi, Berita & AI untuk ${pos.stock.ticker}`}
+                      >
+                        <Scale className="w-2.5 h-2.5" />
+                        <span>Inspect</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               );

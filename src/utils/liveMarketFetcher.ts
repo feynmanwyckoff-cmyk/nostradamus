@@ -3,7 +3,8 @@ import {
   JoeliardiOosEvaluation,
   MacroIndicator,
   NewsSentimentItem,
-  StockMetrics
+  StockMetrics,
+  StructuredAiConvictionReport
 } from '../types/quant';
 import { enrichStockMetrics, rankUniverseWithBuffer } from './quantEngine';
 import {
@@ -305,6 +306,16 @@ let cachedLocalServerAvailable: boolean | null = null;
 function canUseLocalExpressBackend(): boolean {
   if (typeof window === 'undefined') return false;
   if (cachedLocalServerAvailable === false) return false;
+  const host = window.location.hostname;
+  return host === 'localhost' || host === '127.0.0.1' || host.endsWith('.run.app');
+}
+
+/**
+ * Dedicated check for Express AI & Emiten on-demand endpoints so a transient Yahoo Finance batch timeout
+ * never disables Gemini AI analysis (/api/ai/inspect-emiten).
+ */
+function canUseExpressOnDemandApi(): boolean {
+  if (typeof window === 'undefined') return false;
   const host = window.location.hostname;
   return host === 'localhost' || host === '127.0.0.1' || host.endsWith('.run.app');
 }
@@ -692,9 +703,8 @@ async function fetchYahooSparkViaBrowserCors(
 
   const proxyCandidates = [
     { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetV8)}`, wrapped: false },
-    { url: `https://api.allorigins.win/get?url=${encodeURIComponent(targetV8)}`, wrapped: true },
-    { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetV7)}`, wrapped: false },
-    { url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetV8)}`, wrapped: false }
+    { url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetV8)}`, wrapped: false },
+    { url: `https://api.allorigins.win/get?url=${encodeURIComponent(targetV8)}`, wrapped: true }
   ];
 
   let out: Record<string, SparkSeriesItem> = {};
@@ -702,7 +712,7 @@ async function fetchYahooSparkViaBrowserCors(
   for (const proxy of proxyCandidates) {
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 5500);
+      const timer = setTimeout(() => controller.abort(), 3500);
       const res = await fetch(proxy.url, {
         signal: controller.signal,
         cache: 'no-store'
@@ -725,7 +735,7 @@ async function fetchYahooSparkViaBrowserCors(
     }
   }
 
-  // If this was a targeted lookup (e.g. "Tarik Ticker .JK" with <= 3 symbols) and any symbol had Volume Not Available
+  // If this was a targeted single-ticker lookup (e.g. clicking Inspect or "Tarik Ticker .JK") and spark missed a symbol
   if (batchSymbols.length <= 3) {
     for (const sym of batchSymbols) {
       if (!out[sym]) {
@@ -756,7 +766,7 @@ export async function fetchYahooChartSeries(
   if (canUseLocalExpressBackend()) {
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 7500);
+      const timer = setTimeout(() => controller.abort(), 6000);
       const srvRes = await fetch(
         `/api/yahoo/chart?symbol=${encodeURIComponent(symbol)}&range=${encodeURIComponent(range)}`,
         { signal: controller.signal, cache: 'no-store' }
@@ -804,9 +814,10 @@ export async function fetchYahooChartSeries(
 }
 
 /**
- * High-Throughput Multi-Symbol Yahoo Spark Batch Fetcher
- * Works both on Google AI Studio (`/api/yahoo/spark`) AND on GitHub Pages (`*.github.io` via GitHub API + CORS live batches)
- * with visible progress updates (`onChunkProgress`) so clicking Sync always performs real network fetching & 100% completion.
+ * Lightweight On-Demand & Macro Yahoo Spark Fetcher
+ * - During Login / Master Sync: Only fetches IHSG (^JKSE) and Global Macro indicators (zero heavy .JK stock loops).
+ * - On Inspect Click / Single Ticker Lookup: Fetches the specific .JK ticker on demand in < 1s.
+ * - Full 957 JCI baseline is hydrated instantaneously from the calibrated snapshot without network lag.
  */
 export async function fetchYahooSparkBatch(
   symbols: string[],
@@ -818,8 +829,8 @@ export async function fetchYahooSparkBatch(
   const resultMap: Record<string, SparkSeriesItem> = {};
   if (uniqueSymbols.length === 0) return resultMap;
 
-  // 1. Hydrate baseline from pre-synced Yahoo Finance snapshot (or fresh GitHub API snapshot when forceLiveNetwork=true)
-  const snapshot = await loadStaticMarketSnapshot(forceLiveNetwork);
+  // 1. Hydrate baseline instantaneously from pre-synced Yahoo Finance snapshot
+  const snapshot = await loadStaticMarketSnapshot(false);
   if (snapshot?.data) {
     for (const sym of uniqueSymbols) {
       const item = snapshot.data[sym];
@@ -829,109 +840,51 @@ export async function fetchYahooSparkBatch(
     }
   }
 
-  // 2. Path A: Local Express Backend (/api/yahoo/spark) in Google AI Studio / Local Dev
-  if (canUseLocalExpressBackend()) {
-    const SERVER_BATCH_SIZE = 40;
-    const CONCURRENT_CHUNKS = 3;
-    const batches: string[][] = [];
-    for (let i = 0; i < uniqueSymbols.length; i += SERVER_BATCH_SIZE) {
-      batches.push(uniqueSymbols.slice(i, i + SERVER_BATCH_SIZE));
-    }
+  // Filter live network targets:
+  // If called with <= 12 symbols (e.g. IHSG + Global Macro on Sync, or single-ticker on Inspect click), fetch them all in 1 request.
+  // Never bulk-fetch ratusan .JK emiten upfront! Emiten are fetched lazily only when clicking Inspect.
+  const liveTargets =
+    uniqueSymbols.length <= 12
+      ? uniqueSymbols
+      : uniqueSymbols.filter((sym) => !sym.endsWith('.JK'));
 
-    let completedSymbols = 0;
-    for (let g = 0; g < batches.length; g += CONCURRENT_CHUNKS) {
-      const group = batches.slice(g, g + CONCURRENT_CHUNKS);
-      const groupLastBatch = group[group.length - 1];
-      completedSymbols = Math.min(
-        uniqueSymbols.length,
-        completedSymbols + group.reduce((acc, b) => acc + b.length, 0)
-      );
-      onChunkProgress?.(
-        completedSymbols,
-        uniqueSymbols.length,
-        `${group[0][0]} .. ${groupLastBatch[groupLastBatch.length - 1]}`
-      );
+  if (liveTargets.length > 0 && (forceLiveNetwork || canUseLocalExpressBackend())) {
+    onChunkProgress?.(
+      1,
+      liveTargets.length,
+      `IHSG & Global Macro (${liveTargets.length} Indikator)`
+    );
 
+    if (canUseLocalExpressBackend()) {
       try {
-        const results = await Promise.all(
-          group.map(async (batch) => {
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 9000);
-            const res = await fetch(
-              `/api/yahoo/spark?symbols=${encodeURIComponent(
-                batch.join(',')
-              )}&range=${encodeURIComponent(range)}`,
-              { signal: controller.signal, cache: 'no-store' }
-            );
-            clearTimeout(timer);
-            if (!res.ok) return null;
-            return await res.json();
-          })
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 6000);
+        const res = await fetch(
+          `/api/yahoo/spark?symbols=${encodeURIComponent(
+            liveTargets.join(',')
+          )}&range=${encodeURIComponent(range)}`,
+          { signal: controller.signal, cache: 'no-store' }
         );
-
-        let anyOk = false;
-        for (const json of results) {
+        clearTimeout(timer);
+        if (res.ok) {
+          const json = await res.json();
           if (json?.data && typeof json.data === 'object') {
-            anyOk = true;
+            cachedLocalServerAvailable = true;
             Object.assign(resultMap, json.data);
             if (embeddedSnapshot.data) {
               Object.assign(embeddedSnapshot.data, json.data);
             }
           }
         }
-        if (anyOk) {
-          cachedLocalServerAvailable = true;
-        } else {
-          cachedLocalServerAvailable = false;
-          break;
-        }
       } catch {
-        cachedLocalServerAvailable = false;
-        break;
+        // Fallback to snapshot values already in resultMap
       }
-    }
-  } else if (forceLiveNetwork) {
-    // 3. Path B: Static Host / GitHub Pages (*.github.io) Explicit Live Sync
-    // When user queries <= 10 symbols (e.g. manual "Tarik Ticker .JK"), fetch all requested symbols directly.
-    // When syncing the full 956+ universe, prioritize ^JKSE, Global Macro, and Institutional Liquid BEI Stocks.
-    const priorityLiveSymbols =
-      uniqueSymbols.length <= 10
-        ? uniqueSymbols
-        : uniqueSymbols.filter((sym) => {
-            if (!sym.endsWith('.JK')) return true;
-            const clean = sym.replace(/\.JK$/i, '');
-            return isInstitutionalLiquidCandidate(clean);
-          });
-
-    const CORS_BATCH_SIZE = 20;
-    const CONCURRENT_CORS = 3;
-    const batches: string[][] = [];
-    for (let i = 0; i < priorityLiveSymbols.length; i += CORS_BATCH_SIZE) {
-      batches.push(priorityLiveSymbols.slice(i, i + CORS_BATCH_SIZE));
-    }
-
-    for (let g = 0; g < batches.length; g += CONCURRENT_CORS) {
-      const group = batches.slice(g, g + CONCURRENT_CORS);
-      const groupLast = group[group.length - 1];
-      const scaledProgress = Math.min(
-        uniqueSymbols.length,
-        Math.round(((g + group.length) / Math.max(1, batches.length)) * uniqueSymbols.length)
-      );
-      onChunkProgress?.(
-        scaledProgress,
-        uniqueSymbols.length,
-        `${group[0][0]} .. ${groupLast[groupLast.length - 1]}`
-      );
-
-      const groupResults = await Promise.all(
-        group.map((batch) => fetchYahooSparkViaBrowserCors(batch, range))
-      );
-      for (const liveBatchData of groupResults) {
-        if (Object.keys(liveBatchData).length > 0) {
-          Object.assign(resultMap, liveBatchData);
-          if (embeddedSnapshot.data) {
-            Object.assign(embeddedSnapshot.data, liveBatchData);
-          }
+    } else if (forceLiveNetwork) {
+      const liveBatchData = await fetchYahooSparkViaBrowserCors(liveTargets, range);
+      if (Object.keys(liveBatchData).length > 0) {
+        Object.assign(resultMap, liveBatchData);
+        if (embeddedSnapshot.data) {
+          Object.assign(embeddedSnapshot.data, liveBatchData);
         }
       }
     }
@@ -940,7 +893,7 @@ export async function fetchYahooSparkBatch(
   onChunkProgress?.(
     uniqueSymbols.length,
     uniqueSymbols.length,
-    uniqueSymbols[uniqueSymbols.length - 1] || 'Selesai'
+    'IHSG & Makro Selesai'
   );
 
   return resultMap;
@@ -1105,7 +1058,7 @@ export async function refreshLiveGlobalMacroAndIhsg(
   const fullTimestampStr = formatFullIndonesianDateTime(now);
 
   // Dynamically check if the market snapshot has any newly listed .JK emiten (e.g. if JCI grows from 956 to 1000+ emiten)
-  const snapshot = await loadStaticMarketSnapshot(forceLiveNetwork);
+  const snapshot = await loadStaticMarketSnapshot(false);
   const existingTickerSet = new Set(currentStocks.map((s) => s.ticker));
   const expandedStocks: StockMetrics[] = [...currentStocks];
 
@@ -1180,22 +1133,24 @@ export async function refreshLiveGlobalMacroAndIhsg(
     }
   }
 
+  // On Sync: Only network-fetch IHSG (^JKSE) and Global Macro Indicators (9 symbols total).
+  // Individual .JK stocks are hydrated from the snapshot and fetched live on-demand when clicking Inspect!
   const macroSymbols = ['IDR=X', 'DX-Y.NYB', '^TNX', '^VIX', '^GSPC', '^HSI', 'GC=F', 'BZ=F'];
-  const stockSymbols = expandedStocks.map((s) => s.yfTicker);
-  const allTargetSymbols = ['^JKSE', ...macroSymbols, ...stockSymbols];
+  const macroAndIhsgTargets = ['^JKSE', ...macroSymbols];
 
-  const batchMap = await fetchYahooSparkBatch(
-    allTargetSymbols,
+  onProgress?.(1, macroAndIhsgTargets.length, 'IHSG (^JKSE) & Global Macro');
+
+  const liveMacroBatchMap = await fetchYahooSparkBatch(
+    macroAndIhsgTargets,
     '3mo',
-    (syncedSoFar, _total, label) => {
-      const approxStockSynced = Math.min(
-        expandedStocks.length,
-        Math.max(0, syncedSoFar - macroSymbols.length - 1)
-      );
-      onProgress?.(approxStockSynced, expandedStocks.length, label);
-    },
+    undefined,
     forceLiveNetwork
   );
+
+  const batchMap: Record<string, SparkSeriesItem> = {
+    ...(snapshot?.data || {}),
+    ...liveMacroBatchMap
+  };
 
   // 1. Process ^JKSE (IHSG)
   const ihsgItem = batchMap['^JKSE'];
@@ -1230,7 +1185,7 @@ export async function refreshLiveGlobalMacroAndIhsg(
     }
   }
 
-  // 3. Process All JCI Screener Stocks (~956 -> 1000+ Emiten)
+  // 3. Hydrate JCI Screener Universe from Snapshot (Individual emiten live quotes are fetched lazily on Inspect click)
   let liveSyncedCount = 0;
   let liquidStockCount = 0;
 
@@ -2089,7 +2044,7 @@ export function classifyEmitenNewsCategory(
  * Generates baseline Corporate Action, Dividend & Regulatory Radar items for any IDX ticker
  * so the user always sees structured corporate action & issue intelligence alongside live RSS news.
  */
-function buildEmitenCorporateActionRadarBaseline(
+export function buildEmitenCorporateActionRadarBaseline(
   ticker: string,
   companyName: string,
   sector: string,
@@ -2210,7 +2165,7 @@ export async function fetchLiveEmitenSpecificNews(
   const liveFetchedItems: NewsSentimentItem[] = [];
 
   // 1. Try local Express backend (/api/news/emiten)
-  if (canUseLocalExpressBackend()) {
+  if (canUseExpressOnDemandApi()) {
     try {
       const res = await fetch(
         `/api/news/emiten?ticker=${encodeURIComponent(cleanTicker)}&name=${encodeURIComponent(
@@ -2293,9 +2248,279 @@ export async function fetchLiveEmitenSpecificNews(
 }
 
 /**
- * Generates an on-demand Pre-Buy Fundamental & News Conviction Analysis
- * Uses Server-Side Gemini API (/api/ai/inspect-emiten) when available, with deterministic
- * Joeliardi Sunendar + OOS Quantitative structured synthesis fallback for GitHub Pages static mode.
+ * Strips any residual markdown bold/header markers (** or ###) so UI text is always clean.
+ */
+export function stripRawMarkdownArtifacts(text: string): string {
+  return String(text || '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*\*/g, '')
+    .replace(/^#{1,4}\s+/gm, '')
+    .trim();
+}
+
+/**
+ * Deep Multi-Variable Chain-of-Thought Analytical Engine for Static Hosts (GitHub Pages) or Fallback.
+ * Performs genuine cross-metric financial reasoning (DuPont ROE vs DER decomposition, Earnings Yield vs SBN 10Y,
+ * Momentum-Value divergence detection, and contextual question answering) without rigid markdown templates.
+ */
+function buildDeepAnalyticalConvictionReport(params: {
+  stock: StockMetrics;
+  joeliardiEval: JoeliardiOosEvaluation;
+  recentNews: NewsSentimentItem[];
+  userQuestion: string;
+  regimeStatus: string;
+}): StructuredAiConvictionReport {
+  const { stock, joeliardiEval, recentNews, userQuestion, regimeStatus } = params;
+  const divYield = stock.dividendYieldPct ?? 0;
+  const costOfEquityPct = 10.5;
+  const roeSpread = Number((stock.roe - costOfEquityPct).toFixed(1));
+  const equityMultiplier = Number((1 + Math.max(0, stock.debtToEquity)).toFixed(2));
+  const impliedRoaPct = Number((stock.roe / Math.max(1, equityMultiplier)).toFixed(1));
+  const impliedAssetTurnover =
+    stock.operatingMargin > 0
+      ? Number(Math.max(0.15, impliedRoaPct / stock.operatingMargin).toFixed(2))
+      : 0.65;
+
+  const earningsYieldPct =
+    joeliardiEval.impliedPer > 0
+      ? Number((100 / joeliardiEval.impliedPer).toFixed(2))
+      : 0;
+  const sbnBenchmarkPct = 6.75;
+  const yieldSpreadVsSbn = Number((earningsYieldPct - sbnBenchmarkPct).toFixed(2));
+  const totalShareholderYieldPct = Number((earningsYieldPct + divYield * 0.35).toFixed(2));
+  const perDiscountPct =
+    joeliardiEval.joeliardiFairPer > 0
+      ? Number(
+          (
+            ((joeliardiEval.joeliardiFairPer - joeliardiEval.impliedPer) /
+              joeliardiEval.joeliardiFairPer) *
+            100
+          ).toFixed(1)
+        )
+      : 0;
+
+  // Sector-Specific Economic Context
+  const secLower = stock.sector.toLowerCase();
+  const sectorEconomicsNote = secLower.includes('financial')
+    ? `Pada sektor Perbankan/Keuangan, PBV ${joeliardiEval.impliedPbv}x harus diuji langsung terhadap kemampuan mencetak ROE (${stock.roe.toFixed(1)}%) di atas Cost of Equity (10,5%) serta efisiensi dana murah (CASA) dan kualitas kredit.`
+    : secLower.includes('energy') || secLower.includes('basic')
+    ? `Pada sektor siklikal Komoditas/Energi (${stock.sector}), PER rendah (${joeliardiEval.impliedPer}x) wajib diuji apakah mencerminkan puncak siklus harga komoditas atau benar-benar diamankan oleh neraca kas bersih (DER ${stock.debtToEquity.toFixed(2)}x) dan distribusi dividen tunai (${divYield.toFixed(2)}%).`
+    : secLower.includes('consumer') || secLower.includes('industrial') || secLower.includes('health')
+    ? `Pada sektor riil/manufaktur (${stock.sector}), kekuatan pricing power tercermin dari Operating Margin ${stock.operatingMargin.toFixed(1)}% dan perputaran aset ~${impliedAssetTurnover}x yang menghasilkan ROA murni ${impliedRoaPct}% tanpa ketergantungan utang.`
+    : `Pada sektor ${stock.sector}, sensitivitas beban bunga terhadap DER ${stock.debtToEquity.toFixed(2)}x dan visibilitas arus kas operasional menjadi penentu utama ketahanan nilai intrinsik.`;
+
+  // Cross-Metric Anomaly & DuPont Diagnosis
+  const isHighQualityOrganicRoe = stock.roe >= 15 && stock.debtToEquity <= 0.85;
+  const isLeveragedRoe = stock.roe >= 14 && stock.debtToEquity > 1.2;
+  const isStructuralUnderperformer = stock.roe < costOfEquityPct;
+  const isValueTrapCandidate =
+    joeliardiEval.marginOfSafetyPct > 12 &&
+    (isStructuralUnderperformer || stock.return30D < -8.5 || stock.dmuMomScore < 4.3);
+  const isDividendTrapRisk =
+    divYield >= 6.0 && (stock.return30D < -6.0 || stock.roe < 11.0);
+  const isInstitutionalReRating =
+    joeliardiEval.marginOfSafetyPct >= 15 &&
+    stock.roe >= 14 &&
+    stock.return30D >= 0 &&
+    !stock.isHscFlagged;
+  const isMomentumOverextended =
+    stock.return30D >= 14 && joeliardiEval.marginOfSafetyPct < -5;
+
+  // Question-specific analytical angle
+  const qLower = userQuestion.toLowerCase();
+  const isAskingNews =
+    qLower.includes('berita') ||
+    qLower.includes('corporate action') ||
+    qLower.includes('aksi korporasi') ||
+    qLower.includes('katalis') ||
+    qLower.includes('rups') ||
+    qLower.includes('buyback');
+  const isAskingTrapOrHsc =
+    qLower.includes('trap') ||
+    qLower.includes('hsc') ||
+    qLower.includes('gorengan') ||
+    qLower.includes('aman') ||
+    qLower.includes('risiko') ||
+    qLower.includes('utang');
+  const isAskingDividendOrCash =
+    qLower.includes('dividen') ||
+    qLower.includes('cum') ||
+    qLower.includes('yield') ||
+    qLower.includes('arus kas');
+
+  const positiveNews = recentNews.filter(
+    (n) =>
+      n.sentiment === 'RISK_ON' ||
+      n.emitenCategory === 'DIVIDEN_RUPS' ||
+      n.emitenCategory === 'FINANCIAL_EARNINGS' ||
+      n.emitenCategory === 'CORPORATE_ACTION_MA'
+  );
+  const cautionNews = recentNews.filter(
+    (n) => n.sentiment === 'RISK_OFF' || n.emitenCategory === 'REGULATORY_UMA_ISSUE'
+  );
+
+  // Verdict determination
+  let verdictBadge = 'HOLD // WAIT FOR BETTER MOS';
+  let verdictTitle = `${stock.ticker} memiliki fundamental cukup stabil, namun ruang Margin of Safety saat ini menuntut disiplin harga masuk`;
+  if (stock.isHscFlagged) {
+    verdictBadge = 'AVOID // HSC RISK BLOCK';
+    verdictTitle = `Komite Investasi menolak akumulasi ${stock.ticker}: Terdeteksi anomali konsentrasi spekulatif (HSC) di luar parameter institusional`;
+  } else if (isValueTrapCandidate) {
+    verdictBadge = 'CAUTION // VALUE TRAP ALERT';
+    verdictTitle = `Diskon optik pada ${stock.ticker} belum terkonfirmasi oleh efisiensi modal (ROE ${stock.roe}%) atau sedang mengalami distribusi`;
+  } else if (
+    isInstitutionalReRating ||
+    (joeliardiEval.marginOfSafetyPct >= 18 && stock.dmuValueScore >= 7.2 && stock.roe >= 14)
+  ) {
+    verdictBadge = 'STRONG ACCUMULATE // HIGH CONVICTION';
+    verdictTitle = `Asimetri positif kuat pada ${stock.ticker}: ROA murni ${impliedRoaPct}% & dividen ${divYield.toFixed(2)}% diperoleh pada diskon intrinsik +${joeliardiEval.marginOfSafetyPct}%`;
+  } else if (stock.dmuCompositeScore >= 6.8 && joeliardiEval.marginOfSafetyPct >= 0) {
+    verdictBadge = 'BUY ON WEAKNESS // QUALITY CORE';
+    verdictTitle = `${stock.ticker} memenuhi kriteria compounder Joeliardi Sunendar (Top ${stock.dmuRankPct}% OOS) untuk akumulasi bertahap`;
+  }
+
+  // Contextual Direct Answer to User Question (True Causal Synthesis)
+  let directAnswerSummary = '';
+  if (stock.isHscFlagged) {
+    directAnswerSummary = `Keputusan Komite atas pertanyaan Anda ("${userQuestion}"): Saham ${stock.ticker} TIDAK layak diakumulasi karena terdeteksi dalam radar High Speculative Concentration (${stock.hscReason || 'fluktuasi tidak ditopang nilai intrinsik'}). Meskipun harga bergerak ${stock.change1D >= 0 ? '+' : ''}${stock.change1D}% (1D) dan ${stock.return30D >= 0 ? '+' : ''}${stock.return30D}% (30D), rasio pengembalian terhadap risiko gagal melewati ambang batas keamanan modal Joeliardi Sunendar.`;
+  } else if (isAskingTrapOrHsc) {
+    directAnswerSummary = isValueTrapCandidate
+      ? `Audit Value Trap & Solvabilitas untuk ${stock.ticker}: Meskipun emiten ini bersih dari manipulasi HSC dan tampak murah secara optik (PER ${joeliardiEval.impliedPer}x, MoS +${joeliardiEval.marginOfSafetyPct}%), komite mendeteksi risiko Value Trap karena ${isStructuralUnderperformer ? `ROE (${stock.roe}%) berada di bawah Cost of Equity Indonesia (10,5%), artinya modal kerja belum menciptakan nilai tambah ekonomi nyata` : `momentum 30 hari masih negatif (${stock.return30D}%) dengan skor momentum ${stock.dmuMomScore}/10`}. Hindari menangkap pisau jatuh sebelum ada konfirmasi pembalikan arus kas.`
+      : `Audit Value Trap & Solvabilitas untuk ${stock.ticker}: Emiten ini BEBAS dari indikasi HSC/gorengan dan terbukti BUKAN Value Trap. Diskon +${joeliardiEval.marginOfSafetyPct}% terhadap nilai intrinsik Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} memiliki fondasi fundamental kokoh: dekomposisi DuPont menghasilkan ROA murni ${impliedRoaPct}% pada pengungkit ekuitas sangat rendah (${equityMultiplier}x / DER ${stock.debtToEquity}x), ditambah perlindungan arus kas dividen ${divYield.toFixed(2)}% per tahun.`;
+  } else if (isAskingNews) {
+    const topHeadlines = recentNews
+      .slice(0, 2)
+      .map((n) => `"${stripRawMarkdownArtifacts(n.title)}"`)
+      .join(' serta ');
+    directAnswerSummary = `Evaluasi Komite atas dampak berita & aksi korporasi pada ${stock.ticker}: Katalis utama saat ini berpusat pada ${topHeadlines || 'kinerja laba operasional dan kebijakan pembagian dividen'}. Secara fundamental, berita tersebut ${cautionNews.length > positiveNews.length ? 'menuntut kehati-hatian jangka pendek terhadap margin laba' : `memperkuat visibilitas EPS (~Rp ${joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')}/saham) dan mempertahankan Earnings Yield ${earningsYieldPct}%`} yang unggul terhadap kupon SBN 10Y (${sbnBenchmarkPct}%).`;
+  } else if (isAskingDividendOrCash) {
+    directAnswerSummary = `Bedah Kualitas Dividen & Arus Kas ${stock.ticker}: Pada harga Rp ${stock.lastPrice.toLocaleString('id-ID')}, imbal hasil dividen TTM tercatat ${divYield.toFixed(2)}% dengan Earnings Yield ${earningsYieldPct}%. ${isDividendTrapRisk ? `Waspadai potensi Dividend Trap pasca cum-date karena tren 30 hari sedang terkoreksi (${stock.return30D}%)` : divYield > 0 ? `Distribusi dividen ini sangat sehat karena ditopang oleh ROE organik ${stock.roe}% dan neraca konservatif (DER ${stock.debtToEquity}x), sehingga tidak menggerus modal kerja perusahaan.` : `Emiten saat ini menahan sebagian besar laba (dividen TTM 0%) untuk ekspansi nilai buku (BVPS ~Rp ${joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')}).`}`;
+  } else {
+    directAnswerSummary = `Menjawab fokus Anda ("${userQuestion}"): Pada kuotasi Rp ${stock.lastPrice.toLocaleString('id-ID')}, komite menilai ${stock.ticker} ${joeliardiEval.marginOfSafetyPct >= 12 && !isValueTrapCandidate ? 'LAYAK DIAKUMULASI BERTAHAP' : joeliardiEval.marginOfSafetyPct >= 0 ? 'LAYAK KOLEKSI SELEKTIF SAAT KOREKSI' : 'LEBIH TEPAT DITUNGGU PADA AREA PULLBACK'}. Secara kausal, pasar saat ini menghargai ${stock.ticker} pada Implied PER ${joeliardiEval.impliedPer}x (Earnings Yield ${earningsYieldPct}% vs SBN 10Y ${sbnBenchmarkPct}%), padahal perusahaan mencetak ROA murni ${impliedRoaPct}% dan ROE ${stock.roe}% (${roeSpread >= 0 ? `+${roeSpread}% di atas` : `${roeSpread}% di bawah`} biaya modal 10,5%) dengan pengungkit utang DER ${stock.debtToEquity}x, sehingga nilai intrinsik wajarnya berada di Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (Margin of Safety ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%).`;
+  }
+
+  const idealBuyLow = Math.round(
+    Math.min(stock.lastPrice, joeliardiEval.intrinsicValueIdr * 0.82) / 5
+  ) * 5;
+  const idealBuyHigh = Math.round(
+    Math.min(stock.lastPrice * 1.02, joeliardiEval.intrinsicValueIdr * 0.9) / 5
+  ) * 5;
+  const riskStopPrice = Math.round((stock.lastPrice * (stock.beta1Y > 1.1 ? 0.91 : 0.93)) / 5) * 5;
+
+  return {
+    verdictBadge,
+    verdictTitle,
+    directAnswerSummary,
+    convictionScore: joeliardiEval.totalConvictionScore,
+    chainOfThoughtSteps: [
+      `01. Dekomposisi DuPont & Moat: ROE ${stock.roe}% dibedah menjadi ROA murni ${impliedRoaPct}% × Equity Multiplier ${equityMultiplier}x (DER ${stock.debtToEquity}x) dengan Operating Margin ${stock.operatingMargin}% -> ${isHighQualityOrganicRoe ? 'Profitabilitas Organik Bermoat Kuat' : isLeveragedRoe ? 'Return Ditopang Leverage Utang' : 'Efisiensi Modal Moderat'}.`,
+      `02. Spread Valuasi vs SBN 10Y: Earnings Yield ${earningsYieldPct}% dibandingkan dengan bebas risiko SBN 10Y (${sbnBenchmarkPct}%) menghasilkan Equity Yield Spread ${yieldSpreadVsSbn >= 0 ? '+' : ''}${yieldSpreadVsSbn}% dan diskon PER ${perDiscountPct}% -> Nilai Intrinsik Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%).`,
+      `03. Uji Silang Momentum & Value Trap: Memadukan Skor Value (${stock.dmuValueScore}/10) terhadap trajektori harga 30D (${stock.return30D >= 0 ? '+' : ''}${stock.return30D}%) & volatilitas tahunan (${stock.volatilityAnn}%) -> ${isValueTrapCandidate ? 'Terdeteksi Gejala Value Trap / Distribusi' : isInstitutionalReRating ? 'Konfirmasi Akumulasi & Re-Rating Sehat' : 'Konsolidasi Wajar'}.`,
+      `04. Audit Katalis Berita & Eksekusi: Menyaring ${recentNews.length} berita korporasi terkini, imbal hasil dividen ${divYield.toFixed(2)}%, dan status ${stock.isHscFlagged ? 'Blokir HSC' : 'Clean Non-HSC'} pada rezim IHSG ${regimeStatus}.`
+    ],
+    sections: [
+      {
+        id: 'joeliardi-moat',
+        badge: `01. DUPONT & MOAT // SKOR ${joeliardiEval.businessQualityScore}/100`,
+        title: 'Audit Kualitas Laba, Dekomposisi DuPont & Economic Moat (Joeliardi Sunendar)',
+        keyMetricHighlight: `ROE ${stock.roe.toFixed(1)}% (Spread ${roeSpread >= 0 ? '+' : ''}${roeSpread}% vs Ke) · ROA Murni ${impliedRoaPct}% · Op Margin ${stock.operatingMargin.toFixed(1)}% · DER ${stock.debtToEquity.toFixed(2)}x`,
+        reasoningParagraph: `${sectorEconomicsNote} Berdasarkan bedah DuPont, ROE ${stock.ticker} sebesar ${stock.roe.toFixed(1)}% dihasilkan dari pengembalian atas aset (ROA) sebesar ${impliedRoaPct}% dengan pengali ekuitas (Equity Multiplier) ${equityMultiplier}x. ${isHighQualityOrganicRoe ? `Karena DER sangat rendah (${stock.debtToEquity.toFixed(2)}x), seluruh kelebihan ROE sebesar +${roeSpread}% di atas Cost of Equity (10,5%) murni berasal dari keunggulan margin operasional (${stock.operatingMargin.toFixed(1)}%) dan efisiensi perputaran aset, bukan rekayasa utang.` : `Dengan DER ${stock.debtToEquity.toFixed(2)}x, investor perlu memastikan arus kas operasional tetap disiplin menutup beban pendanaan agar margin bersih tidak tergerus saat suku bunga tinggi.`}`,
+        bulletPoints: [
+          `Kualitas Penciptaan Nilai: Setiap Rp 100 modal ekuitas menghasilkan Rp ${stock.roe.toFixed(1)} laba bersih (EPS ~Rp ${joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')} vs BVPS ~Rp ${joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')}).`,
+          `Ketahanan Neraca & Solvabilitas: DER ${stock.debtToEquity.toFixed(2)}x (Equity Multiplier ${equityMultiplier}x) ${stock.debtToEquity <= 0.5 ? 'memberikan ruang kas sangat tebal dan kebal risiko gagal bayar' : stock.debtToEquity <= 1.0 ? 'berada dalam batas aman standar institusional' : 'membutuhkan pengawasan ketat pada rasio cakupan bunga (interest coverage)'}.`,
+          `Konversi Laba ke Kas (Dividen): ${divYield > 0 ? `Pembagian dividen tunai TTM ${divYield.toFixed(2)}% membuktikan laba akuntansi terkonversi menjadi kas riil bagi pemegang saham.` : 'Perusahaan menahan laba untuk ekspansi internal; pastikan pertumbuhan BVPS konsisten di atas 10% per tahun.'}`
+        ],
+        sentimentTone:
+          joeliardiEval.businessQualityScore >= 75 && joeliardiEval.balanceSheetHealthScore >= 75
+            ? 'POSITIVE'
+            : joeliardiEval.businessQualityScore >= 55
+            ? 'NEUTRAL'
+            : 'CAUTION'
+      },
+      {
+        id: 'oos-valuation',
+        badge: `02. VALUASI & YIELD // MOS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%`,
+        title: 'Uji Valuasi Intrinsik vs. Risiko Value Trap (Spread Earnings Yield vs SBN)',
+        keyMetricHighlight: `Earnings Yield ${earningsYieldPct}% (vs SBN 6,75%) · PER ${joeliardiEval.impliedPer}x (Wajar ${joeliardiEval.joeliardiFairPer}x) · PBV ${joeliardiEval.impliedPbv}x (Wajar ${joeliardiEval.joeliardiFairPbv}x)`,
+        reasoningParagraph: `Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, investor memperoleh Earnings Yield sebesar ${earningsYieldPct}% per tahun (${yieldSpreadVsSbn >= 0 ? `premi risiko ekuitas positif +${yieldSpreadVsSbn}% di atas` : `terdiskon ${Math.abs(yieldSpreadVsSbn)}% di bawah`} obligasi negara SBN 10Y ${sbnBenchmarkPct}%) dengan Total Shareholder Yield mencapai ${totalShareholderYieldPct}%. Dibandingkan Nilai Intrinsik Joeliardi-Graham di Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')}, saham ini memiliki Margin of Safety ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%.`,
+        bulletPoints: [
+          `Validasi Silang 4-Faktor OOS: Skor Komposit ${stock.dmuCompositeScore.toFixed(2)}/10 (Peringkat Top ${stock.dmuRankPct}% JCI) dengan bobot faktor Value ${stock.dmuValueScore.toFixed(1)}/10 dan Low-Vol ${stock.dmuLowVolScore.toFixed(1)}/10.`,
+          `Uji Diagnostik Value Trap: ${isValueTrapCandidate ? 'PERINGATAN: Diskon harga saat ini diiringi pelemahan momentum 30D atau ROE di bawah biaya modal — tunggu katalis perbaikan laba sebelum akumulasi penuh.' : isMomentumOverextended ? 'Harga pasar sudah berlari melampaui nilai wajar intrinsik; risiko mean-reversion meningkat jika laba kuartal depan meleset.' : 'Bukan Value Trap: diskon valuasi didukung langsung oleh ROA organik dan arus kas positif.'}`,
+          `Target Re-Rating Multipel: Jika pasar kembali menghargai ${stock.ticker} menuju Fair PER ${joeliardiEval.joeliardiFairPer}x dan Fair PBV ${joeliardiEval.joeliardiFairPbv}x, potensi apresiasi wajar mengarah ke Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')}.`
+        ],
+        sentimentTone:
+          joeliardiEval.marginOfSafetyPct >= 15 && !isValueTrapCandidate
+            ? 'POSITIVE'
+            : joeliardiEval.marginOfSafetyPct >= 0
+            ? 'NEUTRAL'
+            : 'CAUTION'
+      },
+      {
+        id: 'news-hsc-catalysts',
+        badge: stock.isHscFlagged ? '03. AUDIT HSC // BLOKIR' : `03. KATALIS & HSC // ${recentNews.length} BERITA`,
+        title: 'Sintesis Katalis Berita Terkini, Aksi Korporasi & Saringan Mikrostruktur HSC',
+        keyMetricHighlight: `${stock.isHscFlagged ? 'TERINDIKASI HSC (Blokir Top Buy)' : 'Clean Institutional (Bebas HSC)'} · ${positiveNews.length} Katalis Konstruktif · ${cautionNews.length} Isu Risiko`,
+        reasoningParagraph: stock.isHscFlagged
+          ? `Audit mikrostruktur mendeteksi ${stock.ticker} dalam kategori High Speculative Concentration (${stock.hscReason || 'pola transaksi spekulatif berisiko tinggi'}). Komite Investasi secara tegas memisahkan spekulasi jangka pendek dari investasi fundamental sehingga saham ini dikunci pada zona Rotate Out.`
+          : `Dari ${recentNews.length} berita dan keterbukaan informasi terbaru pada ${stock.ticker}, fokus utama pasar mencakup pertumbuhan kinerja kuartalan, kebijakan dividen/buyback, serta dinamika sektor ${stock.sector}. Struktur likuiditas saham ini terverifikasi bersih dari indikasi manipulasi HSC/UMA, sehingga pembentukan harga di pasar reguler mencerminkan penawaran-permintaan institusional yang wajar.`,
+        bulletPoints:
+          recentNews.length > 0
+            ? recentNews.slice(0, 3).map(
+                (n) =>
+                  `[${n.emitenCategory || 'KATALIS'}] ${stripRawMarkdownArtifacts(n.title)} (${n.source} · ${n.publishedAt})`
+              )
+            : [
+                `Fokus Pantauan Korporasi: Rilis laporan keuangan kuartalan berikutnya dan jadwal rasio pembayaran dividen (payout ratio) RUPS ${stock.ticker}.`,
+                `Status Likuiditas BEI: ${stock.isLiquid !== false && stock.lastPrice >= 68 ? 'Likuiditas pasar reguler aktif dan memenuhi syarat eksekusi institusional.' : 'Likuiditas sangat tipis/gocap; hindari eksposur besar.'}`
+              ],
+        sentimentTone: stock.isHscFlagged
+          ? 'NEGATIVE'
+          : cautionNews.length > positiveNews.length
+          ? 'CAUTION'
+          : 'POSITIVE'
+      },
+      {
+        id: 'regime-momentum-fit',
+        badge: `04. EKSEKUSI & REZIM // ${regimeStatus}`,
+        title: 'Dinamika Momentum Harga, Volatilitas & Alokasi Portofolio Barbell',
+        keyMetricHighlight: `1D ${stock.change1D >= 0 ? '+' : ''}${stock.change1D.toFixed(2)}% · 30D ${stock.return30D >= 0 ? '+' : ''}${stock.return30D.toFixed(2)}% · Beta ${stock.beta1Y.toFixed(2)}x · Volatilitas σ ${stock.volatilityAnn.toFixed(1)}%`,
+        reasoningParagraph: `Dengan volatilitas tahunan (σ) ${stock.volatilityAnn.toFixed(1)}% dan Beta 1Y ${stock.beta1Y.toFixed(2)}x terhadap IHSG, ${stock.ticker} bergerak ${stock.beta1Y <= 0.96 ? 'lebih tenang dibandingkan indeks pasar (profil pelindung nilai / Defensive Compounder)' : 'lebih agresif terhadap fluktuasi IHSG (profil High-Beta / Tactical Alpha)'}. Pergerakan harga 30 hari sebesar ${stock.return30D >= 0 ? '+' : ''}${stock.return30D.toFixed(2)}% (Skor Momentum ${stock.dmuMomScore.toFixed(1)}/10) menunjukkan ${stock.return30D >= 3 ? 'adanya dukungan akumulasi pasar yang searah dengan fundamentalnya' : stock.return30D <= -5 ? 'fase tekanan jual yang membuka peluang akumulasi bertahap di area support' : 'fase konsolidasi sehat dengan volatilitas terkendali'}.`,
+        bulletPoints: [
+          `Penempatan Keranjang Barbell: ${stock.beta1Y <= 0.96 && stock.dmuLowVolScore >= 6.5 ? 'Sangat ideal ditempatkan di Keranjang 1 (Low-Volatility & Dividend Core — porsi 55% ekuitas).' : stock.dmuMomScore >= 6.8 ? 'Cocok ditempatkan di Keranjang 2 (Momentum & Size Alpha — porsi 45% ekuitas).' : 'Masuk daftar pantau (Watchlist) hingga skor komposit menembus zona Top Decile Buy.'}`,
+          `Taktik Eksekusi pada Rezim ${regimeStatus}: ${regimeStatus === 'VOLATIL' ? 'Gunakan strategi cicil beli 3 tahap (staggered limit orders) pada saat pasar melemah untuk mengoptimalkan harga rata-rata.' : 'Eksekusi alokasi lot sesuai bobot optimal kalkulator Barbell dengan tetap menjaga disiplin Rebalancing Buffer 40%.'}`,
+          `Efisiensi Biaya Transaksi: Pertahankan posisi selama peringkat komposit masih berada di dalam zona Buffer ≤40% (saat ini Top ${stock.dmuRankPct}%) guna menghemat fee beli-jual sekuritas.`
+        ],
+        sentimentTone:
+          stock.volatilityAnn <= 26 && !stock.isHscFlagged ? 'POSITIVE' : 'NEUTRAL'
+      }
+    ],
+    bullishDrivers: joeliardiEval.keyStrengths.map(stripRawMarkdownArtifacts),
+    bearishRisks: joeliardiEval.keyRisks.map(stripRawMarkdownArtifacts),
+    executionStrategy: {
+      recommendedAction: stock.isHscFlagged
+        ? 'Hindari pembelian baru (Block Buy) & lakukan rotasi keluar jika sudah memiliki posisi.'
+        : joeliardiEval.marginOfSafetyPct >= 12 && stock.dmuCompositeScore >= 6.8
+        ? 'Akumulasi Bertahap (Buy on Weakness / Cicil 2–3 Termin) pada rentang diskon nilai intrinsik.'
+        : 'Tunggu Koreksi Wajar (Buy on Pullback) menuju area Margin of Safety yang lebih tebal.',
+      idealEntryZone: stock.isHscFlagged
+        ? 'Tidak direkomendasikan (Blokir HSC)'
+        : `Rp ${idealBuyLow.toLocaleString('id-ID')} – Rp ${Math.max(idealBuyLow, idealBuyHigh).toLocaleString('id-ID')} (Intrinsik Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')})`,
+      InvalidationOrRiskLimit: stock.isHscFlagged
+        ? 'Segera batasi eksposur maksimal 0% dari portofolio.'
+        : `Evaluasi ulang tesis jika harga tembus di bawah Rp ${riskStopPrice.toLocaleString('id-ID')} disertai penurunan ROE < 10,5% atau peringkat OOS keluar dari Top 40% Buffer.`,
+      portfolioAllocationGuide: stock.isHscFlagged
+        ? '0% Modal Portofolio (Diblokir oleh filter perlindungan modal)'
+        : stock.beta1Y <= 0.96
+        ? 'Keranjang 1 (Low-Vol & Dividend Core): Alokasikan 6% – 12% dari modal ekuitas aktif.'
+        : 'Keranjang 2 (Momentum & Size Alpha): Alokasikan 4% – 8% dari modal ekuitas aktif.'
+    }
+  };
+}
+
+/**
+ * Generates an on-demand Pre-Buy Fundamental & News Conviction Analysis.
+ * Uses Server-Side Gemini API (/api/ai/inspect-emiten) when available, with a deep multi-variable
+ * Chain-of-Thought analytical engine for GitHub Pages static mode.
  */
 export async function requestEmitenAiInspection(params: {
   stock: StockMetrics;
@@ -2305,12 +2530,14 @@ export async function requestEmitenAiInspection(params: {
   regimeStatus: string;
 }): Promise<{
   analysis: string;
+  structuredReport: StructuredAiConvictionReport;
   isAiGenerated: boolean;
   generatedAt: string;
 }> {
   const { stock, joeliardiEval, recentNews, userQuestion, regimeStatus } = params;
+  const fallbackReport = buildDeepAnalyticalConvictionReport(params);
 
-  if (canUseLocalExpressBackend()) {
+  if (canUseExpressOnDemandApi()) {
     try {
       const res = await fetch('/api/ai/inspect-emiten', {
         method: 'POST',
@@ -2325,57 +2552,88 @@ export async function requestEmitenAiInspection(params: {
       });
       if (res.ok) {
         const data = await res.json();
-        if (data?.analysis && typeof data.analysis === 'string') {
+        if (data?.structuredReport && typeof data.structuredReport === 'object') {
+          const sr = data.structuredReport as StructuredAiConvictionReport;
+          const sanitizedReport: StructuredAiConvictionReport = {
+            verdictBadge: stripRawMarkdownArtifacts(
+              sr.verdictBadge || fallbackReport.verdictBadge
+            ),
+            verdictTitle: stripRawMarkdownArtifacts(
+              sr.verdictTitle || fallbackReport.verdictTitle
+            ),
+            directAnswerSummary: stripRawMarkdownArtifacts(
+              sr.directAnswerSummary || fallbackReport.directAnswerSummary
+            ),
+            convictionScore:
+              typeof sr.convictionScore === 'number'
+                ? sr.convictionScore
+                : fallbackReport.convictionScore,
+            chainOfThoughtSteps:
+              Array.isArray(sr.chainOfThoughtSteps) && sr.chainOfThoughtSteps.length > 0
+                ? sr.chainOfThoughtSteps.map(stripRawMarkdownArtifacts)
+                : fallbackReport.chainOfThoughtSteps,
+            sections:
+              Array.isArray(sr.sections) && sr.sections.length > 0
+                ? sr.sections.map((sec, idx) => ({
+                    id: sec.id || `sec-${idx}`,
+                    badge: stripRawMarkdownArtifacts(sec.badge || `PILAR ${idx + 1}`),
+                    title: stripRawMarkdownArtifacts(sec.title || ''),
+                    keyMetricHighlight: stripRawMarkdownArtifacts(
+                      sec.keyMetricHighlight || ''
+                    ),
+                    reasoningParagraph: stripRawMarkdownArtifacts(
+                      sec.reasoningParagraph || ''
+                    ),
+                    bulletPoints: Array.isArray(sec.bulletPoints)
+                      ? sec.bulletPoints.map(stripRawMarkdownArtifacts)
+                      : [],
+                    sentimentTone: sec.sentimentTone || 'NEUTRAL'
+                  }))
+                : fallbackReport.sections,
+            bullishDrivers:
+              Array.isArray(sr.bullishDrivers) && sr.bullishDrivers.length > 0
+                ? sr.bullishDrivers.map(stripRawMarkdownArtifacts)
+                : fallbackReport.bullishDrivers,
+            bearishRisks:
+              Array.isArray(sr.bearishRisks) && sr.bearishRisks.length > 0
+                ? sr.bearishRisks.map(stripRawMarkdownArtifacts)
+                : fallbackReport.bearishRisks,
+            executionStrategy: {
+              recommendedAction: stripRawMarkdownArtifacts(
+                sr.executionStrategy?.recommendedAction ||
+                  fallbackReport.executionStrategy.recommendedAction
+              ),
+              idealEntryZone: stripRawMarkdownArtifacts(
+                sr.executionStrategy?.idealEntryZone ||
+                  fallbackReport.executionStrategy.idealEntryZone
+              ),
+              InvalidationOrRiskLimit: stripRawMarkdownArtifacts(
+                sr.executionStrategy?.InvalidationOrRiskLimit ||
+                  fallbackReport.executionStrategy.InvalidationOrRiskLimit
+              ),
+              portfolioAllocationGuide: stripRawMarkdownArtifacts(
+                sr.executionStrategy?.portfolioAllocationGuide ||
+                  fallbackReport.executionStrategy.portfolioAllocationGuide
+              )
+            }
+          };
+
           return {
-            analysis: data.analysis,
+            analysis: sanitizedReport.directAnswerSummary,
+            structuredReport: sanitizedReport,
             isAiGenerated: true,
             generatedAt: data.generatedAt || new Date().toISOString()
           };
         }
       }
     } catch {
-      // fall through to structured quantitative-fundamental engine below
+      // fall through to deep analytical conviction engine below
     }
   }
 
-  // Deterministic Joeliardi Sunendar + Out-of-Sample (OOS) Quantitative Synthesis (Static / Offline Mode)
-  const divYield = stock.dividendYieldPct ?? 0;
-  const topHeadlines = recentNews
-    .slice(0, 3)
-    .map((n) => `• [${n.emitenCategory || 'BERITA'}] ${n.title}`)
-    .join('\n');
-
-  const questionFocus = userQuestion.trim()
-    ? `Menjawab fokus pertanyaan Anda ("${userQuestion.trim()}"):`
-    : 'Evaluasi kelayakan pra-beli pada harga pasar saat ini:';
-
-  const verdictText = stock.isHscFlagged
-    ? `HINDARI / JANGAN BELI (AVOID HSC). ${stock.ticker} terindikasi risiko spekulatif / konsentrasi tinggi (${stock.hscReason || 'HSC'}) dan dikunci di zona Rotate Out. Sesuai disiplin Joeliardi Sunendar dan filter OOS DeMiguel, lindungi modal Anda dan alihkan ke emiten Top Decile ber-Value tinggi.`
-    : joeliardiEval.marginOfSafetyPct >= 10 && stock.dmuValueScore >= 6.8
-    ? `LAYAK AKUMULASI BERTAHAP (HIGH CONVICTION VALUE). ${stock.ticker} memiliki kombinasi fundamental sehat (ROE ${stock.roe}% > Cost of Equity 10,5%, DER ${stock.debtToEquity}x), dividen nyata (${divYield.toFixed(2)}%), dan diskon Margin of Safety +${joeliardiEval.marginOfSafetyPct}% terhadap nilai intrinsik Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')}.`
-    : stock.dmuCompositeScore >= 6.5 && !stock.isHscFlagged
-    ? `PERTAHANKAN / BELI SAAT KOREKSI WAJAR (WATCHLIST QUALITY). Kualitas bisnis ${stock.ticker} tergolong solid (Skor Komposit OOS ${stock.dmuCompositeScore}/10, Rank Top ${stock.dmuRankPct}%), namun perhatikan Margin of Safety saat ini (${joeliardiEval.marginOfSafetyPct}%) agar tetap disiplin pada harga beli.`
-    : `TUNDA PEMBELIAN / SELEKTIF (LOW CONVICTION). Skor komposit OOS (${stock.dmuCompositeScore}/10) atau valuasi Margin of Safety (${joeliardiEval.marginOfSafetyPct}%) belum memberikan bantalan keamanan yang memadai pada rezim IHSG ${regimeStatus}.`;
-
-  const fallbackAnalysis = `
-1. **Bedah Kualitas Fundamental & Neraca (Prinsip Joeliardi Sunendar)**
-${stock.ticker} (${stock.name}) di sektor ${stock.sector} mencatatkan ROE sebesar ${stock.roe.toFixed(1)}% dan Operating Margin ${stock.operatingMargin.toFixed(1)}%. Dalam kacamata Bapak Fundamental Indonesia Joeliardi Sunendar, bisnis yang unggul wajib menghasilkan ROE di atas Cost of Equity Indonesia (~10,5%) secara konsisten tanpa ditopang utang berlebihan. Struktur neraca ${stock.ticker} menunjukkan DER ${stock.debtToEquity.toFixed(2)}x (${stock.debtToEquity <= 0.8 ? 'konservatif & sehat' : 'perlu pemantauan beban bunga'}) dengan imbal hasil dividen tunai TTM ${divYield.toFixed(2)}% (Skor Kualitas Bisnis: ${joeliardiEval.businessQualityScore}/100, Kesehatan Neraca: ${joeliardiEval.balanceSheetHealthScore}/100).
-
-2. **Validasi Kuantitatif Out-of-Sample (OOS) & Valuasi Margin of Safety**
-Berdasarkan kalibrasi nilai intrinsik Joeliardi-Graham, estimasi Harga Wajar ${stock.ticker} berada di Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (Fair PER ${joeliardiEval.joeliardiFairPer}x vs Implied PER ${joeliardiEval.impliedPer}x; Fair PBV ${joeliardiEval.joeliardiFairPbv}x vs Implied PBV ${joeliardiEval.impliedPbv}x). Pada harga live Rp ${stock.lastPrice.toLocaleString('id-ID')}, Margin of Safety tercatat sebesar ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%. Secara lintas-sektor Out-of-Sample (OOS), ${stock.ticker} meraih Skor Value ${stock.dmuValueScore.toFixed(1)}/10, Low-Vol ${stock.dmuLowVolScore.toFixed(1)}/10, dan Skor Komposit ${stock.dmuCompositeScore.toFixed(2)}/10 (Peringkat Top ${stock.dmuRankPct}%).
-
-3. **Evaluasi Berita Terkini, Corporate Action & Risiko Isu/HSC**
-Status saringan HSC: ${stock.isHscFlagged ? `TERINDIKASI HSC (${stock.hscReason})` : 'BEBAS INDIKASI HSC (Clean Institutional/Fundamental)'}.
-Rangkuman radar berita & aksi korporasi terkini ${stock.ticker}:
-${topHeadlines || '• Belum ada anomali berita negatif; pantau jadwal RUPS dan laporan keuangan kuartalan.'}
-
-4. **Kesimpulan Pra-Beli (Verdict & Strategi Eksekusi)**
-${questionFocus}
-**Grade Keyakinan: ${joeliardiEval.convictionGrade} (Skor ${joeliardiEval.totalConvictionScore}/100)**. ${verdictText}
-`.trim();
-
   return {
-    analysis: fallbackAnalysis,
+    analysis: fallbackReport.directAnswerSummary,
+    structuredReport: fallbackReport,
     isAiGenerated: false,
     generatedAt: new Date().toISOString()
   };

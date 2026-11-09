@@ -102,6 +102,34 @@ export interface JoeliardiOosEvaluation {
   keyRisks: string[];
 }
 
+export interface StructuredAiConvictionSection {
+  id: string;
+  badge: string;
+  title: string;
+  keyMetricHighlight: string;
+  reasoningParagraph: string;
+  bulletPoints: string[];
+  sentimentTone: 'POSITIVE' | 'NEUTRAL' | 'CAUTION' | 'NEGATIVE';
+}
+
+export interface StructuredAiConvictionReport {
+  verdictBadge: string;
+  verdictTitle: string;
+  directAnswerSummary: string;
+  convictionScore: number;
+  chainOfThoughtSteps: string[];
+  sections: StructuredAiConvictionSection[];
+  bullishDrivers: string[];
+  bearishRisks: string[];
+  executionStrategy: {
+    recommendedAction: string;
+    idealEntryZone: string;
+    InvalidationOrRiskLimit: string;
+    portfolioAllocationGuide: string;
+  };
+}
+
+
 export interface MarketRegime {
   ihsgLastPrice: number;
   ihsgChange1D: number;

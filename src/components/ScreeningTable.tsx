@@ -45,6 +45,7 @@ interface ScreeningTableProps {
   onRemoveStock: (ticker: string) => void;
   onResetUniverse: () => void;
   onToggleHscFlag?: (ticker: string, currentlyFlagged: boolean) => void;
+  onInspectTicker?: (ticker: string) => void;
 }
 
 type SortField =
@@ -64,7 +65,8 @@ export function ScreeningTable({
   onAddStock,
   onRemoveStock,
   onResetUniverse,
-  onToggleHscFlag
+  onToggleHscFlag,
+  onInspectTicker
 }: ScreeningTableProps) {
   const [sortField, setSortField] = useState<SortField>('dmuCompositeScore');
   const [sortAsc, setSortAsc] = useState<boolean>(false);
@@ -999,14 +1001,29 @@ export function ScreeningTable({
                         <span className="font-bold text-[#D97706] bb-amber text-sm">
                           {s.ticker}
                         </span>
-                        <button
-                          type="button"
-                          onClick={() => handleToggleCompareTicker(s.ticker)}
-                          className="text-neutral-400 hover:text-[#9E2A2B] cursor-pointer"
-                          title={`Hapus ${s.ticker}`}
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onInspectTicker
+                                ? onInspectTicker(s.ticker)
+                                : setInspectedTicker(s.ticker)
+                            }
+                            className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-bold bg-[#D97706]/10 hover:bg-[#D97706] text-[#D97706] hover:text-white border border-[#D97706]/40 rounded-xs transition-colors cursor-pointer"
+                            title={`Inspect ${s.ticker}`}
+                          >
+                            <Scale className="w-2.5 h-2.5" />
+                            <span>Inspect</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleCompareTicker(s.ticker)}
+                            className="text-neutral-400 hover:text-[#9E2A2B] cursor-pointer"
+                            title={`Hapus ${s.ticker}`}
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
                       <div className="text-[11px] font-medium text-[#111315] truncate max-w-[140px]">
                         {s.name}
@@ -1616,7 +1633,11 @@ export function ScreeningTable({
                         <div className="inline-flex items-center gap-1.5">
                           <button
                             type="button"
-                            onClick={() => setInspectedTicker(stock.ticker)}
+                            onClick={() =>
+                              onInspectTicker
+                                ? onInspectTicker(stock.ticker)
+                                : setInspectedTicker(stock.ticker)
+                            }
                             title={`Inspect Fundamental (Joeliardi Sunendar & OOS) + Analisis AI & Berita Terkini ${stock.ticker}`}
                             className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-bold bg-[#D97706]/10 hover:bg-[#D97706] text-[#D97706] hover:text-white border border-[#D97706]/40 rounded-xs transition-colors cursor-pointer"
                           >
@@ -1672,6 +1693,7 @@ export function ScreeningTable({
           regimeStatus={regimeStatus}
           onClose={() => setInspectedTicker(null)}
           onToggleHscFlag={(tk, cur) => handleToggleHscLocalAndParent(tk, cur)}
+          onStockSynced={onAddStock}
         />
       )}
     </section>

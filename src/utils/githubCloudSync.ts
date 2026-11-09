@@ -113,6 +113,39 @@ function decodeBase64ToUtf8(base64Str: string): string {
 }
 
 /**
+ * Computes the official Git Blob SHA-1 hash (`sha1("blob " + byteLength + "\0" + content)`)
+ * so local content can be compared directly against GitHub REST API `sha` fields per file.
+ */
+export async function computeGitBlobSha(content: string | Uint8Array): Promise<string> {
+  const bodyBytes =
+    typeof content === 'string' ? new TextEncoder().encode(content) : content;
+  const headerBytes = new TextEncoder().encode(`blob ${bodyBytes.byteLength}\0`);
+  const combined = new Uint8Array(headerBytes.byteLength + bodyBytes.byteLength);
+  combined.set(headerBytes, 0);
+  combined.set(bodyBytes, headerBytes.byteLength);
+
+  if (typeof crypto !== 'undefined' && crypto.subtle) {
+    const hashBuffer = await crypto.subtle.digest('SHA-1', combined);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  // Fallback deterministic hash if SubtleCrypto is unavailable
+  let h1 = 0xdeadbeef ^ combined.byteLength;
+  let h2 = 0x41c6ce57 ^ combined.byteLength;
+  for (let i = 0; i < combined.byteLength; i++) {
+    const ch = combined[i];
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  return (
+    (h1 >>> 0).toString(16).padStart(8, '0') +
+    (h2 >>> 0).toString(16).padStart(8, '0')
+  );
+}
+
+
+/**
  * Verifies repository access and token permissions against GitHub REST API.
  */
 export async function verifyGitHubRepoConnection(
@@ -222,12 +255,12 @@ export async function pullStateFromGitHubRepo(
 
 /**
  * Pushes (commits) the current CloudStateBundle JSON directly to the user's GitHub repository.
- * Automatically resolves the latest file SHA if needed so concurrent edits across devices never fail.
+ * Compares the Git Blob SHA-1 per file before committing so only actual content changes are pushed.
  */
 export async function pushStateToGitHubRepo(
   config: GitHubCloudConfig,
   bundle: CloudStateBundle
-): Promise<{ sha: string; syncedAt: string }> {
+): Promise<{ sha: string; syncedAt: string; unchanged?: boolean }> {
   if (!isGitHubCloudConfigured(config)) {
     throw new Error(
       'Lengkapi GitHub Username, Nama Repository (nostradamus), dan GitHub Personal Access Token (PAT) terlebih dahulu.'
@@ -247,8 +280,9 @@ export async function pushStateToGitHubRepo(
     'Content-Type': 'application/json'
   };
 
-  // Fetch current SHA first to prevent 409 Conflict
+  // Fetch current SHA and remote content first to compare per-file Git Blob SHA
   let currentSha = config.lastSyncedSha;
+  let remoteContentStr: string | null = null;
   try {
     const checkRes = await fetch(`${apiUrl}?ref=${encodeURIComponent(branch)}&t=${Date.now()}`, {
       method: 'GET',
@@ -256,9 +290,16 @@ export async function pushStateToGitHubRepo(
       cache: 'no-store'
     });
     if (checkRes.ok) {
-      const existingData = (await checkRes.json()) as { sha?: string };
+      const existingData = (await checkRes.json()) as { sha?: string; content?: string };
       if (existingData.sha) {
         currentSha = existingData.sha;
+      }
+      if (existingData.content) {
+        try {
+          remoteContentStr = decodeBase64ToUtf8(existingData.content);
+        } catch {
+          remoteContentStr = null;
+        }
       }
     } else if (checkRes.status === 404) {
       currentSha = undefined;
@@ -268,6 +309,32 @@ export async function pushStateToGitHubRepo(
   }
 
   const prettyJson = JSON.stringify(bundle, null, 2);
+  const localBlobSha = await computeGitBlobSha(prettyJson);
+  const syncedAt = formatFullIndonesianDateTime(new Date());
+
+  // Compare exact Git Blob SHA or normalized payload SHA (ignoring volatile updatedAt field)
+  if (currentSha && localBlobSha === currentSha) {
+    return { sha: currentSha, syncedAt, unchanged: true };
+  }
+
+  if (currentSha && remoteContentStr) {
+    try {
+      const remoteObj = JSON.parse(remoteContentStr) as Record<string, unknown>;
+      const localObj = JSON.parse(prettyJson) as Record<string, unknown>;
+      const remoteNormalized = JSON.stringify({ ...remoteObj, updatedAt: '' });
+      const localNormalized = JSON.stringify({ ...localObj, updatedAt: '' });
+      const [remoteNormSha, localNormSha] = await Promise.all([
+        computeGitBlobSha(remoteNormalized),
+        computeGitBlobSha(localNormalized)
+      ]);
+      if (remoteNormSha === localNormSha) {
+        return { sha: currentSha, syncedAt, unchanged: true };
+      }
+    } catch {
+      // fallback to standard PUT commit
+    }
+  }
+
   const contentBase64 = encodeUtf8ToBase64(prettyJson);
 
   const bodyPayload: Record<string, unknown> = {
@@ -293,10 +360,9 @@ export async function pushStateToGitHubRepo(
   }
 
   const putData = (await putRes.json()) as { content?: { sha?: string } };
-  const newSha = putData.content?.sha || currentSha || '';
-  const syncedAt = formatFullIndonesianDateTime(new Date());
+  const newSha = putData.content?.sha || localBlobSha || currentSha || '';
 
-  return { sha: newSha, syncedAt };
+  return { sha: newSha, syncedAt, unchanged: false };
 }
 
 /**
@@ -775,10 +841,10 @@ export async function syncForkUpstreamAndRebuildPages(
               upToDate = true;
               syncSummaryNote = `Branch ${targetBranch} sudah berada pada commit terbaru yang sama dengan ${parentFullName}.`;
             } else {
-              const upCommitRes = await fetch(
+              const upTreeRes = await fetch(
                 `https://api.github.com/repos/${encodeURIComponent(upOwner)}/${encodeURIComponent(
                   upRepo
-                )}/git/commits/${upstreamCommitSha}`,
+                )}/git/trees/${upstreamCommitSha}?recursive=1`,
                 { method: 'GET', headers, cache: 'no-store' }
               );
               const forkTreeRes = await fetch(
@@ -786,46 +852,60 @@ export async function syncForkUpstreamAndRebuildPages(
                 { method: 'GET', headers, cache: 'no-store' }
               );
 
-              if (upCommitRes.ok && forkTreeRes.ok) {
-                const upCommitData = (await upCommitRes.json()) as {
-                  tree?: { sha?: string };
-                };
-                const forkTreeData = (await forkTreeRes.json()) as {
+              if (upTreeRes.ok && forkTreeRes.ok) {
+                const upTreeData = (await upTreeRes.json()) as {
+                  sha?: string;
                   tree?: Array<{ path?: string; mode?: string; type?: string; sha?: string }>;
                 };
-                const upstreamTreeSha = upCommitData.tree?.sha;
+                const forkTreeData = (await forkTreeRes.json()) as {
+                  sha?: string;
+                  tree?: Array<{ path?: string; mode?: string; type?: string; sha?: string }>;
+                };
 
-                if (upstreamTreeSha) {
-                  // Preserve fork's own portfolio state JSON and custom domain CNAME
-                  const preservedPaths = new Set([
-                    config.filePath.trim().replace(/^\/+/, ''),
-                    'data/nostradamus_cloud_state.json',
-                    'CNAME',
-                    'public/CNAME'
-                  ]);
-                  const overrideTreeItems = (forkTreeData.tree || [])
-                    .filter(
-                      (item) =>
-                        item.path &&
-                        item.sha &&
-                        item.type === 'blob' &&
-                        preservedPaths.has(item.path)
-                    )
-                    .map((item) => ({
-                      path: item.path!,
-                      mode: (item.mode || '100644') as '100644',
-                      type: 'blob' as const,
-                      sha: item.sha!
-                    }));
+                // Preserve fork's own portfolio state JSON and custom domain CNAME
+                const preservedPaths = new Set([
+                  config.filePath.trim().replace(/^\/+/, ''),
+                  'data/nostradamus_cloud_state.json',
+                  'CNAME',
+                  'public/CNAME'
+                ]);
 
+                const forkBlobShaByPath = new Map<string, string>();
+                for (const item of forkTreeData.tree || []) {
+                  if (item.path && item.sha && item.type === 'blob') {
+                    forkBlobShaByPath.set(item.path, item.sha);
+                  }
+                }
+
+                // Compare per-file Git Blob SHA: only include upstream blobs whose SHA differs from the fork's blob SHA
+                const changedUpstreamBlobs = (upTreeData.tree || [])
+                  .filter(
+                    (item) =>
+                      item.path &&
+                      item.sha &&
+                      item.type === 'blob' &&
+                      !preservedPaths.has(item.path) &&
+                      forkBlobShaByPath.get(item.path) !== item.sha
+                  )
+                  .map((item) => ({
+                    path: item.path!,
+                    mode: (item.mode || '100644') as '100644',
+                    type: 'blob' as const,
+                    sha: item.sha!
+                  }));
+
+                if (changedUpstreamBlobs.length === 0) {
+                  upToDate = true;
+                  syncSummaryNote = ` Seluruh file kode sumber pada ${rawOwner}/${rawRepo} memiliki hash SHA yang identik dengan ${parentFullName}.`;
+                } else if (forkTreeData.sha) {
                   const createTreeRes = await fetch(
                     `https://api.github.com/repos/${owner}/${repo}/git/trees`,
                     {
                       method: 'POST',
                       headers,
                       body: JSON.stringify({
-                        base_tree: upstreamTreeSha,
-                        tree: overrideTreeItems
+                        base_tree: forkTreeData.sha,
+                        tree: changedUpstreamBlobs
                       })
                     }
                   );
@@ -833,14 +913,13 @@ export async function syncForkUpstreamAndRebuildPages(
                   if (createTreeRes.ok) {
                     const createdTree = (await createTreeRes.json()) as { sha?: string };
                     if (createdTree.sha) {
-                      // Create commit referencing forkCommitSha (and upstreamCommitSha if shared in fork network)
                       let createCommitRes = await fetch(
                         `https://api.github.com/repos/${owner}/${repo}/git/commits`,
                         {
                           method: 'POST',
                           headers,
                           body: JSON.stringify({
-                            message: `chore(fork-sync): sync latest UI & security gate from ${parentFullName} while preserving fork portfolio state`,
+                            message: `chore(fork-sync): update ${changedUpstreamBlobs.length} changed files by SHA from ${parentFullName}`,
                             tree: createdTree.sha,
                             parents: [forkCommitSha, upstreamCommitSha]
                           })
@@ -854,7 +933,7 @@ export async function syncForkUpstreamAndRebuildPages(
                             method: 'POST',
                             headers,
                             body: JSON.stringify({
-                              message: `chore(fork-sync): sync latest UI & security gate from ${parentFullName} while preserving fork portfolio state`,
+                              message: `chore(fork-sync): update ${changedUpstreamBlobs.length} changed files by SHA from ${parentFullName}`,
                               tree: createdTree.sha,
                               parents: [forkCommitSha]
                             })
@@ -881,7 +960,7 @@ export async function syncForkUpstreamAndRebuildPages(
                           if (updateRefRes.ok) {
                             merged = true;
                             conflictAutoResolved = true;
-                            syncSummaryNote = `Kode UI terbaru dari ${parentFullName} berhasil disinkronkan secara otomatis (tanpa konflik) dengan tetap menjaga data portofolio & domain milik ${rawOwner}/${rawRepo}.`;
+                            syncSummaryNote = `${changedUpstreamBlobs.length} file kode yang berubah dari ${parentFullName} berhasil di-commit berdasarkan komparasi SHA tanpa menimpa data portofolio milik ${rawOwner}/${rawRepo}.`;
                           }
                         }
                       }
@@ -896,6 +975,138 @@ export async function syncForkUpstreamAndRebuildPages(
     } else {
       upToDate = true;
       syncSummaryNote = `Repo ${rawOwner}/${rawRepo} adalah repository utama (upstream).`;
+    }
+
+    // 2B. Sync latest prebuilt static bundle (/docs/assets/app.js, /docs/assets/index.css, /docs/index.html) if running from a newer build
+    try {
+      const bundleAssets: Array<{ fetchUrl: string; targetPaths: string[] }> = [
+        { fetchUrl: '/docs/assets/app.js', targetPaths: ['docs/assets/app.js'] },
+        { fetchUrl: '/docs/assets/index.css', targetPaths: ['docs/assets/index.css'] },
+        { fetchUrl: '/docs/index.html', targetPaths: ['docs/index.html', 'index.html'] }
+      ];
+
+      const headRefRes = await fetch(
+        `https://api.github.com/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(
+          targetBranch
+        )}?t=${Date.now()}`,
+        { method: 'GET', headers, cache: 'no-store' }
+      );
+
+      if (headRefRes.ok) {
+        const headRefData = (await headRefRes.json()) as { object?: { sha?: string } };
+        const headCommitSha = headRefData.object?.sha;
+        if (headCommitSha) {
+          const headTreeRes = await fetch(
+            `https://api.github.com/repos/${owner}/${repo}/git/trees/${headCommitSha}?recursive=1`,
+            { method: 'GET', headers, cache: 'no-store' }
+          );
+          if (headTreeRes.ok) {
+            const headTreeData = (await headTreeRes.json()) as {
+              sha?: string;
+              tree?: Array<{ path?: string; sha?: string; type?: string }>;
+            };
+            const existingBlobSha = new Map<string, string>();
+            for (const entry of headTreeData.tree || []) {
+              if (entry.path && entry.sha && entry.type === 'blob') {
+                existingBlobSha.set(entry.path, entry.sha);
+              }
+            }
+
+            const newTreeEntries: Array<{
+              path: string;
+              mode: '100644';
+              type: 'blob';
+              content: string;
+            }> = [];
+
+            for (const asset of bundleAssets) {
+              try {
+                const res = await fetch(`${asset.fetchUrl}?t=${Date.now()}`, { cache: 'no-store' });
+                if (!res.ok) continue;
+                const text = await res.text();
+                if (!text || text.length < 60) continue;
+                // Avoid pushing Vite dev index.html if /docs/assets/app.js fell back to HTML
+                if (
+                  asset.fetchUrl.endsWith('.js') &&
+                  text.trimStart().startsWith('<!DOCTYPE html>')
+                ) {
+                  continue;
+                }
+                const localSha = await computeGitBlobSha(text);
+                for (const repoPath of asset.targetPaths) {
+                  if (existingBlobSha.get(repoPath) !== localSha) {
+                    newTreeEntries.push({
+                      path: repoPath,
+                      mode: '100644',
+                      type: 'blob',
+                      content: text
+                    });
+                  }
+                }
+              } catch {
+                // skip unavailable local asset
+              }
+            }
+
+            if (newTreeEntries.length > 0 && headTreeData.sha) {
+              const createBundleTreeRes = await fetch(
+                `https://api.github.com/repos/${owner}/${repo}/git/trees`,
+                {
+                  method: 'POST',
+                  headers,
+                  body: JSON.stringify({
+                    base_tree: headTreeData.sha,
+                    tree: newTreeEntries
+                  })
+                }
+              );
+              if (createBundleTreeRes.ok) {
+                const createdBundleTree = (await createBundleTreeRes.json()) as { sha?: string };
+                if (createdBundleTree.sha) {
+                  const bundleCommitRes = await fetch(
+                    `https://api.github.com/repos/${owner}/${repo}/git/commits`,
+                    {
+                      method: 'POST',
+                      headers,
+                      body: JSON.stringify({
+                        message: `chore(pages-bundle): sync latest lightweight on-demand inspect & AI committee bundle (${newTreeEntries.length} files)`,
+                        tree: createdBundleTree.sha,
+                        parents: [headCommitSha]
+                      })
+                    }
+                  );
+                  if (bundleCommitRes.ok) {
+                    const bundleCommitData = (await bundleCommitRes.json()) as { sha?: string };
+                    if (bundleCommitData.sha) {
+                      const patchHeadRes = await fetch(
+                        `https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(
+                          targetBranch
+                        )}`,
+                        {
+                          method: 'PATCH',
+                          headers,
+                          body: JSON.stringify({
+                            sha: bundleCommitData.sha,
+                            force: false
+                          })
+                        }
+                      );
+                      if (patchHeadRes.ok) {
+                        merged = true;
+                        syncSummaryNote = `${syncSummaryNote} Bundle produksi terbaru (${newTreeEntries
+                          .map((e) => e.path)
+                          .join(', ')}) berhasil di-push langsung ke ${rawOwner}/${rawRepo}.`.trim();
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // Non-fatal if static bundle push is skipped
     }
 
     // 3. Trigger GitHub Actions (deploy-pages.yml & sync-idx-market.yml) so GitHub Pages rebuilds the UI

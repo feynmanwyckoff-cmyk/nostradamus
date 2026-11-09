@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -558,41 +558,46 @@ async function startServer() {
               .slice(0, 6)
               .map(
                 (n: any, i: number) =>
-                  `${i + 1}. [${n.emitenCategory || 'BERITA'}] ${n.title} (${n.source} - ${n.publishedAt})`
+                  `${i + 1}. [${n.emitenCategory || 'BERITA'} | Sentimen: ${n.sentiment || 'NEUTRAL'}] ${n.title} (${n.source} - ${n.publishedAt})${n.summary ? ` -> Ringkasan: ${n.summary}` : ''}`
               )
               .join('\n')
           : 'Tidak ada berita anomali spesifik terbaru; gunakan evaluasi aksi korporasi & fundamental terkini.';
 
+      const activePromptFocus = userQuestion && String(userQuestion).trim()
+        ? String(userQuestion).trim()
+        : `Evaluasi mendalam kelayakan beli ${stock.ticker} pada harga Rp ${Number(stock.lastPrice).toLocaleString('id-ID')}, uji potensi value trap vs katalis pertumbuhan, dan berikan strategi eksekusi lot terbaik.`;
+
       const promptText = `
-Anda adalah Analis Ekuitas Kuantitatif & Fundamental Senior Pasar Modal Indonesia (BEI / IHSG).
-Lakukan bedah mendalam pra-beli (Pre-Buy Conviction Analysis) untuk emiten berikut dengan menggabungkan:
-1. Prinsip Bapak Fundamental Indonesia (Joeliardi Sunendar):
-   - Kualitas Bisnis & Economic Moat (ROE vs Cost of Equity Indonesia ~10,5%, Operating Margin, daya tahan laba).
-   - Kesehatan Neraca (Debt-to-Equity Ratio / DER, risiko solvabilitas, kualitas kas nyata & dividen).
-   - Valuasi Nilai Intrinsik & Margin of Safety (Harga Pasar vs Nilai Intrinsik Joeliardi-Graham, Implied PER & PBV vs Fair PER & PBV).
-2. Prinsip Kuantitatif Out-of-Sample (OOS) 4-Faktor DeMiguel:
-   - Skor Value (bobot 35%), Low-Volatility (28%), Momentum (22%), dan Size/Liquidity (15%).
-   - Deteksi risiko HSC (High Speculative Concentration / Cornered / Gorengan) dan ketahanan terhadap rezim IHSG saat ini (${regimeStatus || 'WASPADA'}).
-3. Berita Terkini, Corporate Action & Isu Spesifik Emiten:
-${newsContext}
+Lakukan penalaran Komite Investasi mendalam (Deep Causal Quantitative & Fundamental Audit) untuk saham BEI berikut:
 
 DATA FUNDAMENTAL & KUANTITATIF LIVE EMITEN:
-- Ticker: ${stock.ticker} (${stock.name}) | Sektor: ${stock.sector}
-- Harga Pasar Terkini: Rp ${Number(stock.lastPrice).toLocaleString('id-ID')} (Perubahan 1D: ${stock.change1D}%, 30D: ${stock.return30D}%)
-- ROE: ${stock.roe}% | Operating Margin: ${stock.operatingMargin}% | DER: ${stock.debtToEquity}x | Dividend Yield TTM: ${stock.dividendYieldPct || 0}%
-- Beta 1Y: ${stock.beta1Y}x | Volatilitas Tahunan: ${stock.volatilityAnn}%
-- Skor 4-Faktor OOS: Komposit ${stock.dmuCompositeScore}/10 (Rank Top ${stock.dmuRankPct}%, Zona: ${stock.dmuZone}) | Value: ${stock.dmuValueScore}/10 | Low-Vol: ${stock.dmuLowVolScore}/10 | Momentum: ${stock.dmuMomScore}/10 | Size: ${stock.dmuSizeScore}/10
-- Status Indikasi HSC: ${stock.isHscFlagged ? `TERINDIKASI HSC (${stock.hscReason || 'Risiko Spekulatif Tinggi'})` : 'BEBAS INDIKASI HSC (Clean)'}
-- Valuasi Joeliardi-Graham: Nilai Intrinsik Rp ${Number(joeliardiEval?.intrinsicValueIdr || stock.lastPrice).toLocaleString('id-ID')} | Margin of Safety: ${joeliardiEval?.marginOfSafetyPct ?? 0}% | Implied PER: ${joeliardiEval?.impliedPer ?? '-'}x (Fair PER: ${joeliardiEval?.joeliardiFairPer ?? '-'}x) | Implied PBV: ${joeliardiEval?.impliedPbv ?? '-'}x (Fair PBV: ${joeliardiEval?.joeliardiFairPbv ?? '-'}x) | Conviction Grade: ${joeliardiEval?.convictionGrade ?? '-'}
+- Emiten: ${stock.ticker} (${stock.name}) | Sektor IDX-IC: ${stock.sector}
+- Kuotasi Pasar Live: Rp ${Number(stock.lastPrice).toLocaleString('id-ID')} | Perubahan 1D: ${stock.change1D}% | Return 30D (1M): ${stock.return30D}%
+- Profitabilitas & Efisiensi Modal (DuPont): ROE ${stock.roe}% (Benchmark Cost of Equity RI: 10,5%, Spread ROE: ${(Number(stock.roe) - 10.5).toFixed(1)}%) | Operating Margin: ${stock.operatingMargin}% | Dividend Yield TTM: ${stock.dividendYieldPct || 0}%
+- Struktur Neraca & Risiko: DER ${stock.debtToEquity}x | Beta 1Y: ${stock.beta1Y}x | Volatilitas Tahunan: ${stock.volatilityAnn}% | Likuiditas: ${stock.isLiquid !== false && stock.lastPrice >= 68 ? 'Likuid Aktif Institusional' : 'Tidak Likuid / Gocap'}
+- Peringkat 4-Faktor Out-of-Sample (OOS DeMiguel): Skor Komposit ${stock.dmuCompositeScore}/10 (Peringkat Top ${stock.dmuRankPct}%, Zona Buffer: ${stock.dmuZone})
+  * Rincian Faktor: Value ${stock.dmuValueScore}/10 (bobot 35%), Low-Vol ${stock.dmuLowVolScore}/10 (bobot 28%), Momentum ${stock.dmuMomScore}/10 (bobot 22%), Size/Liq ${stock.dmuSizeScore}/10 (bobot 15%)
+- Status Saringan Risiko HSC (Gorengan/Cornered): ${stock.isHscFlagged ? `TERINDIKASI HSC (${stock.hscReason || 'Anomali Spekulatif'})` : 'BEBAS INDIKASI HSC (Clean Institutional/Fundamental)'}
+- Kalibrasi Valuasi Intrinsik Joeliardi-Graham:
+  * Estimasi Nilai Intrinsik: Rp ${Number(joeliardiEval?.intrinsicValueIdr || stock.lastPrice).toLocaleString('id-ID')}
+  * Margin of Safety (MoS): ${joeliardiEval?.marginOfSafetyPct ?? 0}% (${joeliardiEval?.valuationLabel || '-'})
+  * Implied PER: ${joeliardiEval?.impliedPer ?? '-'}x (Earnings Yield: ${joeliardiEval?.impliedPer ? (100 / Number(joeliardiEval.impliedPer)).toFixed(2) : '-'}% vs SBN 10Y 6,75%) | Fair PER Joeliardi: ${joeliardiEval?.joeliardiFairPer ?? '-'}x
+  * Implied PBV: ${joeliardiEval?.impliedPbv ?? '-'}x vs Fair PBV Joeliardi: ${joeliardiEval?.joeliardiFairPbv ?? '-'}x
+  * Estimasi EPS: Rp ${joeliardiEval?.estimatedEpsIdr ?? '-'} | Estimasi BVPS: Rp ${joeliardiEval?.estimatedBvpsIdr ?? '-'}
+  * Skor 4 Pilar Joeliardi: Kualitas Bisnis ${joeliardiEval?.businessQualityScore ?? 0}/100, Kesehatan Neraca ${joeliardiEval?.balanceSheetHealthScore ?? 0}/100, Keamanan Valuasi ${joeliardiEval?.valuationSafetyScore ?? 0}/100, Ketahanan OOS ${joeliardiEval?.oosQuantRobustnessScore ?? 0}/100
+- Rezim Pasar IHSG Saat Ini: ${regimeStatus || 'WASPADA'}
 
-FOKUS PERTANYAAN / PERMINTAAN KHUSUS USER:
-"${userQuestion ? String(userQuestion).trim() : 'Evaluasi kesehatan fundamental terkini, dampak berita/corporate action terbaru, dan apakah saham ini layak dibeli pada harga sekarang.'}"
+RADAR BERITA TERKINI & AKSI KORPORASI (${stock.ticker}):
+${newsContext}
 
-Format jawaban Anda dalam Bahasa Indonesia yang tajam, objektif, bebas basa-basi, dan terstruktur dalam 4 bagian ringkas (gunakan sekitar 250-350 kata):
-1. **Bedah Kualitas Fundamental & Neraca (Prinsip Joeliardi Sunendar)**
-2. **Validasi Kuantitatif Out-of-Sample (OOS) & Valuasi Margin of Safety**
-3. **Evaluasi Berita Terkini, Corporate Action & Risiko Isu/HSC**
-4. **Kesimpulan Pra-Beli (Verdict & Strategi Eksekusi bagi User)**
+PERTANYAAN / FOKUS UTAMA INVESTOR:
+"${activePromptFocus}"
+
+INSTRUKSI PENALARAN KOMITE INVESTASI WAJIB (ANTI-TEMPLATE & BEBAS SIMBOL MARKDOWN **):
+1. Berpikirlah secara kausal dan kritis layaknya Chief Investment Officer: bedah hubungan sebab-akibat antar metrik spesifik sektor ${stock.sector}. Jelaskan apakah ROE ${stock.roe}% berasal dari keunggulan margin operasional (${stock.operatingMargin}%) atau sekadar daya ungkit utang (DER ${stock.debtToEquity}x).
+2. Uji hipotesis Value Trap vs Diskon Asimetris: bandingkan Earnings Yield terhadap imbal hasil bebas risiko SBN 10Y (6,75%), dan jelaskan mengapa pasar saat ini menghargai ${stock.ticker} pada PER ${joeliardiEval?.impliedPer ?? '-'}x / PBV ${joeliardiEval?.impliedPbv ?? '-'}x dengan tren 30 hari ${stock.return30D}%.
+3. Jawab pertanyaan spesifik investor ("${activePromptFocus}") secara langsung, tajam, dan terukur pada directAnswerSummary.
+4. Jangan pernah menulis simbol bintang ganda (**) atau sintaks markdown mentah di dalam nilai string JSON.
 `.trim();
 
       const response = await ai.models.generateContent({
@@ -600,14 +605,116 @@ Format jawaban Anda dalam Bahasa Indonesia yang tajam, objektif, bebas basa-basi
         contents: promptText,
         config: {
           systemInstruction:
-            'Anda adalah analis fundamental (gaya Joeliardi Sunendar) dan kuantitatif Out-of-Sample (OOS) pasar saham Indonesia (BEI). Berikan analisis yang jujur, skeptis terhadap saham gorengan/HSC, mengutamakan Margin of Safety dan arus kas/dividen nyata, serta hindari penggunaan tanda pisah em-dash berlebihan.'
+            'Anda adalah Kepala Komite Investasi Kuantitatif & Fundamental Pasar Modal Indonesia (BEI) yang memadukan prinsip nilai intrinsik Joeliardi Sunendar, dekomposisi DuPont, dan disiplin faktor Out-of-Sample (OOS) DeMiguel. Analisis Anda bersifat kausal, spesifik terhadap dinamika sektor emiten, membongkar kontradiksi antara harga dan fundamental, serta bebas dari template generik maupun simbol markdown mentah (**).',
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              verdictBadge: {
+                type: Type.STRING,
+                description: 'Keputusan singkat kapital, misal: STRONG ACCUMULATE, SELECTIVE BUY, HOLD / WAIT PULLBACK, atau AVOID / HSC BLOCK'
+              },
+              verdictTitle: {
+                type: Type.STRING,
+                description: 'Judul kesimpulan utama satu kalimat tajam tentang tesis investasi saham ini'
+              },
+              directAnswerSummary: {
+                type: Type.STRING,
+                description: 'Jawaban analitis mendalam 3-4 kalimat atas pertanyaan spesifik pengguna dengan penalaran kausal lintas-metrik (tanpa simbol **)'
+              },
+              convictionScore: {
+                type: Type.NUMBER,
+                description: 'Skor keyakinan akhir 0-100 berdasarkan sintesis komite investasi'
+              },
+              chainOfThoughtSteps: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: '4 langkah deduksi kausal berurutan: (1) Audit DuPont & Kualitas Arus Kas, (2) Uji Valuasi vs SBN 10Y & Deteksi Value Trap, (3) Evaluasi Katalis Berita & Struktur Likuiditas/HSC, (4) Keputusan Sizing & Eksekusi'
+              },
+              sections: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    id: { type: Type.STRING },
+                    badge: { type: Type.STRING },
+                    title: { type: Type.STRING },
+                    keyMetricHighlight: { type: Type.STRING },
+                    reasoningParagraph: { type: Type.STRING },
+                    bulletPoints: {
+                      type: Type.ARRAY,
+                      items: { type: Type.STRING }
+                    },
+                    sentimentTone: {
+                      type: Type.STRING,
+                      description: 'Salah satu dari: POSITIVE, NEUTRAL, CAUTION, NEGATIVE'
+                    }
+                  },
+                  required: [
+                    'id',
+                    'badge',
+                    'title',
+                    'keyMetricHighlight',
+                    'reasoningParagraph',
+                    'bulletPoints',
+                    'sentimentTone'
+                  ]
+                },
+                description: '4 kartu komite investasi: (1) 01. Audit Kualitas Laba & DuPont ROE, (2) 02. Valuasi Intrinsik vs Risiko Value Trap, (3) 03. Dampak Berita, Dividen & Saringan HSC, (4) 04. Dinamika Momentum & Kesesuaian Rezim Pasar'
+              },
+              bullishDrivers: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: '3-4 katalis penggerak positif spesifik dan terukur untuk emiten ini'
+              },
+              bearishRisks: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: '3-4 risiko spesifik atau pemicu pembatalan tesis (invalidation triggers)'
+              },
+              executionStrategy: {
+                type: Type.OBJECT,
+                properties: {
+                  recommendedAction: { type: Type.STRING },
+                  idealEntryZone: { type: Type.STRING },
+                  InvalidationOrRiskLimit: { type: Type.STRING },
+                  portfolioAllocationGuide: { type: Type.STRING }
+                },
+                required: [
+                  'recommendedAction',
+                  'idealEntryZone',
+                  'InvalidationOrRiskLimit',
+                  'portfolioAllocationGuide'
+                ]
+              }
+            },
+            required: [
+              'verdictBadge',
+              'verdictTitle',
+              'directAnswerSummary',
+              'convictionScore',
+              'chainOfThoughtSteps',
+              'sections',
+              'bullishDrivers',
+              'bearishRisks',
+              'executionStrategy'
+            ]
+          }
         }
       });
 
-      const analysisText = (response.text ?? '').trim();
+      const rawText = (response.text ?? '').trim();
+      let structuredReport: any = null;
+      try {
+        structuredReport = JSON.parse(rawText);
+      } catch {
+        structuredReport = null;
+      }
+
       res.json({
         ticker: stock.ticker,
-        analysis: analysisText,
+        analysis: structuredReport?.directAnswerSummary || rawText,
+        structuredReport,
         generatedAt: new Date().toISOString()
       });
     } catch (err: unknown) {
@@ -616,6 +723,9 @@ Format jawaban Anda dalam Bahasa Indonesia yang tajam, objektif, bebas basa-basi
       res.status(500).json({ error: message, fallbackRequired: true });
     }
   });
+
+  // Serve pre-compiled GitHub Pages static bundle (/docs) so client-side GitHub Fork Sync can push the latest assets
+  app.use('/docs', express.static(path.join(__dirname, 'docs')));
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

@@ -40,7 +40,8 @@ import {
   Calendar,
   Wallet,
   X,
-  GitMerge
+  GitMerge,
+  Scale
 } from 'lucide-react';
 
 interface ActivePortfolioManagerProps {
@@ -61,6 +62,7 @@ interface ActivePortfolioManagerProps {
   onExportBackupJson: () => void;
   onImportBackupJson: (file: File) => void;
   onResetCacheAndPortfolio: () => void;
+  onInspectTicker?: (ticker: string) => void;
 }
 
 // Stockbit Sekuritas Official Fee Schedule
@@ -87,7 +89,8 @@ export function ActivePortfolioManager({
   onUpdateCashReserve,
   onExportBackupJson,
   onImportBackupJson,
-  onResetCacheAndPortfolio
+  onResetCacheAndPortfolio,
+  onInspectTicker
 }: ActivePortfolioManagerProps) {
   // Collapsible GitHub Cloud Sync section (hidden by default to save vertical space)
   const [showGitHubCloudBox, setShowGitHubCloudBox] = useState<boolean>(false);
@@ -1484,6 +1487,17 @@ export function ActivePortfolioManager({
                             Sesuaikan Lot ({deltaLots > 0 ? `+${deltaLots}` : deltaLots})
                           </button>
                         )}
+                        {onInspectTicker && (
+                          <button
+                            type="button"
+                            onClick={() => onInspectTicker(item.holding.ticker)}
+                            title={`Inspect Fundamental Joeliardi, Berita & Analisis AI untuk ${item.holding.ticker}`}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-bold text-[#D97706] bb-amber bg-[#FAF9F6] border border-[#D97706]/50 hover:bg-[#D97706] hover:text-white rounded-xs transition-colors cursor-pointer"
+                          >
+                            <Scale className="w-3 h-3" />
+                            <span>Inspect</span>
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => handleStartEditHolding(item.holding)}
@@ -1706,13 +1720,26 @@ export function ActivePortfolioManager({
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => handleAddRecommendationToPortfolio(rec)}
-                      className="w-full py-1.5 px-3 text-xs font-semibold text-white bg-[#059669] hover:bg-[#047857] rounded-xs transition-colors cursor-pointer"
-                    >
-                      + Masukkan ke Portofolio ({rec.suggestedLots} Lot)
-                    </button>
+                    <div className="flex items-center gap-2">
+                      {onInspectTicker && (
+                        <button
+                          type="button"
+                          onClick={() => onInspectTicker(rec.stock.ticker)}
+                          className="inline-flex items-center justify-center gap-1 py-1.5 px-2.5 text-xs font-bold text-[#D97706] bb-amber bg-[#FFFFFF] border border-[#D97706]/50 hover:bg-[#D97706] hover:text-white rounded-xs transition-colors cursor-pointer shrink-0"
+                          title={`Inspect Fundamental Joeliardi, Berita & Analisis AI untuk ${rec.stock.ticker}`}
+                        >
+                          <Scale className="w-3.5 h-3.5" />
+                          <span>Inspect</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleAddRecommendationToPortfolio(rec)}
+                        className="flex-1 py-1.5 px-3 text-xs font-semibold text-white bg-[#059669] hover:bg-[#047857] rounded-xs transition-colors cursor-pointer"
+                      >
+                        + Masukkan Portofolio ({rec.suggestedLots} Lot)
+                      </button>
+                    </div>
                   </div>
                 </div>
               );
