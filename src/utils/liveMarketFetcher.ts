@@ -1,4 +1,10 @@
-import { MacroIndicator, NewsSentimentItem, StockMetrics } from '../types/quant';
+import {
+  EmitenNewsCategory,
+  JoeliardiOosEvaluation,
+  MacroIndicator,
+  NewsSentimentItem,
+  StockMetrics
+} from '../types/quant';
 import { enrichStockMetrics, rankUniverseWithBuffer } from './quantEngine';
 import {
   FULL_JCI_EMITEN_CATALOG,
@@ -1978,3 +1984,400 @@ export async function fetchLiveFinancialNewsRss(
     return fallbackNews;
   }
 }
+
+/**
+ * Classifies an emiten news item into specific Corporate Action / Fundamental / Regulatory categories
+ */
+export function classifyEmitenNewsCategory(
+  title: string,
+  summary?: string
+): EmitenNewsCategory {
+  const combined = `${title} ${summary || ''}`.toLowerCase();
+
+  const umaOrIssueKeywords = [
+    'uma',
+    'unusual market activity',
+    'suspensi',
+    'disuspensi',
+    'gembok',
+    'delisting',
+    'pkpu',
+    'pailit',
+    'gugatan',
+    'sanksi',
+    'denda',
+    'peringatan',
+    'investigasi',
+    'gorengan',
+    'hsc',
+    'anomali',
+    'special monitoring',
+    'fca',
+    'full call auction'
+  ];
+  for (const kw of umaOrIssueKeywords) {
+    if (combined.includes(kw)) return 'REGULATORY_UMA_ISSUE';
+  }
+
+  const dividenRupsKeywords = [
+    'dividen',
+    'dividend',
+    'cum date',
+    'ex date',
+    'rups',
+    'rupst',
+    'rupslb',
+    'payout ratio',
+    'bagi laba',
+    'dividen interim',
+    'dividen tunai'
+  ];
+  for (const kw of dividenRupsKeywords) {
+    if (combined.includes(kw)) return 'DIVIDEN_RUPS';
+  }
+
+  const corpActionKeywords = [
+    'buyback',
+    'right issue',
+    'rights issue',
+    'hmetd',
+    'pmthmetd',
+    'private placement',
+    'akuisisi',
+    'divestasi',
+    'merger',
+    'obligasi',
+    'sukuk',
+    'stock split',
+    'reverse stock',
+    'ekspansi',
+    'capex',
+    'belanja modal',
+    'kontrak baru',
+    'joint venture',
+    'kemitraan'
+  ];
+  for (const kw of corpActionKeywords) {
+    if (combined.includes(kw)) return 'CORPORATE_ACTION_MA';
+  }
+
+  const earningsKeywords = [
+    'laba',
+    'rugi',
+    'pendapatan',
+    'kinerja',
+    'kuartal',
+    'semester',
+    'laporan keuangan',
+    'ebitda',
+    'margin',
+    'aset',
+    'ekuitas',
+    'penjualan',
+    'revenue',
+    'profit',
+    'earnings'
+  ];
+  for (const kw of earningsKeywords) {
+    if (combined.includes(kw)) return 'FINANCIAL_EARNINGS';
+  }
+
+  return 'GENERAL_EMITEN';
+}
+
+/**
+ * Generates baseline Corporate Action, Dividend & Regulatory Radar items for any IDX ticker
+ * so the user always sees structured corporate action & issue intelligence alongside live RSS news.
+ */
+function buildEmitenCorporateActionRadarBaseline(
+  ticker: string,
+  companyName: string,
+  sector: string,
+  stock?: StockMetrics
+): NewsSentimentItem[] {
+  const clean = ticker.trim().toUpperCase();
+  const divYield = stock?.dividendYieldPct ?? getEmitenDividendYield(clean, stock?.lastPrice);
+  const isHsc = Boolean(stock?.isHscFlagged);
+  const roe = stock?.roe ?? 12.0;
+  const der = stock?.debtToEquity ?? 0.6;
+  const price = stock?.lastPrice ?? 1000;
+  const c1d = stock?.change1D ?? 0;
+
+  const items: NewsSentimentItem[] = [];
+
+  // 1. Dividend & RUPS Corporate Action Status
+  if (divYield > 0) {
+    items.push({
+      id: `ca_div_${clean}`,
+      ticker: clean,
+      title: `[Aksi Korporasi & Dividen] ${clean} (${companyName}) Mencatatkan Imbal Hasil Dividen TTM ${divYield.toFixed(2)}% pada Harga Rp ${price.toLocaleString('id-ID')}`,
+      source: 'IDX Corporate Action Radar',
+      publishedAt: 'Data TTM Terkini',
+      url: `https://finance.yahoo.com/quote/${clean}.JK`,
+      region: 'DOMESTIC',
+      summary: `Konsistensi distribusi dividen tunai ${clean} (${divYield.toFixed(2)}%) memvalidasi arus kas bebas nyata dan kepatuhan tata kelola RUPS bagi investor fundamental.`,
+      sentiment: 'RISK_ON',
+      impactedSectors: [sector],
+      emitenCategory: 'DIVIDEN_RUPS'
+    });
+  } else {
+    items.push({
+      id: `ca_nodiv_${clean}`,
+      ticker: clean,
+      title: `[Status Dividen & RUPS] ${clean} (${companyName}) Belum Mencatatkan Pembagian Dividen Tunai Rutin TTM (0,00%)`,
+      source: 'IDX Corporate Action Radar',
+      publishedAt: 'Evaluasi TTM',
+      url: `https://finance.yahoo.com/quote/${clean}.JK`,
+      region: 'DOMESTIC',
+      summary: `Emiten menahan laba ditahan atau fokus pada restrukturisasi/modal kerja. Menurut prinsip Joeliardi Sunendar, ketiadaan dividen menuntut kehati-hatian ekstra pada kualitas arus kas operasi.`,
+      sentiment: isHsc ? 'RISK_OFF' : 'NEUTRAL',
+      impactedSectors: [sector],
+      emitenCategory: 'DIVIDEN_RUPS'
+    });
+  }
+
+  // 2. Financial Performance & Solvency Filing Radar
+  items.push({
+    id: `ca_fin_${clean}`,
+    ticker: clean,
+    title: `[Kinerja Keuangan & Neraca] Evaluasi Fundamental ${clean}: ROE ${roe.toFixed(1)}%, Operating Margin ${(stock?.operatingMargin ?? 12).toFixed(1)}%, dan DER ${der.toFixed(2)}x`,
+    source: 'Ikhtisar Laporan Keuangan BEI',
+    publishedAt: 'Kuartal Terakhir',
+    url: `https://www.google.com/search?q=${encodeURIComponent(`${clean} ${companyName} laporan keuangan laba dividen BEI`)}`,
+    region: 'DOMESTIC',
+    summary: `Posisi profitabilitas ROE ${roe.toFixed(1)}% (${roe >= 10.5 ? 'di atas' : 'di bawah'} Cost of Equity 10,5%) dengan tingkat leverage DER ${der.toFixed(2)}x dan pergerakan harga harian ${c1d >= 0 ? '+' : ''}${c1d.toFixed(2)}%.`,
+    sentiment: roe >= 14 && der <= 0.9 ? 'RISK_ON' : roe < 8 || der > 1.3 ? 'RISK_OFF' : 'NEUTRAL',
+    impactedSectors: [sector],
+    emitenCategory: 'FINANCIAL_EARNINGS'
+  });
+
+  // 3. Regulatory / HSC / Unusual Market Activity Radar
+  if (isHsc) {
+    items.push({
+      id: `ca_hsc_${clean}`,
+      ticker: clean,
+      title: `[Peringatan Isu & Risiko HSC] ${clean} Terindikasi High Speculative / Cornered Risk — Diblokir Otomatis dari Top Decile Buy`,
+      source: 'Nostradamus Quant Risk Surveillance',
+      publishedAt: 'Peringatan Aktif',
+      url: `https://www.google.com/search?q=${encodeURIComponent(`${clean} UMA suspensi BEI saham`)}`,
+      region: 'DOMESTIC',
+      summary: `${stock?.hscReason || 'Terdeteksi anomali pergerakan spekulatif / konsentrasi tinggi tanpa dukungan fundamental Value.'} Hindari mengejar kenaikan harga jangka pendek untuk mencegah jebakan likuiditas.`,
+      sentiment: 'RISK_OFF',
+      impactedSectors: [sector],
+      emitenCategory: 'REGULATORY_UMA_ISSUE'
+    });
+  } else {
+    items.push({
+      id: `ca_clean_${clean}`,
+      ticker: clean,
+      title: `[Status Regulasi & Likuiditas] ${clean} Bebas Indikasi HSC dengan Skor Faktor Value ${(stock?.dmuValueScore ?? 7.0).toFixed(1)}/10`,
+      source: 'IDX Compliance & Factor Monitor',
+      publishedAt: 'Pemantauan Aktif',
+      url: `https://www.google.com/search?q=${encodeURIComponent(`${clean} ${companyName} aksi korporasi terbaru`)}`,
+      region: 'DOMESTIC',
+      summary: `Struktur perdagangan dan metrik fundamental memenuhi saringan kuantitatif Out-of-Sample tanpa anomali konsentrasi spekulatif HSC.`,
+      sentiment: 'RISK_ON',
+      impactedSectors: [sector],
+      emitenCategory: 'CORPORATE_ACTION_MA'
+    });
+  }
+
+  return items;
+}
+
+/**
+ * Fetches live news, corporate actions, and specific issues for a given IDX ticker
+ */
+export async function fetchLiveEmitenSpecificNews(
+  rawTicker: string,
+  companyName?: string,
+  sector?: string,
+  stockMetrics?: StockMetrics
+): Promise<NewsSentimentItem[]> {
+  const cleanTicker = rawTicker
+    .trim()
+    .toUpperCase()
+    .replace(/\.JK$/i, '')
+    .replace(/[^A-Z]/g, '')
+    .slice(0, 4);
+
+  const catalogEntry =
+    IDX_SECTOR_CATALOG.find((c) => c.ticker === cleanTicker) ||
+    createCalibratedIdxEntry(cleanTicker, sector, companyName);
+  const resolvedName = companyName || stockMetrics?.name || catalogEntry.name;
+  const resolvedSector = sector || stockMetrics?.sector || catalogEntry.sector;
+
+  const liveFetchedItems: NewsSentimentItem[] = [];
+
+  // 1. Try local Express backend (/api/news/emiten)
+  if (canUseLocalExpressBackend()) {
+    try {
+      const res = await fetch(
+        `/api/news/emiten?ticker=${encodeURIComponent(cleanTicker)}&name=${encodeURIComponent(
+          resolvedName
+        )}`,
+        { cache: 'no-store' }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.items) && data.items.length > 0) {
+          for (const raw of data.items) {
+            const cleanTitle = decodeHtmlEntities(String(raw.title || ''));
+            const cleanSummary = raw.summary
+              ? decodeHtmlEntities(String(raw.summary))
+              : undefined;
+            const { sentiment } = classifyHeadlineSentiment(
+              cleanTitle,
+              'DOMESTIC',
+              cleanSummary
+            );
+            const emitenCategory = classifyEmitenNewsCategory(cleanTitle, cleanSummary);
+            liveFetchedItems.push({
+              id: raw.id || `em_${cleanTicker}_${liveFetchedItems.length}`,
+              ticker: cleanTicker,
+              title: cleanTitle,
+              source: raw.source || `Radar ${cleanTicker}`,
+              publishedAt: raw.publishedAt || 'Terkini',
+              url: raw.url || `https://finance.yahoo.com/quote/${cleanTicker}.JK`,
+              region: 'DOMESTIC',
+              summary: cleanSummary,
+              sentiment,
+              impactedSectors: [resolvedSector],
+              emitenCategory
+            });
+          }
+        }
+      }
+    } catch {
+      // fallback below
+    }
+  }
+
+  // 2. If running on static GitHub Pages or server returned empty, query rss2json on Google News Indonesia RSS
+  if (liveFetchedItems.length === 0) {
+    try {
+      const cleanShort = resolvedName.replace(/\b(Tbk|PT|Persero|Indonesia)\b/gi, '').trim();
+      const query = cleanShort
+        ? `"${cleanTicker}" OR "${cleanShort}" saham BEI`
+        : `"${cleanTicker}" saham BEI`;
+      const gNewsUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(
+        query
+      )}&hl=id&gl=ID&ceid=ID:id`;
+      const rssItems = await fetchRssFeedItems(
+        gNewsUrl,
+        `Google News BEI (${cleanTicker})`,
+        'DOMESTIC',
+        6
+      );
+      for (const item of rssItems) {
+        liveFetchedItems.push({
+          ...item,
+          ticker: cleanTicker,
+          impactedSectors: [resolvedSector],
+          emitenCategory: classifyEmitenNewsCategory(item.title, item.summary)
+        });
+      }
+    } catch {
+      // fallback below
+    }
+  }
+
+  const radarBaseline = buildEmitenCorporateActionRadarBaseline(
+    cleanTicker,
+    resolvedName,
+    resolvedSector,
+    stockMetrics
+  );
+
+  return [...liveFetchedItems, ...radarBaseline];
+}
+
+/**
+ * Generates an on-demand Pre-Buy Fundamental & News Conviction Analysis
+ * Uses Server-Side Gemini API (/api/ai/inspect-emiten) when available, with deterministic
+ * Joeliardi Sunendar + OOS Quantitative structured synthesis fallback for GitHub Pages static mode.
+ */
+export async function requestEmitenAiInspection(params: {
+  stock: StockMetrics;
+  joeliardiEval: JoeliardiOosEvaluation;
+  recentNews: NewsSentimentItem[];
+  userQuestion: string;
+  regimeStatus: string;
+}): Promise<{
+  analysis: string;
+  isAiGenerated: boolean;
+  generatedAt: string;
+}> {
+  const { stock, joeliardiEval, recentNews, userQuestion, regimeStatus } = params;
+
+  if (canUseLocalExpressBackend()) {
+    try {
+      const res = await fetch('/api/ai/inspect-emiten', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stock,
+          joeliardiEval,
+          recentNews,
+          userQuestion,
+          regimeStatus
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.analysis && typeof data.analysis === 'string') {
+          return {
+            analysis: data.analysis,
+            isAiGenerated: true,
+            generatedAt: data.generatedAt || new Date().toISOString()
+          };
+        }
+      }
+    } catch {
+      // fall through to structured quantitative-fundamental engine below
+    }
+  }
+
+  // Deterministic Joeliardi Sunendar + Out-of-Sample (OOS) Quantitative Synthesis (Static / Offline Mode)
+  const divYield = stock.dividendYieldPct ?? 0;
+  const topHeadlines = recentNews
+    .slice(0, 3)
+    .map((n) => `• [${n.emitenCategory || 'BERITA'}] ${n.title}`)
+    .join('\n');
+
+  const questionFocus = userQuestion.trim()
+    ? `Menjawab fokus pertanyaan Anda ("${userQuestion.trim()}"):`
+    : 'Evaluasi kelayakan pra-beli pada harga pasar saat ini:';
+
+  const verdictText = stock.isHscFlagged
+    ? `HINDARI / JANGAN BELI (AVOID HSC). ${stock.ticker} terindikasi risiko spekulatif / konsentrasi tinggi (${stock.hscReason || 'HSC'}) dan dikunci di zona Rotate Out. Sesuai disiplin Joeliardi Sunendar dan filter OOS DeMiguel, lindungi modal Anda dan alihkan ke emiten Top Decile ber-Value tinggi.`
+    : joeliardiEval.marginOfSafetyPct >= 10 && stock.dmuValueScore >= 6.8
+    ? `LAYAK AKUMULASI BERTAHAP (HIGH CONVICTION VALUE). ${stock.ticker} memiliki kombinasi fundamental sehat (ROE ${stock.roe}% > Cost of Equity 10,5%, DER ${stock.debtToEquity}x), dividen nyata (${divYield.toFixed(2)}%), dan diskon Margin of Safety +${joeliardiEval.marginOfSafetyPct}% terhadap nilai intrinsik Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')}.`
+    : stock.dmuCompositeScore >= 6.5 && !stock.isHscFlagged
+    ? `PERTAHANKAN / BELI SAAT KOREKSI WAJAR (WATCHLIST QUALITY). Kualitas bisnis ${stock.ticker} tergolong solid (Skor Komposit OOS ${stock.dmuCompositeScore}/10, Rank Top ${stock.dmuRankPct}%), namun perhatikan Margin of Safety saat ini (${joeliardiEval.marginOfSafetyPct}%) agar tetap disiplin pada harga beli.`
+    : `TUNDA PEMBELIAN / SELEKTIF (LOW CONVICTION). Skor komposit OOS (${stock.dmuCompositeScore}/10) atau valuasi Margin of Safety (${joeliardiEval.marginOfSafetyPct}%) belum memberikan bantalan keamanan yang memadai pada rezim IHSG ${regimeStatus}.`;
+
+  const fallbackAnalysis = `
+1. **Bedah Kualitas Fundamental & Neraca (Prinsip Joeliardi Sunendar)**
+${stock.ticker} (${stock.name}) di sektor ${stock.sector} mencatatkan ROE sebesar ${stock.roe.toFixed(1)}% dan Operating Margin ${stock.operatingMargin.toFixed(1)}%. Dalam kacamata Bapak Fundamental Indonesia Joeliardi Sunendar, bisnis yang unggul wajib menghasilkan ROE di atas Cost of Equity Indonesia (~10,5%) secara konsisten tanpa ditopang utang berlebihan. Struktur neraca ${stock.ticker} menunjukkan DER ${stock.debtToEquity.toFixed(2)}x (${stock.debtToEquity <= 0.8 ? 'konservatif & sehat' : 'perlu pemantauan beban bunga'}) dengan imbal hasil dividen tunai TTM ${divYield.toFixed(2)}% (Skor Kualitas Bisnis: ${joeliardiEval.businessQualityScore}/100, Kesehatan Neraca: ${joeliardiEval.balanceSheetHealthScore}/100).
+
+2. **Validasi Kuantitatif Out-of-Sample (OOS) & Valuasi Margin of Safety**
+Berdasarkan kalibrasi nilai intrinsik Joeliardi-Graham, estimasi Harga Wajar ${stock.ticker} berada di Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (Fair PER ${joeliardiEval.joeliardiFairPer}x vs Implied PER ${joeliardiEval.impliedPer}x; Fair PBV ${joeliardiEval.joeliardiFairPbv}x vs Implied PBV ${joeliardiEval.impliedPbv}x). Pada harga live Rp ${stock.lastPrice.toLocaleString('id-ID')}, Margin of Safety tercatat sebesar ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%. Secara lintas-sektor Out-of-Sample (OOS), ${stock.ticker} meraih Skor Value ${stock.dmuValueScore.toFixed(1)}/10, Low-Vol ${stock.dmuLowVolScore.toFixed(1)}/10, dan Skor Komposit ${stock.dmuCompositeScore.toFixed(2)}/10 (Peringkat Top ${stock.dmuRankPct}%).
+
+3. **Evaluasi Berita Terkini, Corporate Action & Risiko Isu/HSC**
+Status saringan HSC: ${stock.isHscFlagged ? `TERINDIKASI HSC (${stock.hscReason})` : 'BEBAS INDIKASI HSC (Clean Institutional/Fundamental)'}.
+Rangkuman radar berita & aksi korporasi terkini ${stock.ticker}:
+${topHeadlines || '• Belum ada anomali berita negatif; pantau jadwal RUPS dan laporan keuangan kuartalan.'}
+
+4. **Kesimpulan Pra-Beli (Verdict & Strategi Eksekusi)**
+${questionFocus}
+**Grade Keyakinan: ${joeliardiEval.convictionGrade} (Skor ${joeliardiEval.totalConvictionScore}/100)**. ${verdictText}
+`.trim();
+
+  return {
+    analysis: fallbackAnalysis,
+    isAiGenerated: false,
+    generatedAt: new Date().toISOString()
+  };
+}
+

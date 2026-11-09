@@ -21,7 +21,8 @@ import {
   DEFAULT_NEWS_SENTIMENT,
   DEFAULT_USER_PORTFOLIO_HOLDINGS,
   rankUniverseWithBuffer,
-  REAL_IHSG_30D_RETURNS
+  REAL_IHSG_30D_RETURNS,
+  toggleManualHscTicker
 } from './utils/quantEngine';
 import {
   buildIdx100StockUniverse,
@@ -63,7 +64,7 @@ import {
 } from './components/TerminalSecurityGate';
 import { Sun, Moon, Cloud, RefreshCw, Lock, KeyRound } from 'lucide-react';
 
-const SCREENER_CACHE_KEY = 'nostradamus_dmu24_screener_v11_live_intraday';
+const SCREENER_CACHE_KEY = 'nostradamus_dmu24_screener_v12_hsc_value';
 const PORTFOLIO_CACHE_KEY = 'nostradamus_dmu24_portfolio_v4';
 const THEME_CACHE_KEY = 'nostradamus_theme_mode_v1';
 
@@ -954,6 +955,18 @@ export default function App() {
     handleMasterSyncAll(true, defaultList);
   };
 
+  const handleToggleHscFlag = (ticker: string, currentlyFlagged: boolean) => {
+    toggleManualHscTicker(ticker, currentlyFlagged);
+    setStocks((prev) => {
+      const next = rankUniverseWithBuffer(prev, rebalanceBufferPct);
+      if (isGitHubCloudConfigured(githubConfig) && githubConfig.autoSyncOnEdit) {
+        const bundle = buildCloudBundle(undefined, undefined, next, undefined);
+        handlePushToGitHub(githubConfig, bundle, true);
+      }
+      return next;
+    });
+  };
+
   const handleExportBackupJson = () => {
     const bundle = buildCloudBundle();
     const blob = new Blob([JSON.stringify(bundle, null, 2)], {
@@ -1303,10 +1316,12 @@ export default function App() {
               <ScreeningTable
                 stocks={stocks}
                 rebalanceBufferPct={rebalanceBufferPct}
+                regimeStatus={regime.status}
                 onLoadIdx100Universe={handleLoadIdx100Universe}
                 onAddStock={handleAddStock}
                 onRemoveStock={handleRemoveStock}
                 onResetUniverse={handleResetUniverse}
+                onToggleHscFlag={handleToggleHscFlag}
               />
             )}
 
@@ -1341,6 +1356,9 @@ export default function App() {
               <MarketNewsSentiment
                 news={newsItems}
                 isLoadingNews={isLoadingNews}
+                stocks={stocks}
+                regimeStatus={regime.status}
+                onToggleHscFlag={handleToggleHscFlag}
               />
             )}
           </>

@@ -21,6 +21,13 @@ export interface MacroIndicator {
   isLiveFetched?: boolean;
 }
 
+export type EmitenNewsCategory =
+  | 'DIVIDEN_RUPS'
+  | 'CORPORATE_ACTION_MA'
+  | 'FINANCIAL_EARNINGS'
+  | 'REGULATORY_UMA_ISSUE'
+  | 'GENERAL_EMITEN';
+
 export interface NewsSentimentItem {
   id: string;
   title: string;
@@ -31,6 +38,8 @@ export interface NewsSentimentItem {
   summary?: string;
   sentiment: 'RISK_ON' | 'RISK_OFF' | 'COMMODITY_BULL' | 'HAWKISH_RATES' | 'NEUTRAL';
   impactedSectors: string[];
+  ticker?: string;
+  emitenCategory?: EmitenNewsCategory;
 }
 
 export interface StockMetrics {
@@ -48,9 +57,9 @@ export interface StockMetrics {
   debtToEquity: number;    // Debt-to-Equity ratio (x)
   operatingMargin: number; // Operating Margin (%)
   // 4-Factor Standardized Scores (1.0 - 10.0)
-  dmuMomScore: number;     // Momentum (12-1) factor score (30% weight)
-  dmuLowVolScore: number;  // Low-Volatility factor score (30% weight)
-  dmuValueScore: number;   // Value / Cashflow Yield proxy score (25% weight)
+  dmuMomScore: number;     // Momentum (12-1) factor score (22% weight)
+  dmuLowVolScore: number;  // Low-Volatility factor score (28% weight)
+  dmuValueScore: number;   // Value / Cashflow Yield proxy score (35% weight)
   dmuSizeScore: number;    // Size & Liquidity efficiency score (15% weight)
   dmuCompositeScore: number; // 4-Factor Composite Score (1.0 - 10.0)
   dmuRankPct: number;      // Percentile rank in current universe (1% = best, 100% = worst)
@@ -63,6 +72,34 @@ export interface StockMetrics {
   isLiquid?: boolean;
   dividendYieldPct?: number;
   lastSyncedAt?: string;
+  isHscFlagged?: boolean;
+  hscSource?: 'MANUAL' | 'AUTO_QUANT' | 'NONE';
+  hscReason?: string;
+}
+
+export interface JoeliardiOosEvaluation {
+  ticker: string;
+  name: string;
+  sector: string;
+  lastPrice: number;
+  estimatedEpsIdr: number;
+  estimatedBvpsIdr: number;
+  impliedPer: number;
+  impliedPbv: number;
+  joeliardiFairPer: number;
+  joeliardiFairPbv: number;
+  intrinsicValueIdr: number;
+  marginOfSafetyPct: number;
+  valuationVerdict: 'STRONG_UNDERVALUED' | 'FAIR_QUALITY' | 'FULLY_VALUED' | 'OVERVALUED_OR_TRAP';
+  valuationLabel: string;
+  businessQualityScore: number;   // 0 - 100 (Joeliardi Pillar 1: ROE vs Cost of Equity, Op Margin, Moat)
+  balanceSheetHealthScore: number; // 0 - 100 (Joeliardi Pillar 2: DER, Solvency, Cashflow/Dividend Reality)
+  valuationSafetyScore: number;   // 0 - 100 (Joeliardi Pillar 3: Margin of Safety, Earnings Yield vs SBN)
+  oosQuantRobustnessScore: number; // 0 - 100 (Pillar 4: Out-of-Sample Cross-Sectional Factor & Low-Vol Stability)
+  totalConvictionScore: number;   // 0 - 100
+  convictionGrade: 'A+ (CORE CONVICTION)' | 'A (SOLID VALUE)' | 'B (WATCHLIST / HOLD)' | 'C (SPECULATIVE)' | 'D (AVOID / HSC)';
+  keyStrengths: string[];
+  keyRisks: string[];
 }
 
 export interface MarketRegime {

@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
+import { GoogleGenAI } from '@google/genai';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -464,6 +465,155 @@ async function startServer() {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'News RSS error';
       res.status(500).json({ error: message, items: [] });
+    }
+  });
+
+  // 4. Emiten-Specific News, Corporate Actions & Issue Radar (Google News Indonesia RSS + Yahoo Finance RSS)
+  app.get('/api/news/emiten', async (req, res) => {
+    try {
+      const rawTicker = String(req.query.ticker || '')
+        .trim()
+        .toUpperCase()
+        .replace(/\.JK$/i, '')
+        .replace(/[^A-Z]/g, '')
+        .slice(0, 4);
+      const rawName = String(req.query.name || '').trim();
+
+      if (!rawTicker) {
+        res.status(400).json({ error: 'Missing ticker parameter', items: [] });
+        return;
+      }
+
+      const cleanCompanyShort = rawName
+        .replace(/\b(Tbk|PT|Persero|Indonesia)\b/gi, '')
+        .trim();
+      const queryTerm = cleanCompanyShort
+        ? `"${rawTicker}" OR "${cleanCompanyShort}" saham BEI dividen aksi korporasi`
+        : `"${rawTicker}" saham BEI emiten`;
+
+      const googleNewsRssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(
+        queryTerm
+      )}&hl=id&gl=ID&ceid=ID:id`;
+      const yahooTickerRssUrl = `https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(
+        `${rawTicker}.JK`
+      )}&region=US&lang=en-US`;
+
+      const [gNewsItems, yfItems] = await Promise.all([
+        fetchRssXmlDirect(googleNewsRssUrl, `Radar Emiten ${rawTicker} (ID)`, 'DOMESTIC', 8),
+        fetchRssXmlDirect(yahooTickerRssUrl, `Yahoo Finance ${rawTicker}.JK`, 'DOMESTIC', 4)
+      ]);
+
+      const merged = [...gNewsItems, ...yfItems].map((item, idx) => ({
+        ...item,
+        id: `emiten_${rawTicker}_${Date.now()}_${idx}`,
+        ticker: rawTicker
+      }));
+
+      res.json({
+        ticker: rawTicker,
+        items: merged
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Emiten news error';
+      res.status(500).json({ error: message, items: [] });
+    }
+  });
+
+  // 5. Server-Side Gemini AI Fundamental & Latest News Inspector (Joeliardi Sunendar + OOS Quantitative Framework)
+  app.post('/api/ai/inspect-emiten', async (req, res) => {
+    try {
+      const {
+        stock,
+        joeliardiEval,
+        recentNews,
+        userQuestion,
+        regimeStatus
+      } = req.body || {};
+
+      if (!stock || !stock.ticker) {
+        res.status(400).json({ error: 'Data emiten tidak lengkap.' });
+        return;
+      }
+
+      if (!process.env.GEMINI_API_KEY) {
+        res.status(503).json({
+          error: 'GEMINI_API_KEY belum terkonfigurasi di server.',
+          fallbackRequired: true
+        });
+        return;
+      }
+
+      const ai = new GoogleGenAI({
+        apiKey: process.env.GEMINI_API_KEY,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build'
+          }
+        }
+      });
+
+      const newsContext =
+        Array.isArray(recentNews) && recentNews.length > 0
+          ? recentNews
+              .slice(0, 6)
+              .map(
+                (n: any, i: number) =>
+                  `${i + 1}. [${n.emitenCategory || 'BERITA'}] ${n.title} (${n.source} - ${n.publishedAt})`
+              )
+              .join('\n')
+          : 'Tidak ada berita anomali spesifik terbaru; gunakan evaluasi aksi korporasi & fundamental terkini.';
+
+      const promptText = `
+Anda adalah Analis Ekuitas Kuantitatif & Fundamental Senior Pasar Modal Indonesia (BEI / IHSG).
+Lakukan bedah mendalam pra-beli (Pre-Buy Conviction Analysis) untuk emiten berikut dengan menggabungkan:
+1. Prinsip Bapak Fundamental Indonesia (Joeliardi Sunendar):
+   - Kualitas Bisnis & Economic Moat (ROE vs Cost of Equity Indonesia ~10,5%, Operating Margin, daya tahan laba).
+   - Kesehatan Neraca (Debt-to-Equity Ratio / DER, risiko solvabilitas, kualitas kas nyata & dividen).
+   - Valuasi Nilai Intrinsik & Margin of Safety (Harga Pasar vs Nilai Intrinsik Joeliardi-Graham, Implied PER & PBV vs Fair PER & PBV).
+2. Prinsip Kuantitatif Out-of-Sample (OOS) 4-Faktor DeMiguel:
+   - Skor Value (bobot 35%), Low-Volatility (28%), Momentum (22%), dan Size/Liquidity (15%).
+   - Deteksi risiko HSC (High Speculative Concentration / Cornered / Gorengan) dan ketahanan terhadap rezim IHSG saat ini (${regimeStatus || 'WASPADA'}).
+3. Berita Terkini, Corporate Action & Isu Spesifik Emiten:
+${newsContext}
+
+DATA FUNDAMENTAL & KUANTITATIF LIVE EMITEN:
+- Ticker: ${stock.ticker} (${stock.name}) | Sektor: ${stock.sector}
+- Harga Pasar Terkini: Rp ${Number(stock.lastPrice).toLocaleString('id-ID')} (Perubahan 1D: ${stock.change1D}%, 30D: ${stock.return30D}%)
+- ROE: ${stock.roe}% | Operating Margin: ${stock.operatingMargin}% | DER: ${stock.debtToEquity}x | Dividend Yield TTM: ${stock.dividendYieldPct || 0}%
+- Beta 1Y: ${stock.beta1Y}x | Volatilitas Tahunan: ${stock.volatilityAnn}%
+- Skor 4-Faktor OOS: Komposit ${stock.dmuCompositeScore}/10 (Rank Top ${stock.dmuRankPct}%, Zona: ${stock.dmuZone}) | Value: ${stock.dmuValueScore}/10 | Low-Vol: ${stock.dmuLowVolScore}/10 | Momentum: ${stock.dmuMomScore}/10 | Size: ${stock.dmuSizeScore}/10
+- Status Indikasi HSC: ${stock.isHscFlagged ? `TERINDIKASI HSC (${stock.hscReason || 'Risiko Spekulatif Tinggi'})` : 'BEBAS INDIKASI HSC (Clean)'}
+- Valuasi Joeliardi-Graham: Nilai Intrinsik Rp ${Number(joeliardiEval?.intrinsicValueIdr || stock.lastPrice).toLocaleString('id-ID')} | Margin of Safety: ${joeliardiEval?.marginOfSafetyPct ?? 0}% | Implied PER: ${joeliardiEval?.impliedPer ?? '-'}x (Fair PER: ${joeliardiEval?.joeliardiFairPer ?? '-'}x) | Implied PBV: ${joeliardiEval?.impliedPbv ?? '-'}x (Fair PBV: ${joeliardiEval?.joeliardiFairPbv ?? '-'}x) | Conviction Grade: ${joeliardiEval?.convictionGrade ?? '-'}
+
+FOKUS PERTANYAAN / PERMINTAAN KHUSUS USER:
+"${userQuestion ? String(userQuestion).trim() : 'Evaluasi kesehatan fundamental terkini, dampak berita/corporate action terbaru, dan apakah saham ini layak dibeli pada harga sekarang.'}"
+
+Format jawaban Anda dalam Bahasa Indonesia yang tajam, objektif, bebas basa-basi, dan terstruktur dalam 4 bagian ringkas (gunakan sekitar 250-350 kata):
+1. **Bedah Kualitas Fundamental & Neraca (Prinsip Joeliardi Sunendar)**
+2. **Validasi Kuantitatif Out-of-Sample (OOS) & Valuasi Margin of Safety**
+3. **Evaluasi Berita Terkini, Corporate Action & Risiko Isu/HSC**
+4. **Kesimpulan Pra-Beli (Verdict & Strategi Eksekusi bagi User)**
+`.trim();
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: promptText,
+        config: {
+          systemInstruction:
+            'Anda adalah analis fundamental (gaya Joeliardi Sunendar) dan kuantitatif Out-of-Sample (OOS) pasar saham Indonesia (BEI). Berikan analisis yang jujur, skeptis terhadap saham gorengan/HSC, mengutamakan Margin of Safety dan arus kas/dividen nyata, serta hindari penggunaan tanda pisah em-dash berlebihan.'
+        }
+      });
+
+      const analysisText = (response.text ?? '').trim();
+      res.json({
+        ticker: stock.ticker,
+        analysis: analysisText,
+        generatedAt: new Date().toISOString()
+      });
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : 'Gagal menghasilkan analisis AI emiten.';
+      res.status(500).json({ error: message, fallbackRequired: true });
     }
   });
 

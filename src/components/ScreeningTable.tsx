@@ -1,6 +1,10 @@
 import React, { useState, useMemo } from 'react';
-import { DeMiguelBufferZone, StockMetrics } from '../types/quant';
-import { enrichStockMetrics, rankUniverseWithBuffer } from '../utils/quantEngine';
+import { DeMiguelBufferZone, MarketRegimeStatus, StockMetrics } from '../types/quant';
+import {
+  enrichStockMetrics,
+  rankUniverseWithBuffer,
+  toggleManualHscTicker
+} from '../utils/quantEngine';
 import { IDX_SECTOR_CATALOG, fetchLiveIdxTicker } from '../utils/liveMarketFetcher';
 import {
   formatIndonesianDecimalInput,
@@ -9,6 +13,7 @@ import {
 } from '../utils/numberFormat';
 import { MetricTooltip } from './MetricTooltip';
 import { MultiSelectDropdown } from './MultiSelectDropdown';
+import { EmitenFundamentalInspectorModal } from './EmitenFundamentalInspectorModal';
 import {
   ArrowUpDown,
   ArrowUp,
@@ -26,16 +31,20 @@ import {
   CheckSquare,
   Square,
   X,
-  Filter
+  Filter,
+  ShieldAlert,
+  Scale
 } from 'lucide-react';
 
 interface ScreeningTableProps {
   stocks: StockMetrics[];
   rebalanceBufferPct?: number;
+  regimeStatus?: MarketRegimeStatus;
   onLoadIdx100Universe?: () => void;
   onAddStock: (newStock: StockMetrics) => void;
   onRemoveStock: (ticker: string) => void;
   onResetUniverse: () => void;
+  onToggleHscFlag?: (ticker: string, currentlyFlagged: boolean) => void;
 }
 
 type SortField =
@@ -50,10 +59,12 @@ type SortField =
 export function ScreeningTable({
   stocks,
   rebalanceBufferPct = 40,
+  regimeStatus = 'WASPADA',
   onLoadIdx100Universe,
   onAddStock,
   onRemoveStock,
-  onResetUniverse
+  onResetUniverse,
+  onToggleHscFlag
 }: ScreeningTableProps) {
   const [sortField, setSortField] = useState<SortField>('dmuCompositeScore');
   const [sortAsc, setSortAsc] = useState<boolean>(false);
@@ -67,6 +78,11 @@ export function ScreeningTable({
   const [selectedCompareTickers, setSelectedCompareTickers] = useState<string[]>([]);
   const [filterOnlyCompared, setFilterOnlyCompared] = useState<boolean>(false);
   const [showCompareMatrix, setShowCompareMatrix] = useState<boolean>(true);
+
+  // HSC & Fundamental Inspector states
+  const [hscRevision, setHscRevision] = useState<number>(0);
+  const [hscQuickInput, setHscQuickInput] = useState<string>('');
+  const [inspectedTicker, setInspectedTicker] = useState<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [pageSize, setPageSize] = useState<number>(100);
@@ -91,8 +107,39 @@ export function ScreeningTable({
 
   const rankedStocks = useMemo(
     () => rankUniverseWithBuffer(stocks, rebalanceBufferPct),
-    [stocks, rebalanceBufferPct]
+    [stocks, rebalanceBufferPct, hscRevision]
   );
+
+  const inspectedStockObj = useMemo(() => {
+    if (!inspectedTicker) return null;
+    return rankedStocks.find((s) => s.ticker === inspectedTicker) || null;
+  }, [rankedStocks, inspectedTicker]);
+
+  const handleToggleHscLocalAndParent = (ticker: string, currentlyFlagged?: boolean) => {
+    const target = rankedStocks.find((s) => s.ticker === ticker);
+    const activeFlag =
+      currentlyFlagged !== undefined ? currentlyFlagged : Boolean(target?.isHscFlagged);
+    if (onToggleHscFlag) {
+      onToggleHscFlag(ticker, activeFlag);
+    } else {
+      toggleManualHscTicker(ticker, activeFlag);
+    }
+    setHscRevision((prev) => prev + 1);
+  };
+
+  const handleQuickHscSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const clean = hscQuickInput
+      .trim()
+      .toUpperCase()
+      .replace(/\.JK$/i, '')
+      .replace(/[^A-Z]/g, '')
+      .slice(0, 4);
+    if (clean.length === 4) {
+      handleToggleHscLocalAndParent(clean);
+      setHscQuickInput('');
+    }
+  };
 
   const liveFetchedCount = useMemo(
     () => rankedStocks.filter((s) => s.isLiveFetched).length,
@@ -114,6 +161,19 @@ export function ScreeningTable({
     [rankedStocks]
   );
 
+  const hscFlaggedCount = useMemo(
+    () => rankedStocks.filter((s) => s.isHscFlagged).length,
+    [rankedStocks]
+  );
+
+  const cleanNoHscCount = useMemo(
+    () =>
+      rankedStocks.filter(
+        (s) => s.isLiquid !== false && s.lastPrice >= 68 && !s.isHscFlagged
+      ).length,
+    [rankedStocks]
+  );
+
   const uniqueCatalogSectors = useMemo(() => {
     const set = new Set(IDX_SECTOR_CATALOG.map((c) => c.sector));
     return Array.from(set);
@@ -130,9 +190,9 @@ export function ScreeningTable({
   const qualityDropdownOptions = useMemo(
     () => [
       {
-        value: 'LIQUID_ONLY',
-        label: 'Saham Likuid Aktif (≥ Rp 68)',
-        count: liquidStockCount
+        value: 'CLEAN_NO_HSC',
+        label: 'Bebas Indikasi HSC (Clean Value & Likuid)',
+        count: cleanNoHscCount
       },
       {
         value: 'DIVIDEND_ONLY',
@@ -140,12 +200,22 @@ export function ScreeningTable({
         count: dividendStockCount
       },
       {
+        value: 'LIQUID_ONLY',
+        label: 'Saham Likuid Aktif (≥ Rp 68)',
+        count: liquidStockCount
+      },
+      {
+        value: 'HSC_FLAGGED_ONLY',
+        label: 'Terindikasi / Berlabel HSC (TRUK, ROCK, dll.)',
+        count: hscFlaggedCount
+      },
+      {
         value: 'ILLIQUID_ONLY',
         label: 'Illiquid / Gocap / Suspensi',
         count: illiquidStockCount
       }
     ],
-    [liquidStockCount, dividendStockCount, illiquidStockCount]
+    [cleanNoHscCount, dividendStockCount, liquidStockCount, hscFlaggedCount, illiquidStockCount]
   );
 
   const zoneDropdownOptions = useMemo(
@@ -214,7 +284,11 @@ export function ScreeningTable({
           const isLiq = s.isLiquid !== false && s.lastPrice >= 68;
           const isDiv = (s.dividendYieldPct ?? 0) > 0;
           const isIlliq = s.isLiquid === false || s.lastPrice < 68;
+          const isHsc = Boolean(s.isHscFlagged);
+          const isClean = isLiq && !isHsc;
           const matchesAnyQuality =
+            (selectedQualities.includes('CLEAN_NO_HSC') && isClean) ||
+            (selectedQualities.includes('HSC_FLAGGED_ONLY') && isHsc) ||
             (selectedQualities.includes('LIQUID_ONLY') && isLiq) ||
             (selectedQualities.includes('DIVIDEND_ONLY') && isDiv) ||
             (selectedQualities.includes('ILLIQUID_ONLY') && isIlliq);
@@ -355,6 +429,12 @@ export function ScreeningTable({
     if (stock.isLiquid === false || stock.lastPrice < 68) {
       return {
         text: 'Illiquid (Blokir)',
+        color: 'text-[#9E2A2B] font-bold'
+      };
+    }
+    if (stock.isHscFlagged) {
+      return {
+        text: `HSC Blokir (${stock.dmuRankPct}%)`,
         color: 'text-[#9E2A2B] font-bold'
       };
     }
@@ -709,7 +789,7 @@ export function ScreeningTable({
                 </button>
               </div>
             )}
-            <span>Bobot: 28% Low-Vol · 34% Mom · 23% Value · 15% Size</span>
+            <span>Bobot Value-First: 35% Value · 28% Low-Vol · 22% Mom · 15% Size</span>
             <span>·</span>
             <button
               type="button"
@@ -719,6 +799,69 @@ export function ScreeningTable({
               Reset Full JCI ({IDX_SECTOR_CATALOG.length} Emiten)
             </button>
           </div>
+        </div>
+
+        {/* HSC Labeling & Joeliardi Sunendar Fundamental Inspector Control Strip */}
+        <div className="p-3 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="inline-flex items-center gap-1.5 font-bold text-[#9E2A2B]">
+              <ShieldAlert className="w-3.5 h-3.5" />
+              <span>Filter &amp; Label Saham HSC ({hscFlaggedCount} Diblokir ke Rotate Out):</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedQualities((prev) =>
+                  prev.includes('CLEAN_NO_HSC')
+                    ? prev.filter((q) => q !== 'CLEAN_NO_HSC')
+                    : ['CLEAN_NO_HSC']
+                );
+                setCurrentPage(1);
+              }}
+              className={`px-2.5 py-1 text-[11px] font-bold rounded-xs border transition-colors cursor-pointer ${
+                selectedQualities.includes('CLEAN_NO_HSC')
+                  ? 'bg-[#059669] text-white border-[#059669]'
+                  : 'bg-[#FFFFFF] text-[#0D5C46] border-[#059669]/40 hover:border-[#059669]'
+              }`}
+            >
+              Hanya Saham Clean / Bebas HSC ({cleanNoHscCount})
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedQualities((prev) =>
+                  prev.includes('HSC_FLAGGED_ONLY')
+                    ? prev.filter((q) => q !== 'HSC_FLAGGED_ONLY')
+                    : ['HSC_FLAGGED_ONLY']
+                );
+                setCurrentPage(1);
+              }}
+              className={`px-2.5 py-1 text-[11px] font-bold rounded-xs border transition-colors cursor-pointer ${
+                selectedQualities.includes('HSC_FLAGGED_ONLY')
+                  ? 'bg-[#E11D48] text-white border-[#E11D48]'
+                  : 'bg-[#FFFFFF] text-[#9E2A2B] border-[#E11D48]/40 hover:border-[#E11D48]'
+              }`}
+            >
+              Lihat Daftar HSC ({hscFlaggedCount} termasuk TRUK, ROCK)
+            </button>
+          </div>
+
+          <form onSubmit={handleQuickHscSubmit} className="flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              maxLength={4}
+              value={hscQuickInput}
+              onChange={(e) => setHscQuickInput(e.target.value.toUpperCase())}
+              placeholder="Kode HSC (mis: TRUK, ROCK)..."
+              className="w-44 px-2.5 py-1 text-xs font-mono font-bold uppercase bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs focus:outline-none focus:border-[#E11D48]"
+            />
+            <button
+              type="submit"
+              className="px-3 py-1 text-[11px] font-bold bg-[#9E2A2B] hover:bg-[#7F1D1D] text-white rounded-xs transition-colors cursor-pointer"
+            >
+              Toggle Label HSC
+            </button>
+          </form>
         </div>
 
         {/* Multi-Select Stock Comparison Control Strip */}
@@ -1273,11 +1416,13 @@ export function ScreeningTable({
                   <MetricTooltip
                     label={`Buffer ${rebalanceBufferPct}%`}
                     title="Zona Rekomendasi Rebalancing Buffer"
-                    laymanExplanation="Panduan tindakan praktis berdasarkan peringkat saham: 'Top Buy' = prioritas beli; 'Hold' = tetap simpan; 'Rotate' = kandidat jual/ganti; 'Illiquid (Blokir)' = diblokir dari Keranjang."
+                    laymanExplanation="Panduan tindakan praktis berdasarkan peringkat saham: 'Top Buy' = prioritas beli (wajib bebas HSC & Value tinggi); 'Hold' = tetap simpan; 'Rotate' = kandidat jual/ganti; 'HSC Blokir' = saham spekulatif/cornered yang diblokir otomatis."
                     align="right"
                   />
                 </th>
-                <th className="py-2.5 px-2 text-center w-10">Hapus</th>
+                <th className="py-2.5 px-2.5 text-center w-[150px]">
+                  Inspect &amp; Aksi HSC
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#E4E2DD] text-xs">
@@ -1300,7 +1445,7 @@ export function ScreeningTable({
                     <tr
                       key={stock.ticker}
                       className={`hover:bg-[#FAF9F6] transition-colors ${
-                        !isStockLiquid ? 'opacity-75' : ''
+                        !isStockLiquid || stock.isHscFlagged ? 'opacity-80' : ''
                       } ${isSelectedForCompare ? 'bg-[#FAF9F6]/90' : ''}`}
                     >
                       <td className="py-2.5 px-2.5 text-center">
@@ -1321,13 +1466,24 @@ export function ScreeningTable({
                       <td className="py-2.5 px-2.5 font-bold text-[#D97706] bb-amber whitespace-nowrap">
                         <div className="flex items-center gap-1">
                           <span>{stock.ticker}</span>
+                          {stock.isHscFlagged && (
+                            <span
+                              title={
+                                stock.hscReason ||
+                                'Terindikasi HSC (High Speculative Concentration) — Diblokir dari Top Decile Buy'
+                              }
+                              className="inline-flex items-center px-1.5 py-0.5 text-[9px] font-bold text-[#9E2A2B] bg-[#E11D48]/15 border border-[#E11D48]/50 rounded-xs uppercase"
+                            >
+                              HSC
+                            </span>
+                          )}
                         </div>
                         <span className="block text-[10px] font-semibold text-neutral-400">
                           {stock.yfTicker}
                         </span>
                       </td>
 
-                      {/* Emiten, Sector, Dividend/Illiquid Badges & Dedicated New Line for σ · β · ROE */}
+                      {/* Emiten, Sector, Dividend/Illiquid/HSC Badges & Dedicated New Line for σ · β · ROE */}
                       <td className="py-2.5 px-2.5 min-w-[250px]">
                         <div className="flex flex-wrap items-center gap-1.5">
                           <span className="font-bold text-[#111315] text-xs leading-snug">
@@ -1339,6 +1495,14 @@ export function ScreeningTable({
                               className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-bold text-[#0D5C46] bg-[#059669]/10 border border-[#059669]/35 rounded-xs whitespace-nowrap"
                             >
                               DIV {divYield.toFixed(2)}%
+                            </span>
+                          )}
+                          {stock.isHscFlagged && (
+                            <span
+                              title={stock.hscReason || 'Indikasi HSC / Spekulatif Tinggi'}
+                              className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-bold text-[#9E2A2B] bg-[#E11D48]/10 border border-[#E11D48]/35 rounded-xs whitespace-nowrap"
+                            >
+                              AVOID HSC
                             </span>
                           )}
                           {!isStockLiquid && (
@@ -1448,15 +1612,49 @@ export function ScreeningTable({
                         <span className={zoneMeta.color}>{zoneMeta.text}</span>
                       </td>
 
-                      <td className="py-2.5 px-2 text-center">
-                        <button
-                          type="button"
-                          onClick={() => onRemoveStock(stock.ticker)}
-                          title={`Hapus ${stock.ticker}`}
-                          className="text-neutral-400 hover:text-[#9E2A2B] transition-colors cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5 inline" />
-                        </button>
+                      <td className="py-2.5 px-2.5 text-center whitespace-nowrap">
+                        <div className="inline-flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setInspectedTicker(stock.ticker)}
+                            title={`Inspect Fundamental (Joeliardi Sunendar & OOS) + Analisis AI & Berita Terkini ${stock.ticker}`}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-bold bg-[#D97706]/10 hover:bg-[#D97706] text-[#D97706] hover:text-white border border-[#D97706]/40 rounded-xs transition-colors cursor-pointer"
+                          >
+                            <Scale className="w-3 h-3" />
+                            <span>Inspect</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleToggleHscLocalAndParent(
+                                stock.ticker,
+                                Boolean(stock.isHscFlagged)
+                              )
+                            }
+                            title={
+                              stock.isHscFlagged
+                                ? `Lepas label HSC pada ${stock.ticker}`
+                                : `Tandai ${stock.ticker} sebagai saham HSC (Blokir ke Rotate Out)`
+                            }
+                            className={`p-1 rounded-xs border transition-colors cursor-pointer ${
+                              stock.isHscFlagged
+                                ? 'bg-[#E11D48] text-white border-[#E11D48]'
+                                : 'bg-[#FAF9F6] text-neutral-500 border-[#E4E2DD] hover:text-[#9E2A2B] hover:border-[#E11D48]'
+                            }`}
+                          >
+                            <ShieldAlert className="w-3.5 h-3.5" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => onRemoveStock(stock.ticker)}
+                            title={`Hapus ${stock.ticker}`}
+                            className="text-neutral-400 hover:text-[#9E2A2B] transition-colors cursor-pointer p-1"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 inline" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -1466,6 +1664,16 @@ export function ScreeningTable({
           </table>
         </div>
       </div>
+
+      {/* Fundamental & AI Conviction Inspector Modal */}
+      {inspectedStockObj && (
+        <EmitenFundamentalInspectorModal
+          stock={inspectedStockObj}
+          regimeStatus={regimeStatus}
+          onClose={() => setInspectedTicker(null)}
+          onToggleHscFlag={(tk, cur) => handleToggleHscLocalAndParent(tk, cur)}
+        />
+      )}
     </section>
   );
 }

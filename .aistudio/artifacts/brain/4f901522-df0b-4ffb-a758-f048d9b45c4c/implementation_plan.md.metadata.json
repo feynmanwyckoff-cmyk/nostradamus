@@ -1,6 +1,6 @@
 {
-  "summary":  "Rencana perbaikan menyeluruh ekstraksi harga terkini Yahoo Finance (mengutamakan regularMarketPrice & fulldayPrice beserta regularMarketChangePercent/fulldayChangePercent), penyegaran snapshot pasar live 956+ emiten hari ini, sinkronisasi harga di cloud state JSON, dan penguatan jadwal cron GitHub Actions selama jam bursa BEI.",
-  "updatedAt":  "2026-11-09T03:08:24.231617243Z",
+  "summary":  "Rencana implementasi lengkap: (1) Pelabelan saham HSC otomatis + manual & pemblokiran ke Rotate Out dengan prioritas faktor Value, (2) Radar Berita Spesifik Emiten, Corporate Action & Isu Emiten di menu Macro & News Wire, serta (3) Fitur Inspect Emiten di Multifactor Screener dengan Valuasi Fundamental Joeliardi Sunendar + Out-of-Sample (OOS) Quant dan Analisis AI On-Demand berbasis berita & kesehatan fundamental terkini.",
+  "updatedAt":  "2026-11-09T04:39:50.894090049Z",
   "requestFeedback":  true,
   "userFacing":  true
 }
