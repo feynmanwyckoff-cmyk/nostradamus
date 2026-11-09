@@ -1,10 +1,10 @@
 {
   "schemaVersion": "3.0-DEMIGUEL-MF24",
-  "updatedAt": "2026-11-09T10:11:43.240Z",
+  "updatedAt": "2026-11-09T10:12:06.485Z",
   "strategyName": "Vol-Managed Multifactor + 40% Buffer",
   "rebalanceBufferPct": 40,
   "thresholdAnnVol": 18,
-  "capitalIdr": 15658977,
+  "capitalIdr": 16213177,
   "cashReserveIdr": 4300177,
   "holdings": [
     {
@@ -31649,9 +31649,9 @@
     "version": 1,
     "saltBase64": "VnsorMcDCpdVWdhPJy1n1A==",
     "verifierHashBase64": "4n2Mmvj0WYbqgIZRTAlg7solExkFmaKEMwbBRhc0KNM=",
-    "ivBase64": "mMfGJj6OcPVty78+",
-    "cipherTextBase64": "rm0VvgYSnxjbgnVM1ei+RMVLnMrgnqdmnQtgqTWPab3+1LHYiWCu+DbXXQ6EHwU5n3GK000aAlPozhMl7eSJRV1EfjpITMxCAVUJb/KzHT1P5xdTeao0CJYIIJrkVJZQWOQbEoryfIPEAfdrLeEOa4QOsMUulZ7cRoauW+pgEVPoPPHpEhbaqLJrsfp/ZfmzBIkwzbEBBw2rl0T+vTdyyC5E6CgxHp3FdlLKog6JmXLWfE72zoIWVmUrt+nVHfJntzXv83aAsXYwq6k1wOoYFiBysU8Qklp2+09eJVue6DLmNgxWv6EtVfG3zE9NfyAqfVBoiC7ImgEscbR039/C4X+MW9PLPsRK2gLdyZPExWuuApVjOYjQcma6YSAMY7+y3fhAJ1IAIoxcM7vqvOtzQ621ZRNviWK+ZjWtQxfu+/GV2sits6UKB+lQsxOVOOQNCxpePoQDQhXrByiQN1La7Af+o8cLKb7YQR9CmN9QbdOsgvqyxRNDLNxC+cwOkXuIMU4UOrQfiIQfc4WxiYR/uS0TaD7tBEzVUJ+Ai+JvOPwxqsxY5fpSMfqVwe+DiLMB0sBmBa+YLPLJt1p2lhV+1zsHaLAex/R5uUDpszHeTJv+/cGBcQVoMeAeRmL46s0/DMaR9sYiDbYLMj+RbwzEs0V7r+20XtLyOt1S0QfV+EphhwQUjCDZWwJru/fpchq2ovts90XxXLneah0Ke+x/CMvlVSeLrtSEcxV5+lJ5MhUSsjfqFJ/AFrruQYH3opHoOVgIkVS80QDxvSI8Nhs7m+fa8UZ1XpOJJqspQCAfHGGMUzYe74zgndcEABlQCNwCL02sPTezzsywdtPX46oKAwPb5ARYfOIBceT17ymxMXadmOTNwWcAALZKaoFrvLTf+1d4MGnyFKxfkZYvQcsu1SnNMf2vRjjoxNgRmS7/PXPRc+ssyVf6fvaFfw3KIaS0142EWrQ+1b7oKGboaIAB8tJZR3i53q8Qj4K0gucVhessJMMixcq0L1Pdmej541oP518H95uxuYWiu0DMIIat7JfOn1GfQP2MXAL8V+Sbiv3BqOX6LGSL2odOZGElLnfCvTfNJU9a96tsZLywcNtR6e5mQjIujphCwQ5+pnItRT+gjf7ZbsCzeLci78yG1Obh4jGRv578JwUwvAk6SOsaeQyI4plkQbO1W1zVhNLnT6ICqCDhC4AQM4+eLljTbYuJ5+Z4oj+squZDs7hTsK7j/WRSrXvwVXlit1BijOyqvJtV2xs2nV1d+NlzapIV9Ks=",
-    "updatedAt": "2026-11-09T10:11:22.149Z",
+    "ivBase64": "VJgbeH/HTuGVUlEY",
+    "cipherTextBase64": "HlSASltZwbek2aT6JVOoaFdVmD8mUQv38edV4+al9MJ/1WrycAqzeFuEppmF+XpFmL70Ck540PqhEx2Z5m1LAKjh14tq++GRxh25v9dQeDYC6UH1D/Z1EkffBNaSFBvLdOQxnMzdCciI9IoRZhHHr3KbSjh45KKU4DyeYmN1mDu6nN++LsiHmwrIAtCxjdEtd1oe2Q0avTiYt0KBhdl19Jkdktu0lZFADdtXk67fAfJuDxDwWJ2gVq2+HhThrQhz4tQvwzkc+7kjROK3NnvOUCelSjaGmT2sw4wXKmt7V380ZIbMNOyKi6EvkqqpG49KrYvdkbjbeQ3i20PDKfBQfMNd17q6QK6XatU1PIpO5xAjBOXA/gxOqabIdJG3EbQnTYy8V5s86E68otns+uEQXVAEhveAEBS3YNy8GvBbLXCk0AoBy4nkMsnKCfBk16Tnu6DuqeKWtNfTW1vN8DOxlUUMoq5CcNVq3SwsW8Vbe0O9e9eEx0JU6sSBJcu0AYByhP9gzDiYTkEtJOzJpomLrs0qJGj1GplTVmbVTiyGtWeJaZYQAzoEF+l8emyu3Dj01GQKW4Q31EGLIROo3+xbZJnwhWE5+wrLW3D/10cKwO99z1Ot+oTpsb2M35VcukosZP6Tnm5ue/j0muwuJdDiRXIRxQCOuvy3ZXFmcex2m62B5cppgVggSQ2Jy92qpy/ncgHwW+c4YDuzZ9pKLbZcu4Jq5nc5Xg10UAVntc5uRRSEyf1KhJl9Gm+BtN02c8CIC94J0kQbkSnQJbhlcLi7OfABD1C6R2/bDFYTfN+eyockIge79rStJn1zu0JVh9Vs57QiP2tif9IueCw4J2a7Sd+Tau4WR7jvMNYJQa2JTEp8SSAlCoETt/pfjGVfIhmv/6N+Djz1knXMVrZ6d0u+ihY2Qiqg6z9x4zJoaSxd9dBTIgz+9Sz+av8OO5JcCcuDIi2cVyrf1C1bM3HS/0aBDzSoYjRy8TR0PvhQ10MYAluCkr0L2DhUX2LgK0qylOBnzvgFFQ7pcN/RP96IhX8NOKUsdxD92jLy2HifKnsbjv3NyAYjGclvDbmIWlsBYImjys20YHBtiskuPCdRGBmJt2ZrJ51z5pRERacAG4eOF1b1LQH7gxVCTLpq5x7U2FxS21tjNZ90GxSUr7lIqO+R2+Qyn6AIRBz/Di2FXOcd6GbmBlZF8RbqVJEuosZLzbvgv7kNkmwy7e+PWew/yzyFBwAL/Hj4sqGzSI4Kw2VibNHMK6PjHrkQIzIdaaoDGMcxjr7Rh5vtk5eCshW4ykEgVf/DAo0lNLmDcMubKXlCBM+LQH1tQCxvIsxQA7BA3mxcEgW6KkQrd9ubXNrBwTrLGR17JmUfmQT05MEN8wEsq1hQw9MibccQ4/ewCJoxQU2VGf2yNqZ6pyUXae3n3Q==",
+    "updatedAt": "2026-11-09T10:11:43.271Z",
     "scopeHash": "16183f276edb0072818f889699df444fbc598e280371cccb5181968464c88546",
     "originHash": "f3a7d76bbb9d13f907952d46bed14f67d329db4e664ede97c181f9d289e94aa3",
     "repoScope": "feynmanwyckoff-cmyk/nostradamus",
