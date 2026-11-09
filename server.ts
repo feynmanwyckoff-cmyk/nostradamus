@@ -723,12 +723,12 @@ async function startServer() {
         : `Evaluasi mendalam kelayakan beli ${stock.ticker} pada harga Rp ${Number(stock.lastPrice).toLocaleString('id-ID')}, uji potensi value trap vs katalis pertumbuhan, dan berikan strategi eksekusi lot terbaik.`;
 
       const promptText = `
-Lakukan penalaran Komite Investasi mendalam (Deep Causal Quantitative & Fundamental Audit) untuk saham BEI berikut:
+Lakukan analisis Komite Investasi mendalam (Fundamental & Kuantitatif) untuk saham BEI berikut:
 
 DATA FUNDAMENTAL & KUANTITATIF LIVE EMITEN:
 - Emiten: ${stock.ticker} (${stock.name}) | Sektor IDX-IC: ${stock.sector}
-- Kuotasi Pasar Live: Rp ${Number(stock.lastPrice).toLocaleString('id-ID')} | Perubahan 1D: ${stock.change1D}% | Return 30D (1M): ${stock.return30D}%
-- Profitabilitas & Efisiensi Modal (DuPont): ROE ${stock.roe}% (Benchmark Cost of Equity RI: 10,5%, Spread ROE: ${(Number(stock.roe) - 10.5).toFixed(1)}%) | Operating Margin: ${stock.operatingMargin}% | Dividend Yield TTM: ${stock.dividendYieldPct || 0}%
+- Harga Pasar Live: Rp ${Number(stock.lastPrice).toLocaleString('id-ID')} | Perubahan 1D: ${stock.change1D}% | Pergerakan 30 Hari (1M): ${stock.return30D}%
+- Profitabilitas & Efisiensi Modal (DuPont): ROE ${stock.roe}% (Batas wajar biaya modal RI: 10,5%, Selisih ROE: ${(Number(stock.roe) - 10.5).toFixed(1)}%) | Margin Usaha (Operating Margin): ${stock.operatingMargin}% | Dividend Yield TTM: ${stock.dividendYieldPct || 0}%
 - Struktur Neraca & Risiko: DER ${stock.debtToEquity}x | Beta 1Y: ${stock.beta1Y}x | Volatilitas Tahunan: ${stock.volatilityAnn}% | Likuiditas: ${stock.isLiquid !== false && stock.lastPrice >= 68 ? 'Likuid Aktif Institusional' : 'Tidak Likuid / Gocap'}
 - Peringkat 4-Faktor Out-of-Sample (OOS DeMiguel): Skor Komposit ${stock.dmuCompositeScore}/10 (Peringkat Top ${stock.dmuRankPct}%, Zona Buffer: ${stock.dmuZone})
   * Rincian Faktor: Value ${stock.dmuValueScore}/10 (bobot 35%), Low-Vol ${stock.dmuLowVolScore}/10 (bobot 28%), Momentum ${stock.dmuMomScore}/10 (bobot 22%), Size/Liq ${stock.dmuSizeScore}/10 (bobot 15%)
@@ -748,11 +748,12 @@ ${newsContext}
 PERTANYAAN / FOKUS UTAMA INVESTOR:
 "${activePromptFocus}"
 
-INSTRUKSI PENALARAN KOMITE INVESTASI WAJIB (ANTI-TEMPLATE & BEBAS SIMBOL MARKDOWN **):
-1. Berpikirlah secara kausal dan kritis layaknya Chief Investment Officer: bedah hubungan sebab-akibat antar metrik spesifik sektor ${stock.sector}. Jelaskan apakah ROE ${stock.roe}% berasal dari keunggulan margin operasional (${stock.operatingMargin}%) atau sekadar daya ungkit utang (DER ${stock.debtToEquity}x).
-2. Uji hipotesis Value Trap vs Diskon Asimetris: bandingkan Earnings Yield terhadap imbal hasil bebas risiko SBN 10Y (6,75%), dan jelaskan mengapa pasar saat ini menghargai ${stock.ticker} pada PER ${joeliardiEval?.impliedPer ?? '-'}x / PBV ${joeliardiEval?.impliedPbv ?? '-'}x dengan tren 30 hari ${stock.return30D}%.
-3. Jawab fokus analisis secara langsung, tajam, dan terukur pada directAnswerSummary dengan awalan "Hasil Analisis Komite Investasi: " TANPA mengulang kalimat pertanyaan pengguna.
-4. Jangan pernah menulis simbol bintang ganda (**), sintaks markdown mentah, atau menyebut nama tokoh individu di dalam nilai string JSON. Gunakan istilah "Nilai Intrinsik Wajar" dan "Fundamental Kualitas Moat".
+INSTRUKSI GAYA BAHASA & PENALARAN KOMITE INVESTASI WAJIB (HUMANIS, LUGAS & BEBAS KATA KAKU):
+1. Gunakan gaya bahasa analis investasi senior Indonesia yang lugas, natural, humanis, dan enak dibaca. DILARANG KERAS menggunakan kata-kata terjemahan kaku atau teknis yang janggal seperti "kuotasi", "diskon optik", "secara optik", "secara kausal", "trajektori", "pengungkit utang", atau "bermoat". Gunakan padanan yang wajar seperti "Di harga Rp ...", "terlihat murah di atas kertas", "dari sisi fundamental", "pergerakan harga", "rasio utang", dan "berdaya saing kuat".
+2. Bedah kualitas bisnis di sektor ${stock.sector} secara jernih: jelaskan apakah ROE ${stock.roe}% ditopang oleh margin usaha yang sehat (${stock.operatingMargin}%) dengan beban utang yang terjaga (DER ${stock.debtToEquity}x), atau justru banyak bertumpu pada utang. Jangan pernah menulis bahwa efisiensi modal belum terkonfirmasi jika ROE sudah tinggi di atas 15%.
+3. Bandingkan imbal hasil laba (Earnings Yield) terhadap bunga SBN 10Y (6,75%), dan jelaskan secara mengalir mengapa saham ${stock.ticker} saat ini dihargai pada PER ${joeliardiEval?.impliedPer ?? '-'}x / PBV ${joeliardiEval?.impliedPbv ?? '-'}x di tengah pergerakan harga 30 hari terakhir (${stock.return30D}%).
+4. Jawab fokus analisis secara langsung, mengalir, dan terukur pada directAnswerSummary dengan awalan "Hasil Analisis Komite Investasi: " TANPA mengulang kalimat pertanyaan pengguna.
+5. Jangan pernah menulis simbol bintang ganda (**), sintaks markdown mentah, atau menyebut nama tokoh individu di dalam nilai string JSON. Gunakan istilah "Nilai Intrinsik Wajar" dan "Fundamental Kualitas Moat".
 `.trim();
 
       const response = await ai.models.generateContent({
@@ -760,7 +761,7 @@ INSTRUKSI PENALARAN KOMITE INVESTASI WAJIB (ANTI-TEMPLATE & BEBAS SIMBOL MARKDOW
         contents: promptText,
         config: {
           systemInstruction:
-            'Anda adalah Kepala Komite Investasi Kuantitatif & Fundamental Pasar Modal Indonesia (BEI) yang memadukan disiplin Nilai Intrinsik Wajar, Fundamental Kualitas Moat, dekomposisi DuPont, dan faktor Out-of-Sample (OOS) DeMiguel. Analisis Anda bersifat kausal, spesifik terhadap dinamika sektor emiten, membongkar kontradiksi antara harga dan fundamental, langsung menyajikan kesimpulan analisis tanpa mengulang pertanyaan pengguna, serta bebas dari template generik maupun simbol markdown mentah (**).',
+            'Anda adalah Kepala Komite Investasi Pasar Modal Indonesia (BEI) yang berpengalaman. Gaya penulisan Anda seperti analis senior yang berbicara langsung kepada investor: lugas, natural, humanis, mengalir, dan mudah dipahami. Hindari istilah terjemahan kaku atau robotik seperti "kuotasi", "diskon optik", "secara optik", "secara kausal", "trajektori", atau "pengungkit". Sajikan kesimpulan analisis yang tajam dengan mengaitkan harga pasar, efisiensi laba (ROE & ROA), kesehatan neraca (DER), serta perbandingan imbal hasil terhadap SBN 10Y tanpa simbol markdown mentah (**).',
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
@@ -771,11 +772,11 @@ INSTRUKSI PENALARAN KOMITE INVESTASI WAJIB (ANTI-TEMPLATE & BEBAS SIMBOL MARKDOW
               },
               verdictTitle: {
                 type: Type.STRING,
-                description: 'Judul kesimpulan utama satu kalimat tajam tentang tesis investasi saham ini'
+                description: 'Judul kesimpulan utama satu kalimat yang natural, lugas, dan humanis tentang kondisi fundamental dan harga saham ini'
               },
               directAnswerSummary: {
                 type: Type.STRING,
-                description: 'Hasil analisis mendalam 3-4 kalimat secara langsung tanpa mengulang pertanyaan pengguna, dengan penalaran kausal lintas-metrik (tanpa simbol **)'
+                description: 'Hasil analisis mendalam 3-4 kalimat dengan bahasa Indonesia yang natural dan enak dibaca (tanpa kata kaku seperti kuotasi/optik/kausal dan tanpa simbol **)'
               },
               convictionScore: {
                 type: Type.NUMBER,
@@ -784,7 +785,7 @@ INSTRUKSI PENALARAN KOMITE INVESTASI WAJIB (ANTI-TEMPLATE & BEBAS SIMBOL MARKDOW
               chainOfThoughtSteps: {
                 type: Type.ARRAY,
                 items: { type: Type.STRING },
-                description: '4 langkah deduksi kausal berurutan: (1) Audit DuPont & Kualitas Arus Kas, (2) Uji Valuasi vs SBN 10Y & Deteksi Value Trap, (3) Evaluasi Katalis Berita & Struktur Likuiditas/HSC, (4) Keputusan Sizing & Eksekusi'
+                description: '4 langkah penalaran berurutan dengan format "01. Judul: Penjelasan singkat -> Kesimpulan singkat": (1) Bedah DuPont & Kualitas Laba, (2) Perbandingan Valuasi vs SBN 10Y, (3) Evaluasi Tren Harga & Risiko Value Trap, (4) Tinjuauan Katalis Berita & Dividen'
               },
               sections: {
                 type: Type.ARRAY,

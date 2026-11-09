@@ -173,7 +173,10 @@ function renderHighlightedFinancialNarrative(
     'BVPS',
     'EPS',
     'biaya modal',
-    'Cost of Equity'
+    'Cost of Equity',
+    'Nilai Intrinsik Wajar',
+    'Nilai Wajar',
+    'margin usaha'
   ];
 
   const patternParts: string[] = [
@@ -663,7 +666,7 @@ export function EmitenFundamentalInspectorModal({
                   {isSyncingOnDemand ? (
                     <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-[#0284C7] bg-[#0284C7]/10 border border-[#0284C7]/30 px-2 py-0.5 rounded-xs">
                       <RefreshCw className="w-2.5 h-2.5 animate-spin" />
-                      <span>Menarik Kuotasi Live {activeStock.ticker}.JK...</span>
+                      <span>Memperbarui Data Live {activeStock.ticker}.JK...</span>
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-[#0D5C46] bg-[#059669]/10 border border-[#059669]/30 px-2 py-0.5 rounded-xs">
@@ -702,7 +705,7 @@ export function EmitenFundamentalInspectorModal({
                 onClick={handleManualRefreshSingleTicker}
                 disabled={isSyncingOnDemand}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold text-[#0284C7] bb-cyan bg-[#FFFFFF] border border-[#E4E2DD] hover:border-[#0284C7] rounded-xs transition-colors cursor-pointer disabled:opacity-60"
-                title="Tarik ulang kuotasi live Yahoo Finance & berita terbaru khusus emiten ini"
+                title="Perbarui harga pasar live Yahoo Finance & berita terbaru khusus emiten ini"
               >
                 <RefreshCw
                   className={`w-3.5 h-3.5 ${isSyncingOnDemand ? 'animate-spin' : ''}`}

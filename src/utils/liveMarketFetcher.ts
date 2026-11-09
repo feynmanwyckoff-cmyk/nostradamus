@@ -2440,6 +2440,18 @@ export function stripRawMarkdownArtifacts(text: string): string {
     .replace(/kriteria\s+Joeliardi\s+Sunendar/gi, 'kriteria Fundamental Kualitas Moat')
     .replace(/\s*\(Joeliardi\s+Sunendar\)/gi, '')
     .replace(/Joeliardi\s+Sunendar/gi, 'Fundamental Kualitas Moat')
+    .replace(/\bPada kuotasi\b/gi, 'Pada harga pasar')
+    .replace(/\bkuotasi\b/gi, 'harga pasar')
+    .replace(/\bDiskon optik\b/gi, 'Valuasi yang terlihat murah')
+    .replace(/\bdiskon optik\b/gi, 'valuasi yang terlihat murah')
+    .replace(/\bsecara optik\b/gi, 'di atas kertas')
+    .replace(/\bSecara kausal,\s*/gi, 'Jika dibedah lebih dalam, ')
+    .replace(/\bsecara kausal\b/gi, 'secara fundamental')
+    .replace(/\btrajektori harga\b/gi, 'arah pergerakan harga')
+    .replace(/\btrajektori\b/gi, 'arah pergerakan')
+    .replace(/\bpengungkit utang\b/gi, 'rasio utang')
+    .replace(/\bpengungkit ekuitas\b/gi, 'rasio pengali ekuitas')
+    .replace(/\bBermoat Kuat\b/gi, 'Berdaya Saing Kuat')
     .trim();
 }
 
@@ -2487,12 +2499,12 @@ function buildDeepAnalyticalConvictionReport(params: {
   // Sector-Specific Economic Context
   const secLower = stock.sector.toLowerCase();
   const sectorEconomicsNote = secLower.includes('financial')
-    ? `Pada sektor Perbankan/Keuangan, PBV ${joeliardiEval.impliedPbv}x harus diuji langsung terhadap kemampuan mencetak ROE (${stock.roe.toFixed(1)}%) di atas Cost of Equity (10,5%) serta efisiensi dana murah (CASA) dan kualitas kredit.`
+    ? `Di sektor Perbankan dan Keuangan, valuasi PBV ${joeliardiEval.impliedPbv}x perlu diukur dari konsistensi perusahaan mencetak ROE (${stock.roe.toFixed(1)}%) di atas biaya modal (10,5%) serta ketahanan kualitas kreditnya.`
     : secLower.includes('energy') || secLower.includes('basic')
-    ? `Pada sektor siklikal Komoditas/Energi (${stock.sector}), PER rendah (${joeliardiEval.impliedPer}x) wajib diuji apakah mencerminkan puncak siklus harga komoditas atau benar-benar diamankan oleh neraca kas bersih (DER ${stock.debtToEquity.toFixed(2)}x) dan distribusi dividen tunai (${divYield.toFixed(2)}%).`
+    ? `Di sektor Komoditas dan Energi (${stock.sector}), angka PER yang rendah (${joeliardiEval.impliedPer}x) perlu dicermati apakah didukung oleh neraca yang sehat (DER ${stock.debtToEquity.toFixed(2)}x) dan pembagian dividen tunai yang nyata (${divYield.toFixed(2)}%).`
     : secLower.includes('consumer') || secLower.includes('industrial') || secLower.includes('health')
-    ? `Pada sektor riil/manufaktur (${stock.sector}), kekuatan pricing power tercermin dari Operating Margin ${stock.operatingMargin.toFixed(1)}% dan perputaran aset ~${impliedAssetTurnover}x yang menghasilkan ROA murni ${impliedRoaPct}% tanpa ketergantungan utang.`
-    : `Pada sektor ${stock.sector}, sensitivitas beban bunga terhadap DER ${stock.debtToEquity.toFixed(2)}x dan visibilitas arus kas operasional menjadi penentu utama ketahanan nilai intrinsik.`;
+    ? `Di sektor riil dan manufaktur (${stock.sector}), daya saing bisnis terlihat jelas dari Operating Margin ${stock.operatingMargin.toFixed(1)}% dan perputaran aset ~${impliedAssetTurnover}x yang menghasilkan ROA murni ${impliedRoaPct}% tanpa bergantung pada utang besar.`
+    : `Di sektor ${stock.sector}, keseimbangan antara rasio utang DER ${stock.debtToEquity.toFixed(2)}x dan kestabilan arus kas operasional menjadi kunci utama ketahanan nilai wajarnya.`;
 
   // Cross-Metric Anomaly & DuPont Diagnosis
   const isHighQualityOrganicRoe = stock.roe >= 15 && stock.debtToEquity <= 0.85;
@@ -2546,42 +2558,44 @@ function buildDeepAnalyticalConvictionReport(params: {
 
   // Verdict determination
   let verdictBadge = 'HOLD // WAIT FOR BETTER MOS';
-  let verdictTitle = `${stock.ticker} memiliki fundamental cukup stabil, namun ruang Margin of Safety saat ini menuntut disiplin harga masuk`;
+  let verdictTitle = `Fundamental ${stock.ticker} tergolong stabil, namun harga saat ini menuntut kesabaran menunggu area beli yang lebih aman`;
   if (stock.isHscFlagged) {
     verdictBadge = 'AVOID // HSC RISK BLOCK';
-    verdictTitle = `Komite Investasi menolak akumulasi ${stock.ticker}: Terdeteksi anomali konsentrasi spekulatif (HSC) di luar parameter institusional`;
+    verdictTitle = `Komite Investasi tidak menyarankan pembelian ${stock.ticker} karena terdeteksi fluktuasi harga spekulatif (HSC) di luar kewajaran fundamental`;
   } else if (isValueTrapCandidate) {
     verdictBadge = 'CAUTION // VALUE TRAP ALERT';
-    verdictTitle = `Diskon optik pada ${stock.ticker} belum terkonfirmasi oleh efisiensi modal (ROE ${stock.roe}%) atau sedang mengalami distribusi`;
+    verdictTitle = isStructuralUnderperformer
+      ? `Harga ${stock.ticker} yang terlihat murah saat ini perlu diwaspadai karena imbal hasil modal (ROE ${stock.roe}%) masih di bawah biaya modal`
+      : `Valuasi ${stock.ticker} sudah tergolong murah dengan fundamental sehat (ROE ${stock.roe}%), namun pergerakan harga jangka pendek masih berada dalam fase tekanan jual`;
   } else if (
     isInstitutionalReRating ||
     (joeliardiEval.marginOfSafetyPct >= 18 && stock.dmuValueScore >= 7.2 && stock.roe >= 14)
   ) {
     verdictBadge = 'STRONG ACCUMULATE // HIGH CONVICTION';
-    verdictTitle = `Asimetri positif kuat pada ${stock.ticker}: ROA murni ${impliedRoaPct}% & dividen ${divYield.toFixed(2)}% diperoleh pada diskon intrinsik +${joeliardiEval.marginOfSafetyPct}%`;
+    verdictTitle = `Peluang investasi menarik pada ${stock.ticker}: profitabilitas kuat (ROA murni ${impliedRoaPct}% & dividen ${divYield.toFixed(2)}%) tersedia pada diskon +${joeliardiEval.marginOfSafetyPct}% di bawah nilai wajarnya`;
   } else if (stock.dmuCompositeScore >= 6.8 && joeliardiEval.marginOfSafetyPct >= 0) {
     verdictBadge = 'BUY ON WEAKNESS // QUALITY CORE';
-    verdictTitle = `${stock.ticker} memenuhi kriteria compounder Fundamental Kualitas Moat (Top ${stock.dmuRankPct}% OOS) untuk akumulasi bertahap`;
+    verdictTitle = `${stock.ticker} memiliki kualitas bisnis yang solid (Top ${stock.dmuRankPct}% OOS) dan cocok untuk diakumulasi secara bertahap`;
   }
 
   // Contextual Direct Analysis (No Question Echo / Repetition)
   let directAnswerSummary = '';
   if (stock.isHscFlagged) {
-    directAnswerSummary = `Hasil Analisis Komite Investasi: Saham ${stock.ticker} TIDAK layak diakumulasi karena terdeteksi dalam radar High Speculative Concentration (${stock.hscReason || 'fluktuasi tidak ditopang nilai intrinsik'}). Meskipun harga bergerak ${stock.change1D >= 0 ? '+' : ''}${stock.change1D}% (1D) dan ${stock.return30D >= 0 ? '+' : ''}${stock.return30D}% (30D), rasio pengembalian terhadap risiko gagal melewati ambang batas keamanan modal Fundamental Kualitas Moat.`;
+    directAnswerSummary = `Hasil Analisis Komite Investasi: Saham ${stock.ticker} TIDAK LAYAK DIAKUMULASI karena masuk dalam pantauan High Speculative Concentration (${stock.hscReason || 'pergerakan harga tidak didukung kinerja fundamental'}). Meskipun harga bergerak ${stock.change1D >= 0 ? '+' : ''}${stock.change1D}% (1D) dan ${stock.return30D >= 0 ? '+' : ''}${stock.return30D}% (30D), risiko spekulasinya terlalu tinggi bagi portofolio yang mengutamakan keamanan modal.`;
   } else if (isAskingTrapOrHsc) {
     directAnswerSummary = isValueTrapCandidate
-      ? `Hasil Audit Value Trap & Solvabilitas: Meskipun ${stock.ticker} bersih dari manipulasi HSC dan tampak murah secara optik (PER ${joeliardiEval.impliedPer}x, MoS +${joeliardiEval.marginOfSafetyPct}%), komite mendeteksi risiko Value Trap karena ${isStructuralUnderperformer ? `ROE (${stock.roe}%) berada di bawah Cost of Equity Indonesia (10,5%), artinya modal kerja belum menciptakan nilai tambah ekonomi nyata` : `momentum 30 hari masih negatif (${stock.return30D}%) dengan skor momentum ${stock.dmuMomScore}/10`}. Hindari menangkap pisau jatuh sebelum ada konfirmasi pembalikan arus kas.`
-      : `Hasil Audit Value Trap & Solvabilitas: Emiten ${stock.ticker} BEBAS dari indikasi HSC/gorengan dan terbukti BUKAN Value Trap. Diskon +${joeliardiEval.marginOfSafetyPct}% terhadap Nilai Intrinsik Wajar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} memiliki fondasi fundamental kokoh: dekomposisi DuPont menghasilkan ROA murni ${impliedRoaPct}% pada pengungkit ekuitas sangat rendah (${equityMultiplier}x / DER ${stock.debtToEquity}x), ditambah perlindungan arus kas dividen ${divYield.toFixed(2)}% per tahun.`;
+      ? `Hasil Audit Value Trap & Solvabilitas: Meskipun ${stock.ticker} bersih dari indikasi saham gorengan (HSC) dan tampak murah di atas kertas (PER ${joeliardiEval.impliedPer}x, Margin of Safety +${joeliardiEval.marginOfSafetyPct}%), komite mencatat adanya risiko Value Trap karena ${isStructuralUnderperformer ? `ROE (${stock.roe}%) masih berada di bawah biaya modal Indonesia (10,5%), sehingga bisnisnya belum optimal mencetak nilai tambah` : `pergerakan harga 30 hari terakhir masih melemah (${stock.return30D}%) dengan Skor Momentum ${stock.dmuMomScore}/10`}. Sebaiknya tunggu tekanan jual mereda sebelum mulai mencicil beli.`
+      : `Hasil Audit Value Trap & Solvabilitas: Emiten ${stock.ticker} bersih dari indikasi saham spekulatif (HSC) dan terbukti BUKAN VALUE TRAP. Diskon harga +${joeliardiEval.marginOfSafetyPct}% terhadap Nilai Intrinsik Wajar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} ditopang oleh fundamental yang sehat: bisnisnya mampu mencetak ROA murni ${impliedRoaPct}% dengan rasio utang yang sangat terjaga (DER ${stock.debtToEquity}x), ditambah dukungan kas dari dividen ${divYield.toFixed(2)}% per tahun.`;
   } else if (isAskingNews) {
     const topHeadlines = recentNews
       .slice(0, 2)
       .map((n) => `"${stripRawMarkdownArtifacts(n.title)}"`)
       .join(' serta ');
-    directAnswerSummary = `Hasil Evaluasi Dampak Berita & Aksi Korporasi (≤ 3 Bulan Terakhir): Katalis utama ${stock.ticker} saat ini berpusat pada ${topHeadlines || 'kinerja laba operasional dan kebijakan pembagian dividen'}. Secara fundamental, perkembangan tersebut ${cautionNews.length > positiveNews.length ? 'menuntut kehati-hatian jangka pendek terhadap margin laba' : `memperkuat visibilitas EPS (~Rp ${joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')}/saham) dan mempertahankan Earnings Yield ${earningsYieldPct}%`} yang unggul terhadap kupon SBN 10Y (${sbnBenchmarkPct}%).`;
+    directAnswerSummary = `Hasil Evaluasi Dampak Berita & Aksi Korporasi: Sentimen utama ${stock.ticker} dalam 3 bulan terakhir berfokus pada ${topHeadlines || 'perkembangan kinerja operasional dan pembagian dividen'}. Dari kacamata fundamental, kabar tersebut ${cautionNews.length > positiveNews.length ? 'perlu dicermati dampaknya terhadap kestabilan margin laba ke depan' : `turut memperkokoh prospek laba bersih (~Rp ${joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')}/saham) serta menjaga Earnings Yield di level ${earningsYieldPct}%`} yang tetap lebih menarik dibanding imbal hasil SBN 10Y (${sbnBenchmarkPct}%).`;
   } else if (isAskingDividendOrCash) {
-    directAnswerSummary = `Hasil Bedah Kualitas Dividen & Arus Kas: Pada harga Rp ${stock.lastPrice.toLocaleString('id-ID')}, imbal hasil dividen TTM ${stock.ticker} tercatat ${divYield.toFixed(2)}% dengan Earnings Yield ${earningsYieldPct}%. ${isDividendTrapRisk ? `Waspadai potensi Dividend Trap pasca cum-date karena tren 30 hari sedang terkoreksi (${stock.return30D}%)` : divYield > 0 ? `Distribusi dividen ini sangat sehat karena ditopang oleh ROE organik ${stock.roe}% dan neraca konservatif (DER ${stock.debtToEquity}x), sehingga tidak menggerus modal kerja perusahaan.` : `Emiten saat ini menahan sebagian besar laba (dividen TTM 0%) untuk ekspansi nilai buku (BVPS ~Rp ${joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')}).`}`;
+    directAnswerSummary = `Hasil Bedah Kualitas Dividen & Arus Kas: Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, imbal hasil dividen ${stock.ticker} berada di kisaran ${divYield.toFixed(2)}% dengan Earnings Yield ${earningsYieldPct}%. ${isDividendTrapRisk ? `Investor perlu mewaspadai potensi Dividend Trap setelah cum-date karena tren harga 30 hari terakhir sedang tertekan (${stock.return30D}%)` : divYield > 0 ? `Pembagian dividen ini tergolong sehat karena dibiayai dari laba operasional nyata (ROE ${stock.roe}%) dan posisi utang yang rendah (DER ${stock.debtToEquity}x), bukan dari utang baru.` : `Saat ini perusahaan memilih menahan laba (dividen 0%) untuk memperkuat modal kerja dan nilai buku (BVPS ~Rp ${joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')}).`}`;
   } else {
-    directAnswerSummary = `Hasil Analisis Komite Investasi: Pada kuotasi Rp ${stock.lastPrice.toLocaleString('id-ID')}, komite menilai ${stock.ticker} ${joeliardiEval.marginOfSafetyPct >= 12 && !isValueTrapCandidate ? 'LAYAK DIAKUMULASI BERTAHAP' : joeliardiEval.marginOfSafetyPct >= 0 ? 'LAYAK KOLEKSI SELEKTIF SAAT KOREKSI' : 'LEBIH TEPAT DITUNGGU PADA AREA PULLBACK'}. Secara kausal, pasar saat ini menghargai ${stock.ticker} pada Implied PER ${joeliardiEval.impliedPer}x (Earnings Yield ${earningsYieldPct}% vs SBN 10Y ${sbnBenchmarkPct}%), padahal perusahaan mencetak ROA murni ${impliedRoaPct}% dan ROE ${stock.roe}% (${roeSpread >= 0 ? `+${roeSpread}% di atas` : `${roeSpread}% di bawah`} biaya modal 10,5%) dengan pengungkit utang DER ${stock.debtToEquity}x, sehingga Nilai Intrinsik Wajarnya berada di Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (Margin of Safety ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%).`;
+    directAnswerSummary = `Hasil Analisis Komite Investasi: Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, komite menilai ${stock.ticker} ${joeliardiEval.marginOfSafetyPct >= 12 && !isValueTrapCandidate ? 'LAYAK DIAKUMULASI BERTAHAP' : joeliardiEval.marginOfSafetyPct >= 0 ? 'LAYAK KOLEKSI SELEKTIF SAAT KOREKSI' : 'LEBIH TEPAT DITUNGGU PADA AREA PULLBACK'}. Saat ini pasar menghargai ${stock.ticker} pada Implied PER ${joeliardiEval.impliedPer}x (setara Earnings Yield ${earningsYieldPct}% vs SBN 10Y ${sbnBenchmarkPct}%), padahal perusahaan mampu mencetak ROA murni ${impliedRoaPct}% dan ROE ${stock.roe}% (${roeSpread >= 0 ? `+${roeSpread}% di atas` : `${roeSpread}% di bawah`} biaya modal 10,5%) dengan rasio utang DER ${stock.debtToEquity}x yang sehat, sehingga Nilai Intrinsik Wajarnya diestimasi berada di Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (Margin of Safety ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%).`;
   }
 
   const idealBuyLow = Math.round(
@@ -2598,22 +2612,22 @@ function buildDeepAnalyticalConvictionReport(params: {
     directAnswerSummary,
     convictionScore: joeliardiEval.totalConvictionScore,
     chainOfThoughtSteps: [
-      `01. Dekomposisi DuPont & Moat: ROE ${stock.roe}% dibedah menjadi ROA murni ${impliedRoaPct}% × Equity Multiplier ${equityMultiplier}x (DER ${stock.debtToEquity}x) dengan Operating Margin ${stock.operatingMargin}% -> ${isHighQualityOrganicRoe ? 'Profitabilitas Organik Bermoat Kuat' : isLeveragedRoe ? 'Return Ditopang Leverage Utang' : 'Efisiensi Modal Moderat'}.`,
-      `02. Spread Valuasi vs SBN 10Y: Earnings Yield ${earningsYieldPct}% dibandingkan dengan bebas risiko SBN 10Y (${sbnBenchmarkPct}%) menghasilkan Equity Yield Spread ${yieldSpreadVsSbn >= 0 ? '+' : ''}${yieldSpreadVsSbn}% dan diskon PER ${perDiscountPct}% -> Nilai Intrinsik Wajar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%).`,
-      `03. Uji Silang Momentum & Value Trap: Memadukan Skor Value (${stock.dmuValueScore}/10) terhadap trajektori harga 30D (${stock.return30D >= 0 ? '+' : ''}${stock.return30D}%) & volatilitas tahunan (${stock.volatilityAnn}%) -> ${isValueTrapCandidate ? 'Terdeteksi Gejala Value Trap / Distribusi' : isInstitutionalReRating ? 'Konfirmasi Akumulasi & Re-Rating Sehat' : 'Konsolidasi Wajar'}.`,
-      `04. Audit Katalis Berita & Eksekusi: Menyaring ${recentNews.length} berita korporasi terkini, imbal hasil dividen ${divYield.toFixed(2)}%, dan status ${stock.isHscFlagged ? 'Blokir HSC' : 'Clean Non-HSC'} pada rezim IHSG ${regimeStatus}.`
+      `01. Dekomposisi DuPont & Moat: ROE ${stock.roe}% berasal dari ROA murni ${impliedRoaPct}% × Equity Multiplier ${equityMultiplier}x (DER ${stock.debtToEquity}x) dengan Operating Margin ${stock.operatingMargin}% -> ${isHighQualityOrganicRoe ? 'Profitabilitas Organik Berdaya Saing Kuat.' : isLeveragedRoe ? 'Laba Banyak Ditopang Utang.' : 'Efisiensi Modal Cukup Terjaga.'}`,
+      `02. Spread Valuasi vs SBN 10Y: Earnings Yield ${earningsYieldPct}% dibandingkan imbal hasil bebas risiko SBN 10Y (${sbnBenchmarkPct}%) menghasilkan selisih imbal hasil Equity Yield Spread ${yieldSpreadVsSbn >= 0 ? '+' : ''}${yieldSpreadVsSbn}% dan diskon PER ${perDiscountPct}% -> Nilai Intrinsik Wajar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%).`,
+      `03. Uji Silang Momentum & Value Trap: Membandingkan Skor Value (${stock.dmuValueScore}/10) dengan pergerakan harga 30D (${stock.return30D >= 0 ? '+' : ''}${stock.return30D}%) & volatilitas tahunan (${stock.volatilityAnn}%) -> ${isValueTrapCandidate ? 'Harga Masih Tertekan / Tunggu Konfirmasi Akumulasi.' : isInstitutionalReRating ? 'Konfirmasi Akumulasi & Tren Sehat.' : 'Fase Konsolidasi Wajar.'}`,
+      `04. Audit Katalis Berita & Eksekusi: Mencermati ${recentNews.length} berita korporasi terkini, imbal hasil dividen ${divYield.toFixed(2)}%, dan status ${stock.isHscFlagged ? 'Blokir HSC' : 'Clean Non-HSC'} pada kondisi pasar IHSG ${regimeStatus} -> ${stock.isHscFlagged ? 'Hindari Eksposur Spekulatif.' : divYield >= 4 ? 'Didukung Arus Kas Dividen Nyata.' : 'Fokus Disiplin Harga Masuk.'}`
     ],
     sections: [
       {
         id: 'fundamental-moat',
         badge: `01. DUPONT & MOAT // SKOR ${joeliardiEval.businessQualityScore}/100`,
-        title: 'Audit Kualitas Laba, Dekomposisi DuPont & Fundamental Kualitas Moat',
+        title: 'Bedah Kualitas Laba, Dekomposisi DuPont & Daya Saing Bisnis',
         keyMetricHighlight: `ROE ${stock.roe.toFixed(1)}% (Spread ${roeSpread >= 0 ? '+' : ''}${roeSpread}% vs Ke) · ROA Murni ${impliedRoaPct}% · Op Margin ${stock.operatingMargin.toFixed(1)}% · DER ${stock.debtToEquity.toFixed(2)}x`,
-        reasoningParagraph: `${sectorEconomicsNote} Berdasarkan bedah DuPont, ROE ${stock.ticker} sebesar ${stock.roe.toFixed(1)}% dihasilkan dari pengembalian atas aset (ROA) sebesar ${impliedRoaPct}% dengan pengali ekuitas (Equity Multiplier) ${equityMultiplier}x. ${isHighQualityOrganicRoe ? `Karena DER sangat rendah (${stock.debtToEquity.toFixed(2)}x), seluruh kelebihan ROE sebesar +${roeSpread}% di atas Cost of Equity (10,5%) murni berasal dari keunggulan margin operasional (${stock.operatingMargin.toFixed(1)}%) dan efisiensi perputaran aset, bukan rekayasa utang.` : `Dengan DER ${stock.debtToEquity.toFixed(2)}x, investor perlu memastikan arus kas operasional tetap disiplin menutup beban pendanaan agar margin bersih tidak tergerus saat suku bunga tinggi.`}`,
+        reasoningParagraph: `${sectorEconomicsNote} Jika dibedah menggunakan metode DuPont, ROE ${stock.ticker} sebesar ${stock.roe.toFixed(1)}% ditopang oleh tingkat pengembalian aset (ROA murni) sebesar ${impliedRoaPct}% dengan rasio pengali ekuitas (Equity Multiplier) ${equityMultiplier}x. ${isHighQualityOrganicRoe ? `Karena posisi utangnya sangat rendah (DER ${stock.debtToEquity.toFixed(2)}x), keunggulan ROE sebesar +${roeSpread}% di atas biaya modal (10,5%) murni lahir dari kekuatan margin usaha (${stock.operatingMargin.toFixed(1)}%) dan efisiensi operasional, bukan karena tumpukan utang.` : `Dengan rasio utang DER ${stock.debtToEquity.toFixed(2)}x, investor perlu memastikan arus kas operasional tetap lancar menutup beban bunga agar laba bersih tetap terjaga.`}`,
         bulletPoints: [
-          `Kualitas Penciptaan Nilai: Setiap Rp 100 modal ekuitas menghasilkan Rp ${stock.roe.toFixed(1)} laba bersih (EPS ~Rp ${joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')} vs BVPS ~Rp ${joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')}).`,
-          `Ketahanan Neraca & Solvabilitas: DER ${stock.debtToEquity.toFixed(2)}x (Equity Multiplier ${equityMultiplier}x) ${stock.debtToEquity <= 0.5 ? 'memberikan ruang kas sangat tebal dan kebal risiko gagal bayar' : stock.debtToEquity <= 1.0 ? 'berada dalam batas aman standar institusional' : 'membutuhkan pengawasan ketat pada rasio cakupan bunga (interest coverage)'}.`,
-          `Konversi Laba ke Kas (Dividen): ${divYield > 0 ? `Pembagian dividen tunai TTM ${divYield.toFixed(2)}% membuktikan laba akuntansi terkonversi menjadi kas riil bagi pemegang saham.` : 'Perusahaan menahan laba untuk ekspansi internal; pastikan pertumbuhan BVPS konsisten di atas 10% per tahun.'}`
+          `Kualitas Penciptaan Nilai: Setiap Rp 100 modal bersih yang ditanamkan mampu menghasilkan Rp ${stock.roe.toFixed(1)} laba bersih (setara EPS ~Rp ${joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')} dengan nilai buku BVPS ~Rp ${joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')}).`,
+          `Kesehatan Neraca & Utang: Rasio DER ${stock.debtToEquity.toFixed(2)}x (Equity Multiplier ${equityMultiplier}x) ${stock.debtToEquity <= 0.5 ? 'menunjukkan neraca yang sangat konservatif dan minim risiko gagal bayar' : stock.debtToEquity <= 1.0 ? 'masih berada dalam batas aman bagi standar investasi jangka panjang' : 'perlu dipantau secara berkala terutama jika suku bunga pinjaman meningkat'}.`,
+          `Bukti Kas Nyata (Dividen): ${divYield > 0 ? `Adanya pembagian dividen tunai ${divYield.toFixed(2)}% membuktikan bahwa laba perusahaan benar-benar berwujud kas yang mengalir ke pemegang saham.` : 'Perusahaan saat ini menahan laba untuk kebutuhan ekspansi internal; pastikan pertumbuhan nilai bukunya tetap konsisten.'}`
         ],
         sentimentTone:
           joeliardiEval.businessQualityScore >= 75 && joeliardiEval.balanceSheetHealthScore >= 75
@@ -2625,13 +2639,13 @@ function buildDeepAnalyticalConvictionReport(params: {
       {
         id: 'oos-valuation',
         badge: `02. VALUASI & YIELD // MOS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%`,
-        title: 'Uji Nilai Intrinsik Wajar vs. Risiko Value Trap (Spread Earnings Yield vs SBN)',
+        title: 'Perbandingan Nilai Wajar Saham vs Imbal Hasil Obligasi Negara (SBN 10Y)',
         keyMetricHighlight: `Earnings Yield ${earningsYieldPct}% (vs SBN 6,75%) · PER ${joeliardiEval.impliedPer}x (Wajar ${joeliardiEval.joeliardiFairPer}x) · PBV ${joeliardiEval.impliedPbv}x (Wajar ${joeliardiEval.joeliardiFairPbv}x)`,
-        reasoningParagraph: `Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, investor memperoleh Earnings Yield sebesar ${earningsYieldPct}% per tahun (${yieldSpreadVsSbn >= 0 ? `premi risiko ekuitas positif +${yieldSpreadVsSbn}% di atas` : `terdiskon ${Math.abs(yieldSpreadVsSbn)}% di bawah`} obligasi negara SBN 10Y ${sbnBenchmarkPct}%) dengan Total Shareholder Yield mencapai ${totalShareholderYieldPct}%. Dibandingkan Nilai Intrinsik Wajar di Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')}, saham ini memiliki Margin of Safety ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%.`,
+        reasoningParagraph: `Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, pembelian saham ini memberikan imbal hasil laba (Earnings Yield) sebesar ${earningsYieldPct}% per tahun (${yieldSpreadVsSbn >= 0 ? `unggul +${yieldSpreadVsSbn}% di atas` : `lebih rendah ${Math.abs(yieldSpreadVsSbn)}% dibanding`} kupon obligasi negara SBN 10Y ${sbnBenchmarkPct}%) dengan Total Shareholder Yield mencapai ${totalShareholderYieldPct}%. Jika dibandingkan dengan Nilai Intrinsik Wajar di Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')}, tersedia ruang pengaman (Margin of Safety) sebesar ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%.`,
         bulletPoints: [
-          `Validasi Silang 4-Faktor OOS: Skor Komposit ${stock.dmuCompositeScore.toFixed(2)}/10 (Peringkat Top ${stock.dmuRankPct}% JCI) dengan bobot faktor Value ${stock.dmuValueScore.toFixed(1)}/10 dan Low-Vol ${stock.dmuLowVolScore.toFixed(1)}/10.`,
-          `Uji Diagnostik Value Trap: ${isValueTrapCandidate ? 'PERINGATAN: Diskon harga saat ini diiringi pelemahan momentum 30D atau ROE di bawah biaya modal — tunggu katalis perbaikan laba sebelum akumulasi penuh.' : isMomentumOverextended ? 'Harga pasar sudah berlari melampaui nilai wajar intrinsik; risiko mean-reversion meningkat jika laba kuartal depan meleset.' : 'Bukan Value Trap: diskon valuasi didukung langsung oleh ROA organik dan arus kas positif.'}`,
-          `Target Re-Rating Multipel: Jika pasar kembali menghargai ${stock.ticker} menuju Fair PER ${joeliardiEval.joeliardiFairPer}x dan Fair PBV ${joeliardiEval.joeliardiFairPbv}x, potensi apresiasi wajar mengarah ke Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')}.`
+          `Skor Kuantitatif 4-Faktor: Mencatat Skor Komposit ${stock.dmuCompositeScore.toFixed(2)}/10 (Peringkat Top ${stock.dmuRankPct}% BEI) dengan dukungan Skor Value ${stock.dmuValueScore.toFixed(1)}/10 dan stabilitas Low-Vol ${stock.dmuLowVolScore.toFixed(1)}/10.`,
+          `Deteksi Risiko Value Trap: ${isValueTrapCandidate ? 'Catatan Penting: Meskipun valuasinya terlihat murah, tren harga jangka pendek masih tertekan atau ROE belum optimal—disarankan mencicil secara bertahap sambil menunggu konfirmasi perbaikan harga.' : isMomentumOverextended ? 'Harga saham sudah naik cukup tinggi melampaui estimasi nilai wajarnya; hindari mengejar harga di pucuk.' : 'Valuasi yang murah saat ini didukung oleh profitabilitas operasional yang sehat dan arus kas nyata.'}`,
+          `Potensi Kenaikan ke Nilai Wajar: Apabila pasar kembali mengapresiasi ${stock.ticker} menuju Fair PER ${joeliardiEval.joeliardiFairPer}x dan Fair PBV ${joeliardiEval.joeliardiFairPbv}x, harga wajarnya berpotensi menuju Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')}.`
         ],
         sentimentTone:
           joeliardiEval.marginOfSafetyPct >= 15 && !isValueTrapCandidate
@@ -2643,11 +2657,11 @@ function buildDeepAnalyticalConvictionReport(params: {
       {
         id: 'news-hsc-catalysts',
         badge: stock.isHscFlagged ? '03. AUDIT HSC // BLOKIR' : `03. KATALIS & HSC // ${recentNews.length} BERITA`,
-        title: 'Sintesis Katalis Berita Terkini, Aksi Korporasi & Saringan Mikrostruktur HSC',
-        keyMetricHighlight: `${stock.isHscFlagged ? 'TERINDIKASI HSC (Blokir Top Buy)' : 'Clean Institutional (Bebas HSC)'} · ${positiveNews.length} Katalis Konstruktif · ${cautionNews.length} Isu Risiko`,
+        title: 'Ringkasan Berita Terkini, Aksi Korporasi & Keamanan Likuiditas Pasar',
+        keyMetricHighlight: `${stock.isHscFlagged ? 'TERINDIKASI HSC (Blokir Top Buy)' : 'Clean Institutional (Bebas HSC)'} · ${positiveNews.length} Sentimen Positif · ${cautionNews.length} Isu Perhatian`,
         reasoningParagraph: stock.isHscFlagged
-          ? `Audit mikrostruktur mendeteksi ${stock.ticker} dalam kategori High Speculative Concentration (${stock.hscReason || 'pola transaksi spekulatif berisiko tinggi'}). Komite Investasi secara tegas memisahkan spekulasi jangka pendek dari investasi fundamental sehingga saham ini dikunci pada zona Rotate Out.`
-          : `Dari ${recentNews.length} berita dan keterbukaan informasi terbaru pada ${stock.ticker}, fokus utama pasar mencakup pertumbuhan kinerja kuartalan, kebijakan dividen/buyback, serta dinamika sektor ${stock.sector}. Struktur likuiditas saham ini terverifikasi bersih dari indikasi manipulasi HSC/UMA, sehingga pembentukan harga di pasar reguler mencerminkan penawaran-permintaan institusional yang wajar.`,
+          ? `Sistem mendeteksi ${stock.ticker} memiliki pola transaksi berisiko tinggi atau konsentrasi spekulatif (${stock.hscReason || 'pergerakan harga tidak wajar'}). Demi menjaga keamanan modal, saham ini dipisahkan dari daftar beli utama dan dimasukkan ke zona Rotate Out.`
+          : `Dari ${recentNews.length} berita dan keterbukaan informasi terbaru pada ${stock.ticker}, perhatian pelaku pasar tertuju pada rilis kinerja keuangan, pembagian dividen, serta prospek sektor ${stock.sector}. Aktivitas perdagangannya juga bersih dari gejala saham gorengan (HSC/UMA), sehingga pergerakan harganya wajar mengikuti mekanisme pasar.`,
         bulletPoints:
           recentNews.length > 0
             ? recentNews.slice(0, 3).map(
@@ -2655,8 +2669,8 @@ function buildDeepAnalyticalConvictionReport(params: {
                   `[${n.emitenCategory || 'KATALIS'}] ${stripRawMarkdownArtifacts(n.title)} (${n.source} · ${n.publishedAt})`
               )
             : [
-                `Fokus Pantauan Korporasi: Rilis laporan keuangan kuartalan berikutnya dan jadwal rasio pembayaran dividen (payout ratio) RUPS ${stock.ticker}.`,
-                `Status Likuiditas BEI: ${stock.isLiquid !== false && stock.lastPrice >= 68 ? 'Likuiditas pasar reguler aktif dan memenuhi syarat eksekusi institusional.' : 'Likuiditas sangat tipis/gocap; hindari eksposur besar.'}`
+                `Agenda Korporasi yang Perlu Dipantau: Rilis laporan keuangan kuartalan berikutnya serta kebijakan rasio dividen pada RUPS ${stock.ticker}.`,
+                `Kelayakan Transaksi di BEI: ${stock.isLiquid !== false && stock.lastPrice >= 68 ? 'Transaksi harian di pasar reguler tergolong likuid dan aman untuk eksekusi portofolio.' : 'Likuiditas transaksi harian cukup tipis; batasi porsi pembelian.'}`
               ],
         sentimentTone: stock.isHscFlagged
           ? 'NEGATIVE'
@@ -2667,13 +2681,13 @@ function buildDeepAnalyticalConvictionReport(params: {
       {
         id: 'regime-momentum-fit',
         badge: `04. EKSEKUSI & REZIM // ${regimeStatus}`,
-        title: 'Dinamika Momentum Harga, Volatilitas & Alokasi Portofolio Barbell',
-        keyMetricHighlight: `1D ${stock.change1D >= 0 ? '+' : ''}${stock.change1D.toFixed(2)}% · 30D ${stock.return30D >= 0 ? '+' : ''}${stock.return30D.toFixed(2)}% · Beta ${stock.beta1Y.toFixed(2)}x · Volatilitas σ ${stock.volatilityAnn.toFixed(1)}%`,
-        reasoningParagraph: `Dengan volatilitas tahunan (σ) ${stock.volatilityAnn.toFixed(1)}% dan Beta 1Y ${stock.beta1Y.toFixed(2)}x terhadap IHSG, ${stock.ticker} bergerak ${stock.beta1Y <= 0.96 ? 'lebih tenang dibandingkan indeks pasar (profil pelindung nilai / Defensive Compounder)' : 'lebih agresif terhadap fluktuasi IHSG (profil High-Beta / Tactical Alpha)'}. Pergerakan harga 30 hari sebesar ${stock.return30D >= 0 ? '+' : ''}${stock.return30D.toFixed(2)}% (Skor Momentum ${stock.dmuMomScore.toFixed(1)}/10) menunjukkan ${stock.return30D >= 3 ? 'adanya dukungan akumulasi pasar yang searah dengan fundamentalnya' : stock.return30D <= -5 ? 'fase tekanan jual yang membuka peluang akumulasi bertahap di area support' : 'fase konsolidasi sehat dengan volatilitas terkendali'}.`,
+        title: 'Arah Pergerakan Harga, Volatilitas & Panduan Porsi Portofolio',
+        keyMetricHighlight: `1D ${stock.change1D >= 0 ? '+' : ''}${stock.change1D.toFixed(2)}% · 30D ${stock.return30D >= 0 ? '+' : ''}${stock.return30D.toFixed(2)}% · Beta ${stock.beta1Y.toFixed(2)}x · Volatilitas ${stock.volatilityAnn.toFixed(1)}%`,
+        reasoningParagraph: `Dengan tingkat fluktuasi tahunan ${stock.volatilityAnn.toFixed(1)}% dan Beta 1Y ${stock.beta1Y.toFixed(2)}x terhadap IHSG, pergerakan saham ${stock.ticker} cenderung ${stock.beta1Y <= 0.96 ? 'lebih tenang dibandingkan pasar secara umum (cocok sebagai penyeimbang portofolio / Defensive Core)' : 'lebih sensitif mengikuti naik-turunnya IHSG (cocok untuk akselerasi pertumbuhan / Tactical Alpha)'}. Perubahan harga 30 hari terakhir sebesar ${stock.return30D >= 0 ? '+' : ''}${stock.return30D.toFixed(2)}% (Skor Momentum ${stock.dmuMomScore.toFixed(1)}/10) mencerminkan ${stock.return30D >= 3 ? 'minat beli pasar yang sejalan dengan kinerja fundamentalnya' : stock.return30D <= -5 ? 'adanya koreksi harga yang justru membuka ruang cicil beli di area diskon' : 'pergerakan mendatar yang sehat sambil menunggu katalis baru'}.`,
         bulletPoints: [
-          `Penempatan Keranjang Barbell: ${stock.beta1Y <= 0.96 && stock.dmuLowVolScore >= 6.5 ? 'Sangat ideal ditempatkan di Keranjang 1 (Low-Volatility & Dividend Core — porsi 55% ekuitas).' : stock.dmuMomScore >= 6.8 ? 'Cocok ditempatkan di Keranjang 2 (Momentum & Size Alpha — porsi 45% ekuitas).' : 'Masuk daftar pantau (Watchlist) hingga skor komposit menembus zona Top Decile Buy.'}`,
-          `Taktik Eksekusi pada Rezim ${regimeStatus}: ${regimeStatus === 'VOLATIL' ? 'Gunakan strategi cicil beli 3 tahap (staggered limit orders) pada saat pasar melemah untuk mengoptimalkan harga rata-rata.' : 'Eksekusi alokasi lot sesuai bobot optimal kalkulator Barbell dengan tetap menjaga disiplin Rebalancing Buffer 40%.'}`,
-          `Efisiensi Biaya Transaksi: Pertahankan posisi selama peringkat komposit masih berada di dalam zona Buffer ≤40% (saat ini Top ${stock.dmuRankPct}%) guna menghemat fee beli-jual sekuritas.`
+          `Penempatan dalam Portofolio Barbell: ${stock.beta1Y <= 0.96 && stock.dmuLowVolScore >= 6.5 ? 'Ideal ditempatkan di Keranjang 1 (Low-Volatility & Dividend Core — porsi 55% ekuitas).' : stock.dmuMomScore >= 6.8 ? 'Cocok ditempatkan di Keranjang 2 (Momentum & Size Alpha — porsi 45% ekuitas).' : 'Dapat dipantau di Watchlist sambil menunggu momentum harga membaik.'}`,
+          `Strategi Beli di Kondisi IHSG ${regimeStatus}: ${regimeStatus === 'VOLATIL' ? 'Disarankan membagi pembelian menjadi 2–3 tahap (cicil beli saat harga terkoreksi) agar mendapatkan harga rata-rata yang optimal.' : 'Lakukan alokasi sesuai bobot kalkulator portofolio dengan tetap mematuhi batas Rebalancing Buffer 40%.'}`,
+          `Disiplin Hold & Efisiensi Fee: Selama peringkat kuantitatif saham ini masih bertahan di zona Buffer ≤40% (saat ini Top ${stock.dmuRankPct}%), posisi layak dipertahankan untuk menghemat biaya transaksi sekuritas.`
         ],
         sentimentTone:
           stock.volatilityAnn <= 26 && !stock.isHscFlagged ? 'POSITIVE' : 'NEUTRAL'
@@ -2683,16 +2697,16 @@ function buildDeepAnalyticalConvictionReport(params: {
     bearishRisks: joeliardiEval.keyRisks.map(stripRawMarkdownArtifacts),
     executionStrategy: {
       recommendedAction: stock.isHscFlagged
-        ? 'Hindari pembelian baru (Block Buy) & lakukan rotasi keluar jika sudah memiliki posisi.'
+        ? 'Hindari pembelian baru (Block Buy) & alihkan modal ke saham berfundamental sehat.'
         : joeliardiEval.marginOfSafetyPct >= 12 && stock.dmuCompositeScore >= 6.8
-        ? 'Akumulasi Bertahap (Buy on Weakness / Cicil 2–3 Termin) pada rentang diskon nilai intrinsik.'
-        : 'Tunggu Koreksi Wajar (Buy on Pullback) menuju area Margin of Safety yang lebih tebal.',
+        ? 'Akumulasi Bertahap (Buy on Weakness / Cicil 2–3 Tahap) di area diskon nilai wajar.'
+        : 'Tunggu Koreksi Wajar (Buy on Pullback) agar mendapatkan ruang Margin of Safety yang lebih aman.',
       idealEntryZone: stock.isHscFlagged
         ? 'Tidak direkomendasikan (Blokir HSC)'
-        : `Rp ${idealBuyLow.toLocaleString('id-ID')} – Rp ${Math.max(idealBuyLow, idealBuyHigh).toLocaleString('id-ID')} (Intrinsik Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')})`,
+        : `Rp ${idealBuyLow.toLocaleString('id-ID')} – Rp ${Math.max(idealBuyLow, idealBuyHigh).toLocaleString('id-ID')} (Nilai Wajar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')})`,
       InvalidationOrRiskLimit: stock.isHscFlagged
-        ? 'Segera batasi eksposur maksimal 0% dari portofolio.'
-        : `Evaluasi ulang tesis jika harga tembus di bawah Rp ${riskStopPrice.toLocaleString('id-ID')} disertai penurunan ROE < 10,5% atau peringkat OOS keluar dari Top 40% Buffer.`,
+        ? 'Batasi porsi maksimal 0% dari portofolio.'
+        : `Tinjau ulang posisi jika harga turun di bawah Rp ${riskStopPrice.toLocaleString('id-ID')} disertai penurunan ROE < 10,5% atau keluar dari zona Top 40% Buffer.`,
       portfolioAllocationGuide: stock.isHscFlagged
         ? '0% Modal Portofolio (Diblokir oleh filter perlindungan modal)'
         : stock.beta1Y <= 0.96

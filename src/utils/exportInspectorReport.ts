@@ -15,6 +15,220 @@ export interface InspectorExportPayload {
   regimeStatus: MarketRegimeStatus;
 }
 
+interface RichWordToken {
+  word: string;
+  style: 'normal' | 'bold' | 'verdict';
+}
+
+const VERDICT_TERMS = [
+  'LAYAK DIAKUMULASI BERTAHAP',
+  'LAYAK KOLEKSI SELEKTIF SAAT KOREKSI',
+  'LEBIH TEPAT DITUNGGU PADA AREA PULLBACK',
+  'TIDAK LAYAK DIAKUMULASI',
+  'STRONG ACCUMULATE',
+  'SELECTIVE BUY',
+  'BUY ON WEAKNESS',
+  'BUKAN VALUE TRAP',
+  'VALUE TRAP',
+  'DIVIDEND TRAP',
+  'HIGH SPECULATIVE CONCENTRATION',
+  'CLEAN NON-HSC',
+  'BLOKIR HSC',
+  'ROTATE OUT'
+];
+
+const METRIC_LABELS = [
+  'Implied PER',
+  'Fair PER',
+  'PER',
+  'Implied PBV',
+  'Fair PBV',
+  'PBV',
+  'Earnings Yield',
+  'SBN 10Y',
+  'ROA murni',
+  'ROA',
+  'ROE organik',
+  'ROE',
+  'Equity Multiplier',
+  'DER',
+  'Operating Margin',
+  'Op Margin',
+  'margin usaha',
+  'Margin of Safety',
+  'MoS',
+  'Equity Yield Spread',
+  'Total Shareholder Yield',
+  'Skor Value',
+  'Skor Komposit',
+  'Skor Momentum',
+  'Low-Vol',
+  'Beta 1Y',
+  'Beta',
+  'BVPS',
+  'EPS',
+  'biaya modal',
+  'Cost of Equity',
+  'Nilai Intrinsik Wajar',
+  'Nilai Wajar'
+];
+
+function tokenizeFinancialNarrative(text: string, ticker?: string): RichWordToken[] {
+  const cleanedText = String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleanedText) return [];
+
+  const cleanTicker = (ticker || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+  const patternParts: string[] = [
+    `\\b(?:${VERDICT_TERMS.join('|')})\\b`,
+    `\\b(?:${METRIC_LABELS.join('|')})\\s*~?(?:Rp\\s*)?[+-]?\\d+(?:[.,]\\d+)?(?:%|x|\\/100|\\/10|\\/saham)?`,
+    `~?Rp\\s*\\d+(?:[.,]\\d+)*(?:\\/saham)?`,
+    `[+-]?\\d+(?:[.,]\\d+)?(?:%|x|\\b\\/100\\b|\\b\\/10\\b)`
+  ];
+
+  if (cleanTicker.length >= 4) {
+    patternParts.push(`\\b${cleanTicker}\\b`);
+  }
+
+  const masterRegex = new RegExp(`(${patternParts.join('|')})`, 'g');
+  const segments = cleanedText.split(masterRegex);
+
+  const tokens: RichWordToken[] = [];
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    if (!seg) continue;
+
+    const isMatched = i % 2 === 1;
+    let style: 'normal' | 'bold' | 'verdict' = 'normal';
+    if (isMatched) {
+      const upper = seg.trim().toUpperCase();
+      style = VERDICT_TERMS.some((v) => v === upper) ? 'verdict' : 'bold';
+    }
+
+    const words = seg.split(/\s+/).filter(Boolean);
+    for (const w of words) {
+      tokens.push({ word: w, style });
+    }
+  }
+
+  return tokens;
+}
+
+function wrapRichTokens(
+  ctx: CanvasRenderingContext2D,
+  tokens: RichWordToken[],
+  maxWidth: number,
+  fontSizePx: number
+): RichWordToken[][] {
+  if (tokens.length === 0) return [];
+  const lines: RichWordToken[][] = [];
+  let currentLine: RichWordToken[] = [];
+  let currentWidth = 0;
+
+  ctx.font = `500 ${fontSizePx}px Montserrat, sans-serif`;
+  const spaceW = ctx.measureText(' ').width;
+
+  for (const token of tokens) {
+    ctx.font = `${token.style === 'normal' ? '500' : '700'} ${fontSizePx}px Montserrat, sans-serif`;
+    const wordW = ctx.measureText(token.word).width;
+    const neededW = currentLine.length > 0 ? spaceW + wordW : wordW;
+
+    if (currentWidth + neededW > maxWidth && currentLine.length > 0) {
+      lines.push(currentLine);
+      currentLine = [token];
+      currentWidth = wordW;
+    } else {
+      currentLine.push(token);
+      currentWidth += neededW;
+    }
+  }
+
+  if (currentLine.length > 0) {
+    lines.push(currentLine);
+  }
+
+  return lines;
+}
+
+function drawRichTokenLines(
+  ctx: CanvasRenderingContext2D,
+  lines: RichWordToken[][],
+  startX: number,
+  startY: number,
+  lineHeight: number,
+  fontSizePx: number,
+  normalColor = '#D1D5DB',
+  boldColor = '#F9FAFB',
+  verdictColor = '#F59E0B'
+): number {
+  ctx.font = `500 ${fontSizePx}px Montserrat, sans-serif`;
+  const spaceW = ctx.measureText(' ').width;
+
+  lines.forEach((lineTokens, rowIdx) => {
+    let curX = startX;
+    const y = startY + rowIdx * lineHeight;
+
+    lineTokens.forEach((tok, tokIdx) => {
+      const isNormal = tok.style === 'normal';
+      const isVerdict = tok.style === 'verdict';
+      ctx.font = `${isNormal ? '500' : '700'} ${fontSizePx}px Montserrat, sans-serif`;
+      ctx.fillStyle = isVerdict ? verdictColor : isNormal ? normalColor : boldColor;
+
+      ctx.fillText(tok.word, curX, y);
+      const wordW = ctx.measureText(tok.word).width;
+
+      if (isVerdict) {
+        const nextIsVerdict =
+          tokIdx + 1 < lineTokens.length && lineTokens[tokIdx + 1].style === 'verdict';
+        const underlineW = nextIsVerdict ? wordW + spaceW : wordW;
+        ctx.save();
+        ctx.strokeStyle = 'rgba(245, 158, 11, 0.75)';
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.moveTo(curX, y + 3);
+        ctx.lineTo(curX + underlineW, y + 3);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      curX += wordW + spaceW;
+    });
+  });
+
+  return startY + lines.length * lineHeight;
+}
+
+function splitExportCoTStep(stepText: string, index: number): {
+  header: string;
+  body: string;
+  conclusion: string | null;
+} {
+  const cleaned = String(stepText || '').trim();
+  const colonIdx = cleaned.indexOf(':');
+  const header =
+    colonIdx > 0 && colonIdx <= 68
+      ? cleaned.slice(0, colonIdx + 1).trim()
+      : `0${index + 1}. Analisis Faktor:`;
+  const remainder =
+    colonIdx > 0 && colonIdx <= 68 ? cleaned.slice(colonIdx + 1).trim() : cleaned;
+
+  const arrowMatch = remainder.match(/([\s\S]*?)\s*(?:->|→)\s*([\s\S]+)$/);
+  if (arrowMatch) {
+    return {
+      header,
+      body: arrowMatch[1].trim(),
+      conclusion: arrowMatch[2].trim()
+    };
+  }
+  return {
+    header,
+    body: remainder,
+    conclusion: null
+  };
+}
+
 function wrapCanvasText(
   ctx: CanvasRenderingContext2D,
   text: string,
@@ -64,6 +278,148 @@ function drawRoundedRect(
 }
 
 /**
+ * Draws the official Nostradamus 8-Point Mariner's Compass Rose emblem onto a 2D canvas
+ * inside the top-left header box.
+ */
+function drawNostradamusCompassLogo(
+  ctx: CanvasRenderingContext2D,
+  boxX: number,
+  boxY: number,
+  boxSize: number
+) {
+  // Subtle rounded container frame
+  drawRoundedRect(ctx, boxX, boxY, boxSize, boxSize, 6);
+  ctx.fillStyle = '#151C28';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(245, 158, 11, 0.45)';
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+
+  ctx.save();
+  // Map 64x64 coordinate space from NostradamusLogo.tsx into the target box
+  const scale = (boxSize - 4) / 64;
+  ctx.translate(boxX + 2, boxY + 2);
+  ctx.scale(scale, scale);
+
+  // 1. Outer Astrolabe Brass Bezel Ring
+  ctx.beginPath();
+  ctx.arc(32, 32, 29, 0, Math.PI * 2);
+  ctx.fillStyle = '#0F1520';
+  ctx.fill();
+  ctx.strokeStyle = '#F59E0B';
+  ctx.lineWidth = 2.2;
+  ctx.stroke();
+
+  // 2. Inner Degree Ring (Dashed)
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(32, 32, 23, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(217, 119, 6, 0.55)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 3]);
+  ctx.stroke();
+  ctx.restore();
+
+  // 3. Intercardinal 4-Point Star (NE, SE, SW, NW)
+  const drawPoly = (pts: [number, number][], fill: string, stroke?: string, lw = 0.6) => {
+    ctx.beginPath();
+    pts.forEach(([px, py], i) => {
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.closePath();
+    ctx.fillStyle = fill;
+    ctx.fill();
+    if (stroke) {
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = lw;
+      ctx.stroke();
+    }
+  };
+
+  drawPoly(
+    [
+      [32, 26],
+      [47, 17],
+      [38, 32],
+      [47, 47],
+      [32, 38],
+      [17, 47],
+      [26, 32],
+      [17, 17]
+    ],
+    'rgba(56, 189, 248, 0.25)',
+    '#38BDF8',
+    1.1
+  );
+
+  // 4. Primary 4-Point Cardinal Compass Needles (Two-tone 3D bevels)
+  // North Needle
+  drawPoly([[32, 4], [32, 32], [26.5, 26.5]], '#FDE68A');
+  drawPoly([[32, 4], [37.5, 26.5], [32, 32]], '#D97706');
+  // South Needle
+  drawPoly([[32, 60], [32, 32], [37.5, 37.5]], '#FBBF24');
+  drawPoly([[32, 60], [26.5, 37.5], [32, 32]], '#92400E');
+  // East Needle
+  drawPoly([[60, 32], [32, 32], [37.5, 26.5]], '#FDE68A');
+  drawPoly([[60, 32], [37.5, 37.5], [32, 32]], '#B45309');
+  // West Needle
+  drawPoly([[4, 32], [32, 32], [26.5, 37.5]], '#FBBF24');
+  drawPoly([[4, 32], [26.5, 26.5], [32, 32]], '#92400E');
+
+  // 5. Center Quant Core Pivot
+  ctx.beginPath();
+  ctx.arc(32, 32, 4.2, 0, Math.PI * 2);
+  ctx.fillStyle = '#11161F';
+  ctx.fill();
+  ctx.strokeStyle = '#FDE68A';
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(32, 32, 1.8, 0, Math.PI * 2);
+  ctx.fillStyle = '#10B981';
+  ctx.fill();
+
+  ctx.restore();
+}
+
+/**
+ * Draws the small 3-layer stack icon next to ALUR PENALARAN KUANTITATIF-FUNDAMENTAL
+ */
+function drawLayersIcon(ctx: CanvasRenderingContext2D, x: number, y: number) {
+  ctx.save();
+  ctx.strokeStyle = '#F59E0B';
+  ctx.lineWidth = 1.4;
+  ctx.lineJoin = 'round';
+
+  // Top diamond
+  ctx.beginPath();
+  ctx.moveTo(x + 6, y);
+  ctx.lineTo(x + 12, y + 3.2);
+  ctx.lineTo(x + 6, y + 6.4);
+  ctx.lineTo(x, y + 3.2);
+  ctx.closePath();
+  ctx.stroke();
+
+  // Middle chevron
+  ctx.beginPath();
+  ctx.moveTo(x, y + 6.4);
+  ctx.lineTo(x + 6, y + 9.6);
+  ctx.lineTo(x + 12, y + 6.4);
+  ctx.stroke();
+
+  // Bottom chevron
+  ctx.beginPath();
+  ctx.moveTo(x, y + 9.6);
+  ctx.lineTo(x + 6, y + 12.8);
+  ctx.lineTo(x + 12, y + 9.6);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+/**
  * Renders the full Emiten Fundamental & AI Committee Inspection Report onto a 2x Retina HD Canvas
  * with official Nostradamus Quant Terminal watermarks (diagonal + header + footer).
  */
@@ -75,14 +431,12 @@ export function renderInspectorReportCanvas(
   const LOGICAL_WIDTH = 1200;
   const SCALE = 2; // 2400px Ultra-HD Retina resolution
 
-  // Measure dynamic height needed for AI summary, CoT steps, and news
   const scratch = document.createElement('canvas');
   const sCtx = scratch.getContext('2d')!;
-  sCtx.font = '500 13px Montserrat, sans-serif';
 
   const rawSummaryText =
     structuredReport?.directAnswerSummary ||
-    `Hasil Analisis Komite Investasi: Pada harga Rp ${formatIdrPriceDisplay(stock.lastPrice)}, ${stock.ticker} memiliki Nilai Intrinsik Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct.toFixed(1)}%) dengan Skor Keyakinan ${joeliardiEval.totalConvictionScore}/100.`;
+    `Hasil Analisis Komite Investasi: Di harga Rp ${formatIdrPriceDisplay(stock.lastPrice)}, ${stock.ticker} memiliki Nilai Intrinsik Wajar Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct.toFixed(1)}%) dengan Skor Keyakinan ${joeliardiEval.totalConvictionScore}/100.`;
 
   const summaryHeaderMatch = rawSummaryText.match(
     /^((?:Hasil|Kesimpulan|Keputusan|Evaluasi|Audit)\s+[^:]{3,75}):\s*([\s\S]*)$/i
@@ -94,17 +448,116 @@ export function renderInspectorReportCanvas(
     ? summaryHeaderMatch[2].trim()
     : rawSummaryText.trim();
 
-  const summaryLines = wrapCanvasText(sCtx, summaryBodyText, LOGICAL_WIDTH - 120);
+  // Pre-wrap rich narrative tokens for the main summary
+  const summaryRichTokens = tokenizeFinancialNarrative(summaryBodyText, stock.ticker);
+  const summaryRichLines = wrapRichTokens(
+    sCtx,
+    summaryRichTokens,
+    LOGICAL_WIDTH - 116,
+    13
+  );
+  const summaryLineH = 22;
+
+  // Pre-parse and measure 4 Chain-of-Thought cards (matching Attachment 1 layout)
   const cotSteps = structuredReport?.chainOfThoughtSteps || [];
+  const halfCotW = (LOGICAL_WIDTH - 126) / 2;
+
+  const parsedCotCards = cotSteps.map((stepStr, idx) => {
+    const parsed = splitExportCoTStep(stepStr, idx);
+    const bodyTokens = tokenizeFinancialNarrative(parsed.body, stock.ticker);
+    const bodyLines = wrapRichTokens(sCtx, bodyTokens, halfCotW - 28, 11.5);
+    sCtx.font = '700 11.5px Montserrat, sans-serif';
+    const conclusionLines = parsed.conclusion
+      ? wrapCanvasText(sCtx, `→ ${parsed.conclusion}`, halfCotW - 28)
+      : [];
+    const cardContentH =
+      46 +
+      bodyLines.length * 18 +
+      (conclusionLines.length > 0 ? 8 + conclusionLines.length * 17 : 0) +
+      14;
+    return {
+      ...parsed,
+      bodyLines,
+      conclusionLines,
+      cardContentH: Math.max(106, cardContentH)
+    };
+  });
+
+  // Compute row heights for the 2-column CoT grid
+  const cotRowHeights: number[] = [];
+  for (let r = 0; r < Math.ceil(parsedCotCards.length / 2); r++) {
+    const leftCard = parsedCotCards[r * 2];
+    const rightCard = parsedCotCards[r * 2 + 1];
+    const rowH = Math.max(
+      leftCard ? leftCard.cardContentH : 106,
+      rightCard ? rightCard.cardContentH : 106
+    );
+    cotRowHeights.push(rowH);
+  }
+  const totalCotGridH =
+    cotRowHeights.reduce((acc, h) => acc + h, 0) +
+    Math.max(0, cotRowHeights.length - 1) * 12;
+
+  // Pre-measure Execution Strategy 4 cards so no text is ever cut off
+  const ex = structuredReport?.executionStrategy;
+  const exW = (LOGICAL_WIDTH - 112 - 12 * 3) / 4;
+  let exCardH = 0;
+  const exCols = ex
+    ? [
+        { label: 'TINDAKAN UTAMA', val: ex.recommendedAction, color: '#F3F4F6' },
+        { label: 'ZONA AKUMULASI IDEAL', val: ex.idealEntryZone, color: '#34D399' },
+        {
+          label: 'BATAS RISIKO / INVALIDATION',
+          val: ex.InvalidationOrRiskLimit,
+          color: '#FB7185'
+        },
+        {
+          label: 'PANDUAN PORSI KERANJANG',
+          val: ex.portfolioAllocationGuide,
+          color: '#38BDF8'
+        }
+      ].map((col) => {
+        sCtx.font = '600 10.5px Montserrat, sans-serif';
+        const wrapped = wrapCanvasText(sCtx, col.val, exW - 22);
+        return { ...col, wrapped };
+      })
+    : [];
+
+  if (exCols.length > 0) {
+    const maxExLines = Math.max(...exCols.map((c) => c.wrapped.length));
+    exCardH = Math.max(86, 36 + maxExLines * 15.5 + 12);
+  }
+
+  // Measure verdictTitle wrapping
+  const verdictBadge = structuredReport?.verdictBadge || joeliardiEval.convictionGrade;
+  const verdictTitle =
+    structuredReport?.verdictTitle ||
+    `Evaluasi Fundamental & Kuantitatif OOS untuk ${stock.ticker}`;
+  sCtx.font = '800 15px Montserrat, sans-serif';
+  const verdictTitleLines = wrapCanvasText(sCtx, verdictTitle, LOGICAL_WIDTH - 116);
+
+  const aiBoxH =
+    66 +
+    verdictTitleLines.length * 21 +
+    24 + // AI Conviction Score line
+    44 + // Boxed header
+    summaryRichLines.length * summaryLineH +
+    (parsedCotCards.length > 0 ? 48 + totalCotGridH : 0) +
+    (exCols.length > 0 ? 18 + exCardH : 0) +
+    24;
+
   const topNews = recentNews.slice(0, 4);
 
   const LOGICAL_HEIGHT =
-    812 +
-    summaryLines.length * 20 +
-    (cotSteps.length > 0 ? Math.ceil(cotSteps.length / 2) * 72 + 40 : 0) +
-    (structuredReport ? 115 : 0) +
-    (topNews.length > 0 ? Math.ceil(topNews.length / 2) * 78 + 56 : 0) +
-    75;
+    128 +
+    (stock.isHscFlagged ? 68 : 0) +
+    102 +
+    132 +
+    74 +
+    aiBoxH +
+    18 +
+    (topNews.length > 0 ? Math.ceil(topNews.length / 2) * 74 + 42 : 0) +
+    72;
 
   const canvas = document.createElement('canvas');
   canvas.width = LOGICAL_WIDTH * SCALE;
@@ -146,37 +599,28 @@ export function renderInspectorReportCanvas(
   ctx.lineTo(LOGICAL_WIDTH - 17, 109);
   ctx.stroke();
 
-  // Brand Icon Box
-  drawRoundedRect(ctx, 38, 35, 42, 42, 4);
-  ctx.fillStyle = 'rgba(217, 119, 6, 0.16)';
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(245, 158, 11, 0.5)';
-  ctx.stroke();
-  ctx.fillStyle = '#F59E0B';
-  ctx.font = '800 20px Montserrat, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('N', 59, 63);
-  ctx.textAlign = 'left';
+  // Nostradamus Mariner's Compass Rose Logo in Header (Replaces plain 'N' box)
+  drawNostradamusCompassLogo(ctx, 36, 33, 48);
 
   // Kicker
   ctx.fillStyle = '#F59E0B';
   ctx.font = '700 11px Montserrat, sans-serif';
   ctx.fillText(
     'NOSTRADAMUS QUANT TERMINAL // ON-DEMAND FUNDAMENTAL & AI INSPECTOR (FUNDAMENTAL KUALITAS MOAT)',
-    94,
+    98,
     46
   );
 
   // Main Emiten Title
   ctx.fillStyle = '#F9FAFB';
   ctx.font = '800 22px Montserrat, sans-serif';
-  ctx.fillText(`${stock.ticker} · ${stock.name}`, 94, 74);
+  ctx.fillText(`${stock.ticker} · ${stock.name}`, 98, 74);
 
   ctx.fillStyle = '#9CA3AF';
   ctx.font = '600 12px Montserrat, sans-serif';
   ctx.fillText(
     `Sektor IDX-IC: ${stock.sector}   |   Rezim IHSG: ${regimeStatus}   |   Dicetak: ${new Date().toLocaleString('id-ID')}`,
-    94,
+    98,
     94
   );
 
@@ -429,129 +873,201 @@ export function renderInspectorReportCanvas(
 
   curY += 74;
 
-  // 8. AI Investment Committee Synthesis Box
-  const aiBoxH =
-    136 +
-    summaryLines.length * 20 +
-    (cotSteps.length > 0 ? Math.ceil(cotSteps.length / 2) * 72 + 38 : 0) +
-    (structuredReport ? 105 : 0);
-
-  drawRoundedRect(ctx, 38, curY, LOGICAL_WIDTH - 76, aiBoxH, 4);
+  // 8. AI Investment Committee Synthesis Box (Matches Attachment 1 Web UI Layout)
+  drawRoundedRect(ctx, 38, curY, LOGICAL_WIDTH - 76, aiBoxH, 5);
   ctx.fillStyle = '#11161F';
   ctx.fill();
-  ctx.strokeStyle = 'rgba(245, 158, 11, 0.45)';
+  ctx.strokeStyle = 'rgba(245, 158, 11, 0.42)';
+  ctx.lineWidth = 1.2;
   ctx.stroke();
 
-  ctx.fillStyle = '#F59E0B';
+  let textY = curY + 22;
+
+  // Top Bordered Status Badge (matching Attachment 1 green/amber/red pill box)
+  const isDangerBadge =
+    verdictBadge.includes('AVOID') ||
+    verdictBadge.includes('HSC') ||
+    verdictBadge.includes('SPECULATIVE');
+  const isPositiveBadge =
+    verdictBadge.includes('ACCUMULATE') || verdictBadge.includes('BUY');
+
   ctx.font = '700 10.5px Montserrat, sans-serif';
-  ctx.fillText(
-    'KOMITE INVESTASI AI // BEDAH DUPONT ROE, SPREAD SBN 10Y & KEPUTUSAN PRA-BELI',
-    56,
-    curY + 24
-  );
-
-  const verdictBadge = structuredReport?.verdictBadge || joeliardiEval.convictionGrade;
-  const verdictTitle =
-    structuredReport?.verdictTitle ||
-    `Evaluasi Fundamental & Kuantitatif OOS untuk ${stock.ticker}`;
-
-  ctx.fillStyle = '#F9FAFB';
-  ctx.font = '700 14px Montserrat, sans-serif';
-  ctx.fillText(`[${verdictBadge}]  ${verdictTitle}`, 56, curY + 48);
-
-  // Boxed Bold Header for "HASIL ANALISIS KOMITE INVESTASI"
-  ctx.font = '800 11.5px Montserrat, sans-serif';
-  const hdrBoxW = ctx.measureText(summaryBoxHeader).width + 28;
-  drawRoundedRect(ctx, 56, curY + 60, hdrBoxW, 24, 3);
-  ctx.fillStyle = 'rgba(245, 158, 11, 0.16)';
+  const vBadgeW = ctx.measureText(verdictBadge).width + 24;
+  drawRoundedRect(ctx, 56, textY, vBadgeW, 24, 3);
+  ctx.fillStyle = isDangerBadge
+    ? 'rgba(225, 29, 72, 0.16)'
+    : isPositiveBadge
+    ? 'rgba(16, 185, 129, 0.14)'
+    : 'rgba(16, 185, 129, 0.12)';
   ctx.fill();
-  ctx.strokeStyle = 'rgba(245, 158, 11, 0.65)';
+  ctx.strokeStyle = isDangerBadge
+    ? 'rgba(244, 63, 94, 0.55)'
+    : isPositiveBadge
+    ? 'rgba(16, 185, 129, 0.5)'
+    : 'rgba(16, 185, 129, 0.45)';
+  ctx.lineWidth = 1;
   ctx.stroke();
-  ctx.fillStyle = '#FBBF24';
-  ctx.fillText(summaryBoxHeader, 70, curY + 76);
 
-  // New-line narrative discussion body below the boxed header
-  let textY = curY + 104;
-  ctx.fillStyle = '#E5E7EB';
-  ctx.font = '500 12.5px Montserrat, sans-serif';
-  summaryLines.forEach((line) => {
-    ctx.fillText(line, 56, textY);
-    textY += 20;
+  ctx.fillStyle = isDangerBadge
+    ? '#FB7185'
+    : isPositiveBadge
+    ? '#34D399'
+    : '#34D399';
+  ctx.fillText(verdictBadge, 68, textY + 16);
+
+  textY += 44;
+
+  // Bold Verdict Title on its own dedicated line
+  ctx.fillStyle = '#F9FAFB';
+  ctx.font = '800 15px Montserrat, sans-serif';
+  verdictTitleLines.forEach((vLine) => {
+    ctx.fillText(vLine, 56, textY);
+    textY += 21;
   });
 
-  if (cotSteps.length > 0) {
-    textY += 10;
-    ctx.fillStyle = '#F59E0B';
+  // AI Conviction Score in Bold Amber below Verdict Title
+  const convScore =
+    structuredReport?.convictionScore ?? joeliardiEval.totalConvictionScore;
+  ctx.fillStyle = '#F59E0B';
+  ctx.font = '700 12.5px Montserrat, sans-serif';
+  ctx.fillText(`AI Conviction Score: ${convScore}/100`, 56, textY + 2);
+
+  textY += 18;
+
+  // Boxed Bold Header with Amber Square Dot: [ ■ HASIL ANALISIS KOMITE INVESTASI ]
+  ctx.font = '800 12px Montserrat, sans-serif';
+  const hdrBoxW = ctx.measureText(summaryBoxHeader).width + 44;
+  drawRoundedRect(ctx, 56, textY, hdrBoxW, 30, 3);
+  ctx.fillStyle = 'rgba(217, 119, 6, 0.12)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(217, 119, 6, 0.65)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Small Amber Square Indicator inside Header Box
+  drawRoundedRect(ctx, 68, textY + 10, 9, 9, 2);
+  ctx.fillStyle = '#F59E0B';
+  ctx.fill();
+
+  ctx.fillStyle = '#F59E0B';
+  ctx.fillText(summaryBoxHeader, 84, textY + 19.5);
+
+  textY += 50;
+
+  // Rich-Text Narrative Summary Paragraph (Bold numbers/metrics + Amber Underlined Verdict)
+  textY = drawRichTokenLines(
+    ctx,
+    summaryRichLines,
+    56,
+    textY,
+    summaryLineH,
+    13,
+    '#D1D5DB',
+    '#F9FAFB',
+    '#F59E0B'
+  );
+
+  // 4 Chain-of-Thought Cards Section (Matching Attachment 1)
+  if (parsedCotCards.length > 0) {
+    textY += 6;
+    // Subtle Horizontal Divider Line
+    ctx.strokeStyle = '#1E293B';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(56, textY);
+    ctx.lineTo(LOGICAL_WIDTH - 56, textY);
+    ctx.stroke();
+
+    textY += 22;
+    drawLayersIcon(ctx, 56, textY - 11);
+    ctx.fillStyle = '#9CA3AF';
     ctx.font = '700 10.5px Montserrat, sans-serif';
-    ctx.fillText('ALUR PENALARAN KUANTITATIF-FUNDAMENTAL (CHAIN-OF-THOUGHT):', 56, textY);
+    ctx.fillText(
+      'ALUR PENALARAN KUANTITATIF-FUNDAMENTAL (CHAIN-OF-THOUGHT):',
+      74,
+      textY
+    );
     textY += 14;
 
-    const halfW = (LOGICAL_WIDTH - 126) / 2;
-    for (let i = 0; i < cotSteps.length; i++) {
-      const col = i % 2;
-      const row = Math.floor(i / 2);
-      const bx = 56 + col * (halfW + 14);
-      const by = textY + row * 72;
+    let rowStartY = textY;
+    for (let r = 0; r < cotRowHeights.length; r++) {
+      const rowH = cotRowHeights[r];
 
-      drawRoundedRect(ctx, bx, by, halfW, 64, 3);
-      ctx.fillStyle = '#161D2A';
-      ctx.fill();
-      ctx.strokeStyle = '#263244';
-      ctx.stroke();
+      for (let col = 0; col < 2; col++) {
+        const cardIdx = r * 2 + col;
+        if (cardIdx >= parsedCotCards.length) continue;
+        const card = parsedCotCards[cardIdx];
+        const bx = 56 + col * (halfCotW + 14);
+        const by = rowStartY;
 
-      const rawStep = String(cotSteps[i] || '').trim();
-      const colonIdx = rawStep.indexOf(':');
-      const stepHeader =
-        colonIdx > 0 && colonIdx <= 68
-          ? rawStep.slice(0, colonIdx + 1).trim()
-          : `0${i + 1}. Analisis Faktor:`;
-      const stepBody =
-        colonIdx > 0 && colonIdx <= 68
-          ? rawStep.slice(colonIdx + 1).trim()
-          : rawStep;
+        drawRoundedRect(ctx, bx, by, halfCotW, rowH, 4);
+        ctx.fillStyle = '#141B26';
+        ctx.fill();
+        ctx.strokeStyle = '#243044';
+        ctx.lineWidth = 1;
+        ctx.stroke();
 
-      // Bold Title on Top Line
-      ctx.fillStyle = '#F9FAFB';
-      ctx.font = '700 11px Montserrat, sans-serif';
-      ctx.fillText(stepHeader, bx + 12, by + 18);
+        // Bold Step Header
+        ctx.fillStyle = '#F9FAFB';
+        ctx.font = '700 12px Montserrat, sans-serif';
+        ctx.fillText(card.header, bx + 14, by + 22);
 
-      // Discussion on New Line with space
-      ctx.fillStyle = '#D1D5DB';
-      ctx.font = '500 10px Montserrat, sans-serif';
-      const stepLines = wrapCanvasText(ctx, stepBody, halfW - 24).slice(0, 2);
-      stepLines.forEach((sl, sIdx) => {
-        ctx.fillText(sl, bx + 12, by + 37 + sIdx * 15);
-      });
+        // Subtle Header Bottom Border inside Card
+        ctx.strokeStyle = '#1F2A3C';
+        ctx.beginPath();
+        ctx.moveTo(bx + 14, by + 31);
+        ctx.lineTo(bx + halfCotW - 14, by + 31);
+        ctx.stroke();
+
+        // Rich-Text Body with Bold Financial Metrics
+        const afterBodyY = drawRichTokenLines(
+          ctx,
+          card.bodyLines,
+          bx + 14,
+          by + 50,
+          18,
+          11.5,
+          '#9CA3AF',
+          '#F9FAFB',
+          '#F59E0B'
+        );
+
+        // Dedicated Amber Conclusion Line (`→ ...`) at bottom of Card
+        if (card.conclusionLines.length > 0) {
+          ctx.fillStyle = '#F59E0B';
+          ctx.font = '700 11.5px Montserrat, sans-serif';
+          card.conclusionLines.forEach((cLine, cIdx) => {
+            ctx.fillText(cLine, bx + 14, afterBodyY + 6 + cIdx * 17);
+          });
+        }
+      }
+
+      rowStartY += rowH + 12;
     }
-    textY += Math.ceil(cotSteps.length / 2) * 72 + 14;
+
+    textY = rowStartY - 12;
   }
 
-  if (structuredReport?.executionStrategy) {
-    const ex = structuredReport.executionStrategy;
-    const exCols = [
-      { label: 'TINDAKAN UTAMA', val: ex.recommendedAction, color: '#F3F4F6' },
-      { label: 'ZONA AKUMULASI IDEAL', val: ex.idealEntryZone, color: '#34D399' },
-      { label: 'BATAS RISIKO / INVALIDATION', val: ex.InvalidationOrRiskLimit, color: '#FB7185' },
-      { label: 'PANDUAN PORSI KERANJANG', val: ex.portfolioAllocationGuide, color: '#38BDF8' }
-    ];
-    const exW = (LOGICAL_WIDTH - 112 - 12 * 3) / 4;
+  // 4 Execution Strategy Cards (Full text, no truncation)
+  if (exCols.length > 0) {
+    textY += 16;
     exCols.forEach((ec, idx) => {
       const exX = 56 + idx * (exW + 12);
-      drawRoundedRect(ctx, exX, textY, exW, 78, 3);
-      ctx.fillStyle = '#161D2A';
+      drawRoundedRect(ctx, exX, textY, exW, exCardH, 4);
+      ctx.fillStyle = '#141B26';
       ctx.fill();
-      ctx.strokeStyle = '#263244';
+      ctx.strokeStyle = '#243044';
+      ctx.lineWidth = 1;
       ctx.stroke();
 
       ctx.fillStyle = '#9CA3AF';
       ctx.font = '700 9.5px Montserrat, sans-serif';
-      ctx.fillText(ec.label, exX + 10, textY + 18);
+      ctx.fillText(ec.label, exX + 11, textY + 19);
 
       ctx.fillStyle = ec.color;
       ctx.font = '600 10.5px Montserrat, sans-serif';
-      const exLines = wrapCanvasText(ctx, ec.val, exW - 20).slice(0, 3);
-      exLines.forEach((el, eIdx) => {
-        ctx.fillText(el, exX + 10, textY + 36 + eIdx * 15);
+      ec.wrapped.forEach((el, eIdx) => {
+        ctx.fillText(el, exX + 11, textY + 37 + eIdx * 15.5);
       });
     });
   }
@@ -597,7 +1113,7 @@ export function renderInspectorReportCanvas(
     curY += Math.ceil(topNews.length / 2) * 74 + 12;
   }
 
-  // 10. Institutional Footer Bar (Without "WATERMARK RESMI")
+  // 10. Institutional Footer Bar (Clean Left Footer matching Attachment 3)
   const footerY = LOGICAL_HEIGHT - 56;
   ctx.fillStyle = '#11161F';
   ctx.fillRect(17, footerY, LOGICAL_WIDTH - 34, 39);
@@ -609,11 +1125,7 @@ export function renderInspectorReportCanvas(
 
   ctx.fillStyle = '#F59E0B';
   ctx.font = '700 11px Montserrat, sans-serif';
-  ctx.fillText(
-    '© 2026 NOSTRADAMUS QUANT TERMINAL · FUNDAMENTAL KUALITAS MOAT & DEMIGUEL OOS QUANT',
-    38,
-    footerY + 24
-  );
+  ctx.fillText('© 2026 NOSTRADAMUS QUANT TERMINAL', 38, footerY + 24);
 
   ctx.fillStyle = '#9CA3AF';
   ctx.font = '600 11px Montserrat, sans-serif';
