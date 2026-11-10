@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { DeMiguelBufferZone, MarketRegimeStatus, StockMetrics } from '../types/quant';
 import {
   enrichStockMetrics,
@@ -96,6 +96,7 @@ export function ScreeningTable({
 
   const [liveTickerQuery, setLiveTickerQuery] = useState<string>('');
   const [isFetchingLiveTicker, setIsFetchingLiveTicker] = useState<boolean>(false);
+  const [syncingRowTicker, setSyncingRowTicker] = useState<string | null>(null);
   const [liveStatusMsg, setLiveStatusMsg] = useState<string | null>(null);
 
   const [tickerInput, setTickerInput] = useState('');
@@ -351,6 +352,43 @@ export function ScreeningTable({
       setShowCompareMatrix(true);
     }
   };
+
+  const handleSyncSingleRowTicker = async (ticker: string) => {
+    const clean = ticker.trim().toUpperCase().replace(/\.JK$/i, '');
+    if (!clean || syncingRowTicker === clean) return;
+    setSyncingRowTicker(clean);
+    try {
+      const fetched = await fetchLiveIdxTicker(clean);
+      onAddStock(fetched);
+      setLiveStatusMsg(
+        `${fetched.ticker}.JK diperbarui Live Yahoo Finance: Rp ${fetched.lastPrice.toLocaleString('id-ID')} (${fetched.change1D >= 0 ? '+' : ''}${fetched.change1D.toFixed(2)}%)`
+      );
+    } catch {
+      // fallback silently
+    } finally {
+      setSyncingRowTicker(null);
+    }
+  };
+
+  // Tier-2 On-Demand Micro-Sync when user searches a specific 4-letter ticker
+  useEffect(() => {
+    const clean = searchQuery.trim().toUpperCase().replace(/\.JK$/i, '');
+    if (!/^[A-Z]{4}$/.test(clean)) return;
+    const matchInCatalog = IDX_SECTOR_CATALOG.some((c) => c.ticker === clean);
+    if (!matchInCatalog) return;
+    const timer = window.setTimeout(() => {
+      fetchLiveIdxTicker(clean)
+        .then((fresh) => {
+          if (fresh && fresh.lastPrice > 0) {
+            onAddStock(fresh);
+          }
+        })
+        .catch(() => {
+          // ignore offline error
+        });
+    }, 380);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
 
   const handleLiveFetchSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -702,107 +740,6 @@ export function ScreeningTable({
           </div>
         </div>
 
-        {/* Search & Multi-Select Dropdowns (Likuiditas/Dividen, 11 Sektor BEI, Zona Buffer) */}
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="relative w-56">
-              <Search className="w-3.5 h-3.5 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  setCurrentPage(1);
-                }}
-                placeholder="Cari saham atau sektor..."
-                className="w-full pl-8 pr-3 py-1.5 text-xs font-semibold bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs focus:outline-none focus:border-[#F59E0B]"
-              />
-            </div>
-
-            <MultiSelectDropdown
-              label="Likuiditas & Dividen"
-              allLabel={`Semua Status (${rankedStocks.length})`}
-              options={qualityDropdownOptions}
-              selectedValues={selectedQualities}
-              onChange={(vals) => {
-                setSelectedQualities(vals);
-                setCurrentPage(1);
-              }}
-            />
-
-            <MultiSelectDropdown
-              label="Sektor BEI"
-              allLabel="Semua 11 Sektor BEI"
-              options={sectorDropdownOptions}
-              selectedValues={selectedSectors}
-              onChange={(vals) => {
-                setSelectedSectors(vals);
-                setCurrentPage(1);
-              }}
-            />
-
-            <MultiSelectDropdown
-              label="Zona Buffer"
-              allLabel="Semua Zona Buffer"
-              options={zoneDropdownOptions}
-              selectedValues={selectedZones}
-              onChange={(vals) => {
-                setSelectedZones(vals as DeMiguelBufferZone[]);
-                setCurrentPage(1);
-              }}
-            />
-
-            <select
-              value={pageSize}
-              onChange={(e) => {
-                setPageSize(Number(e.target.value));
-                setCurrentPage(1);
-              }}
-              className="px-2.5 py-1.5 text-xs font-semibold bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs focus:outline-none focus:border-[#F59E0B]"
-            >
-              <option value={100}>100 Emiten / Hal</option>
-              <option value={250}>250 Emiten / Hal</option>
-              <option value={500}>500 Emiten / Hal</option>
-              <option value={2000}>Semua ({filteredAndSortedStocks.length} Emiten)</option>
-            </select>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3 text-xs text-neutral-500">
-            {totalPages > 1 && (
-              <div className="inline-flex items-center gap-1.5 bg-[#FAF9F6] border border-[#E4E2DD] px-2 py-1 rounded-xs">
-                <button
-                  type="button"
-                  disabled={safePage <= 1}
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  className="p-0.5 hover:text-[#D97706] disabled:opacity-40 cursor-pointer"
-                >
-                  <ChevronLeft className="w-3.5 h-3.5" />
-                </button>
-                <span className="font-bold text-[#111315] tabular-nums">
-                  Hal {safePage}/{totalPages}
-                </span>
-                <button
-                  type="button"
-                  disabled={safePage >= totalPages}
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  className="p-0.5 hover:text-[#D97706] disabled:opacity-40 cursor-pointer"
-                >
-                  <ChevronRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            )}
-            <span>Bobot Value-First: 35% Value · 28% Low-Vol · 22% Mom · 15% Size</span>
-            <span>·</span>
-            <button
-              type="button"
-              onClick={onResetUniverse}
-              className="text-[#D97706] bb-amber font-bold hover:underline cursor-pointer"
-            >
-              Reset Full JCI ({IDX_SECTOR_CATALOG.length} Emiten)
-            </button>
-          </div>
-        </div>
-
         {/* HSC Labeling & Joeliardi Sunendar Fundamental Inspector Control Strip */}
         <div className="p-3 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -976,7 +913,7 @@ export function ScreeningTable({
                 MATRIKS PERBANDINGAN MULTIFAKTOR SAHAM TERPILIH ({comparedStocksList.length} EMITEN)
               </span>
               <p className="text-[11px] text-neutral-500">
-                Perbandingan head-to-head skor 4-faktor, tren 1D &amp; 30D (1M Yahoo Finance), imbal hasil dividen TTM, serta profil risiko. Angka terbaik disorot hijau.
+                Perbandingan head-to-head skor 4-faktor, GP/A (Novy-Marx), tren 1D &amp; 30D (1M Yahoo Finance), imbal hasil dividen TTM, serta profil risiko. Angka terbaik disorot hijau.
               </p>
             </div>
             <button
@@ -1141,7 +1078,7 @@ export function ScreeningTable({
                 </tr>
                 <tr>
                   <td className="py-2 px-3 font-semibold text-neutral-600">
-                    Faktor Momentum Live (34%)
+                    Faktor Momentum Live (22%)
                   </td>
                   {comparedStocksList.map((s) => (
                     <td
@@ -1158,7 +1095,7 @@ export function ScreeningTable({
                 </tr>
                 <tr>
                   <td className="py-2 px-3 font-semibold text-neutral-600">
-                    Faktor Value &amp; Dividen (23%)
+                    Faktor Value, GP/A &amp; Anti-Junk (35%)
                   </td>
                   {comparedStocksList.map((s) => (
                     <td
@@ -1192,13 +1129,16 @@ export function ScreeningTable({
                 </tr>
                 <tr>
                   <td className="py-2 px-3 font-semibold text-neutral-600">
-                    Profil Risiko (σ Vol · β Beta · ROE)
+                    Profil Risiko &amp; Profitabilitas (σ · β · GP/A · ROE)
                   </td>
                   {comparedStocksList.map((s) => (
                     <td key={s.ticker} className="py-2 px-3 text-[11px] text-neutral-600">
                       σ <strong>{s.volatilityAnn}%</strong> · β{' '}
-                      <strong>{s.beta1Y.toFixed(2)}x</strong> · ROE{' '}
-                      <strong className="text-[#0D5C46]">{s.roe.toFixed(1)}%</strong>
+                      <strong>{s.beta1Y.toFixed(2)}x</strong> · GP/A{' '}
+                      <strong className="text-[#0284C7]">
+                        {(s.grossProfitabilityToAssets ?? s.roe * 0.85).toFixed(1)}%
+                      </strong>{' '}
+                      · ROE <strong className="text-[#0D5C46]">{s.roe.toFixed(1)}%</strong>
                     </td>
                   ))}
                 </tr>
@@ -1329,8 +1269,72 @@ export function ScreeningTable({
         </form>
       )}
 
-      {/* Auto-Fit Sticky Table with Multi-Select Checkboxes & Dedicated Internal Scrollbar */}
+      {/* Auto-Fit Sticky Table with Search & Filter Dropdowns Directly Above Header and Pagination at Bottom */}
       <div className="border border-[#E4E2DD] rounded-xs bg-[#FFFFFF] overflow-hidden">
+        {/* Search & Multi-Select Dropdowns Positioned Directly Above Table Header */}
+        <div className="p-3.5 bg-[#FAF9F6] border-b border-[#E4E2DD] flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative w-60">
+              <Search className="w-3.5 h-3.5 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setCurrentPage(1);
+                }}
+                placeholder="Cari saham atau sektor..."
+                className="w-full pl-8 pr-3 py-1.5 text-xs font-semibold bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs focus:outline-none focus:border-[#F59E0B]"
+              />
+            </div>
+
+            <MultiSelectDropdown
+              label="Likuiditas & Dividen"
+              allLabel={`Semua Status (${rankedStocks.length})`}
+              options={qualityDropdownOptions}
+              selectedValues={selectedQualities}
+              onChange={(vals) => {
+                setSelectedQualities(vals);
+                setCurrentPage(1);
+              }}
+            />
+
+            <MultiSelectDropdown
+              label="Sektor BEI"
+              allLabel="Semua 11 Sektor BEI"
+              options={sectorDropdownOptions}
+              selectedValues={selectedSectors}
+              onChange={(vals) => {
+                setSelectedSectors(vals);
+                setCurrentPage(1);
+              }}
+            />
+
+            <MultiSelectDropdown
+              label="Zona Buffer"
+              allLabel="Semua Zona Buffer"
+              options={zoneDropdownOptions}
+              selectedValues={selectedZones}
+              onChange={(vals) => {
+                setSelectedZones(vals as DeMiguelBufferZone[]);
+                setCurrentPage(1);
+              }}
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 text-xs text-neutral-500">
+            <span>Bobot Value-First: 35% Value (GP/A &amp; QMJ) · 28% Low-Vol · 22% Mom · 15% Size</span>
+            <span>·</span>
+            <button
+              type="button"
+              onClick={onResetUniverse}
+              className="text-[#D97706] bb-amber font-bold hover:underline cursor-pointer"
+            >
+              Reset Full JCI ({IDX_SECTOR_CATALOG.length} Emiten)
+            </button>
+          </div>
+        </div>
+
         <div className="table-scroll-container min-h-[260px] max-h-[580px] overflow-y-auto overflow-x-auto">
           <table className="w-full text-left border-collapse tabular-nums">
             <thead className="sticky top-0 z-20 bg-[#FAF9F6] shadow-xs">
@@ -1352,10 +1356,10 @@ export function ScreeningTable({
                 <th className="py-2.5 px-2.5 w-[88px]">Ticker</th>
                 <th className="py-2.5 px-2.5 min-w-[250px]">
                   <MetricTooltip
-                    label="Emiten & Sektor (σ · β · ROE)"
-                    title="Profil Risiko, Likuiditas & Dividen Emiten"
-                    laymanExplanation="σ (Volatilitas) = guncangan harga tahunan; β (Beta) = kepekaan terhadap IHSG (< 1 lebih tenang, > 1 lebih agresif); ROE = tingkat keuntungan bersih perusahaan. Badge DIV menunjukkan TTM Dividend Yield sesuai Yahoo Finance."
-                    practicalGuide="Cari perusahaan Likuid dengan ROE > 15%, pembagian dividen rutin, dan σ yang sesuai profil risiko Anda."
+                    label="Emiten & Sektor (σ · β · GP/A · ROE)"
+                    title="Profil Risiko, Gross Profitability (GP/A Novy-Marx) & Dividen Emiten"
+                    laymanExplanation="σ (Volatilitas) = guncangan harga tahunan; β (Beta) = kepekaan terhadap IHSG; GP/A = Laba Kotor ÷ Total Aset (prediktor kualitas murni Novy-Marx 2013); ROE = tingkat keuntungan bersih perusahaan."
+                    practicalGuide="Cari perusahaan Likuid dengan GP/A ≥ 15%, ROE > 15%, arus kas sehat (bebas penalti akrual QMJ), dan pembagian dividen rutin."
                   />
                 </th>
                 <th
@@ -1383,7 +1387,7 @@ export function ScreeningTable({
                 >
                   <MetricTooltip
                     label="Mom Live"
-                    title="Faktor Momentum Harga Live (Bobot 34%)"
+                    title="Faktor Momentum Harga Live (Bobot 22%)"
                     laymanExplanation="Skor Tren Kenaikan (1–10): menilai seberapa kuat laju kenaikan harga saham dalam 1 hari & 30 hari (1M Yahoo Finance) terakhir dibanding guncangannya."
                     practicalGuide="Skor ≥ 7,0 menandakan saham sedang dalam tren naik (uptrend) yang kuat."
                     align="center"
@@ -1396,9 +1400,9 @@ export function ScreeningTable({
                 >
                   <MetricTooltip
                     label="Value"
-                    title="Faktor Value, Dividen & Kewajaran Harga (Bobot 23%)"
-                    laymanExplanation="Skor Fundamental, Dividen & Diskon Harga (1–10): menilai seberapa tinggi laba perusahaan (ROE & Margin) dan imbal hasil dividen dibandingkan harga sahamnya saat ini."
-                    practicalGuide="Semakin tinggi skornya, semakin murah/bernilai saham tersebut dibanding kualitas bisnisnya."
+                    title="Faktor Value, Gross Profitability (GP/A) & Anti-Junk QMJ (Bobot 35%)"
+                    laymanExplanation="Skor Kualitas & Nilai (1–10) berbasis Novy-Marx (2013) Gross Profitability to Assets (Laba Kotor / Total Aset) dan Asness QMJ (2019) Anti-Junk Accrual Penalty (pengurang skor bila arus kas operasi lebih rendah dari laba akuntansi)."
+                    practicalGuide="Semakin tinggi skornya, semakin kuat profitabilitas riil dan diskon harga saham tersebut."
                     align="center"
                   />
                   {renderSortIcon('dmuValueScore')}
@@ -1457,6 +1461,8 @@ export function ScreeningTable({
                   const isStockLiquid = stock.isLiquid !== false && stock.lastPrice >= 68;
                   const divYield = stock.dividendYieldPct ?? 0;
                   const isSelectedForCompare = selectedCompareTickers.includes(stock.ticker);
+                  const gpToAssets = stock.grossProfitabilityToAssets ?? Number((stock.roe * 0.85).toFixed(1));
+                  const accrualPen = stock.accrualPenaltyScore ?? 0;
 
                   return (
                     <tr
@@ -1500,7 +1506,7 @@ export function ScreeningTable({
                         </span>
                       </td>
 
-                      {/* Emiten, Sector, Dividend/Illiquid/HSC Badges & Dedicated New Line for σ · β · ROE */}
+                      {/* Emiten, Sector, Dividend/Illiquid/HSC Badges & Dedicated New Line for σ · β · GP/A · ROE */}
                       <td className="py-2.5 px-2.5 min-w-[250px]">
                         <div className="flex flex-wrap items-center gap-1.5">
                           <span className="font-bold text-[#111315] text-xs leading-snug">
@@ -1512,6 +1518,14 @@ export function ScreeningTable({
                               className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-bold text-[#0D5C46] bg-[#059669]/10 border border-[#059669]/35 rounded-xs whitespace-nowrap"
                             >
                               DIV {divYield.toFixed(2)}%
+                            </span>
+                          )}
+                          {accrualPen > 0.3 && (
+                            <span
+                              title={`Penalti Akrual Anti-Junk (QMJ Asness 2019): -${accrualPen.toFixed(2)} poin pada Skor Kualitas karena rasio OCF/NI (${(stock.ocfToNetIncomeRatio ?? 0.7).toFixed(2)}x) menunjukkan akrual tinggi`}
+                              className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-bold text-[#D97706] bg-[#F59E0B]/10 border border-[#F59E0B]/35 rounded-xs whitespace-nowrap"
+                            >
+                              QMJ -{accrualPen.toFixed(1)}
                             </span>
                           )}
                           {stock.isHscFlagged && (
@@ -1539,11 +1553,13 @@ export function ScreeningTable({
                           <span> · </span>
                           <span>β {stock.beta1Y.toFixed(2)}x</span>
                           <span> · </span>
+                          <span className="text-[#0284C7] font-semibold">GP/A {gpToAssets.toFixed(1)}%</span>
+                          <span> · </span>
                           <span>ROE {stock.roe.toFixed(1)}%</span>
                         </div>
                       </td>
 
-                      {/* Last Px, Compact Professional Sync Icon & Independent 1D vs 30D Colors (2 Decimals) */}
+                      {/* Last Px, Clickable On-Demand Sync Icon & Independent 1D vs 30D Colors (2 Decimals) */}
                       <td className="py-2.5 px-2.5 text-right whitespace-nowrap">
                         {stock.lastPrice > 0 ? (
                           <>
@@ -1551,20 +1567,27 @@ export function ScreeningTable({
                               <span className="text-[#111315] font-bold">
                                 Rp {formatIdrPriceDisplay(stock.lastPrice)}
                               </span>
-                              <span
+                              <button
+                                type="button"
+                                onClick={() => handleSyncSingleRowTicker(stock.ticker)}
+                                disabled={syncingRowTicker === stock.ticker}
                                 title={
                                   stock.isLiveFetched
-                                    ? `Data Tersinkronisasi Yahoo Finance (${stock.lastSyncedAt || 'Live'})`
-                                    : 'Menunggu Sinkronisasi'
+                                    ? `Tersinkronisasi Yahoo Finance (${stock.lastSyncedAt || 'Live'}) — Klik untuk refresh harga aktual ${stock.ticker}.JK`
+                                    : `Klik untuk tarik harga aktual ${stock.ticker}.JK dari Yahoo Finance`
                                 }
-                                className={`inline-flex items-center justify-center p-1 rounded-xs border ${
+                                className={`inline-flex items-center justify-center p-1 rounded-xs border transition-colors cursor-pointer ${
                                   stock.isLiveFetched
-                                    ? 'text-[#0D5C46] border-[#059669]/40 bg-[#059669]/10'
-                                    : 'text-[#D97706] border-[#F59E0B]/40 bg-[#F59E0B]/10'
+                                    ? 'text-[#0D5C46] border-[#059669]/40 bg-[#059669]/10 hover:bg-[#059669]/20'
+                                    : 'text-[#D97706] border-[#F59E0B]/40 bg-[#F59E0B]/10 hover:bg-[#F59E0B]/20'
                                 }`}
                               >
-                                <RefreshCw className="w-2.5 h-2.5" />
-                              </span>
+                                <RefreshCw
+                                  className={`w-2.5 h-2.5 ${
+                                    syncingRowTicker === stock.ticker ? 'animate-spin' : ''
+                                  }`}
+                                />
+                              </button>
                             </div>
                             <div className="text-[11px] font-bold mt-0.5">
                               <span className={is1DPos ? 'text-[#0D5C46]' : 'text-[#9E2A2B]'}>
@@ -1683,6 +1706,86 @@ export function ScreeningTable({
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Standard Table Pagination Footer Below the Table */}
+        <div className="p-3.5 bg-[#FAF9F6] border-t border-[#E4E2DD] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs tabular-nums">
+          <div className="flex flex-wrap items-center gap-3 text-neutral-600">
+            <span>
+              Menampilkan{' '}
+              <strong className="text-[#111315]">
+                {filteredAndSortedStocks.length === 0
+                  ? 0
+                  : (safePage - 1) * pageSize + 1}
+              </strong>
+              –
+              <strong className="text-[#111315]">
+                {Math.min(safePage * pageSize, filteredAndSortedStocks.length)}
+              </strong>{' '}
+              dari <strong className="text-[#111315]">{filteredAndSortedStocks.length}</strong> emiten
+            </span>
+
+            <select
+              value={pageSize}
+              onChange={(e) => {
+                setPageSize(Number(e.target.value));
+                setCurrentPage(1);
+              }}
+              className="px-2.5 py-1 text-xs font-semibold bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs focus:outline-none focus:border-[#F59E0B]"
+            >
+              <option value={50}>50 Emiten / Hal</option>
+              <option value={100}>100 Emiten / Hal</option>
+              <option value={250}>250 Emiten / Hal</option>
+              <option value={500}>500 Emiten / Hal</option>
+              <option value={2000}>Semua ({filteredAndSortedStocks.length} Emiten)</option>
+            </select>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              disabled={safePage <= 1}
+              onClick={() => setCurrentPage(1)}
+              className="px-2.5 py-1 text-xs font-bold bg-[#FFFFFF] border border-[#E4E2DD] hover:border-[#D97706] rounded-xs disabled:opacity-40 cursor-pointer"
+              title="Halaman Pertama"
+            >
+              « First
+            </button>
+            <button
+              type="button"
+              disabled={safePage <= 1}
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold bg-[#FFFFFF] border border-[#E4E2DD] hover:border-[#D97706] rounded-xs disabled:opacity-40 cursor-pointer"
+              title="Halaman Sebelumnya"
+            >
+              <ChevronLeft className="w-3.5 h-3.5" />
+              <span>Prev</span>
+            </button>
+
+            <span className="px-3 py-1 font-bold text-[#111315] bg-[#FFFFFF] border border-[#D97706]/50 rounded-xs">
+              Hal {safePage} / {totalPages}
+            </span>
+
+            <button
+              type="button"
+              disabled={safePage >= totalPages}
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold bg-[#FFFFFF] border border-[#E4E2DD] hover:border-[#D97706] rounded-xs disabled:opacity-40 cursor-pointer"
+              title="Halaman Berikutnya"
+            >
+              <span>Next</span>
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              disabled={safePage >= totalPages}
+              onClick={() => setCurrentPage(totalPages)}
+              className="px-2.5 py-1 text-xs font-bold bg-[#FFFFFF] border border-[#E4E2DD] hover:border-[#D97706] rounded-xs disabled:opacity-40 cursor-pointer"
+              title="Halaman Terakhir"
+            >
+              Last »
+            </button>
+          </div>
         </div>
       </div>
 

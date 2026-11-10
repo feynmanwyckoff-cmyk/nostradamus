@@ -34,7 +34,18 @@ export type RawStockInput = Omit<
   | 'babScore'
   | 'hrpPropensity'
   | 'role'
->;
+  | 'grossProfitabilityToAssets'
+  | 'ocfToNetIncomeRatio'
+  | 'accrualRatioToAssets'
+  | 'accrualPenaltyScore'
+  | 'betaWeightedPropensity'
+> & {
+  grossProfitabilityToAssets?: number;
+  ocfToNetIncomeRatio?: number;
+  accrualRatioToAssets?: number;
+  accrualPenaltyScore?: number;
+  betaWeightedPropensity?: number;
+};
 
 /**
  * Real-Time Calibrated Global Macro Indicators impacting IDX:COMPOSITE
@@ -606,12 +617,130 @@ export function evaluateHscIndication(
   return { isHscFlagged: false, hscSource: 'NONE' };
 }
 
+/**
+ * Novy-Marx (2013) Gross Profitability to Assets (GP/A = Gross Profit / Total Assets)
+ * & Asness, Frazzini, Pedersen (2019) Quality Minus Junk (QMJ) Accrual Penalty Calculator.
+ * Per user preference: High accruals / negative OCF while Net Income > 0 applies a graduated
+ * quality score penalty without automatically blocking the stock.
+ */
+export function computeGrossProfitabilityAndAccruals(
+  item: RawStockInput,
+  divYield: number = 0
+): {
+  grossProfitabilityToAssets: number;
+  ocfToNetIncomeRatio: number;
+  accrualRatioToAssets: number;
+  accrualPenaltyScore: number;
+} {
+  const roe = Number(item.roe || 0);
+  const der = Math.max(0.05, Number(item.debtToEquity || 0.4));
+  const opMargin = Number(item.operatingMargin || 12);
+  const clean = item.ticker.trim().toUpperCase().replace(/\.JK$/i, '');
+  const isInst = isInstitutionalLiquidCandidate(clean);
+
+  // Unlevered Return on Assets (DuPont ROA = ROE / (1 + DER), adjusted for financial vs non-financial asset structure)
+  const effectiveAssetLeverage =
+    item.sector === 'Financials' ? Math.max(2.2, 1 + der * 3.8) : Math.max(1.08, 1 + der * 0.85);
+  const roaPct = roe / effectiveAssetLeverage;
+
+  // Sector-calibrated Gross-to-Net & Asset Turnover multiplier for GP/A (Laba Kotor / Total Aset)
+  const sectorAssetTurnover =
+    item.sector === 'Consumer Non-Cyclicals' || item.sector === 'Consumer Cyclicals'
+      ? 1.38
+      : item.sector === 'Healthcare' || item.sector === 'Energy'
+      ? 1.18
+      : item.sector === 'Industrials' || item.sector === 'Basic Materials'
+      ? 1.05
+      : item.sector === 'Financials'
+      ? 0.68
+      : 0.92;
+
+  const grossMarginEstPct =
+    item.sector === 'Financials'
+      ? Math.max(12, Math.min(68, opMargin * 1.15))
+      : Math.max(8, Math.min(65, opMargin * 1.48 + 4.5));
+
+  const computedGpa =
+    typeof item.grossProfitabilityToAssets === 'number' &&
+    Number.isFinite(item.grossProfitabilityToAssets) &&
+    item.grossProfitabilityToAssets > 0
+      ? item.grossProfitabilityToAssets
+      : Math.max(
+          1.2,
+          Math.min(
+            52.0,
+            0.55 * ((grossMarginEstPct * sectorAssetTurnover) / 1.8) + 0.45 * Math.max(0, roaPct * 1.55)
+          )
+        );
+
+  const grossProfitabilityToAssets = Number(computedGpa.toFixed(1));
+
+  // Cashflow Conversion Ratio (Operating Cash Flow / Net Income) & Accruals ((NI - OCF) / Assets)
+  let ocfToNetIncomeRatio =
+    typeof item.ocfToNetIncomeRatio === 'number' && Number.isFinite(item.ocfToNetIncomeRatio)
+      ? item.ocfToNetIncomeRatio
+      : 1.08;
+
+  if (typeof item.ocfToNetIncomeRatio !== 'number') {
+    const baseConversion =
+      divYield >= 4.0
+        ? 1.24
+        : divYield > 0
+        ? 1.14
+        : isInst && der <= 0.8
+        ? 1.04
+        : der > 1.35
+        ? 0.62
+        : !isInst && divYield <= 0 && roe > 14
+        ? 0.54 // Suspect high accounting profit without dividend/cash backing
+        : 0.88;
+    const marginStabilityAdj = opMargin >= 18 ? 0.08 : opMargin < 7 ? -0.22 : 0;
+    const leverageDrag = der > 1.1 ? -Math.min(0.45, (der - 1.0) * 0.28) : 0.04;
+    ocfToNetIncomeRatio = Number(
+      Math.max(-0.45, Math.min(1.65, baseConversion + marginStabilityAdj + leverageDrag)).toFixed(2)
+    );
+  }
+
+  // Accrual Ratio to Assets (%) = (Net Income - OCF) / Total Assets = ROA * (1 - OCF/NI)
+  const rawAccrualToAssets =
+    typeof item.accrualRatioToAssets === 'number' && Number.isFinite(item.accrualRatioToAssets)
+      ? item.accrualRatioToAssets
+      : roaPct > 0
+      ? roaPct * (1 - ocfToNetIncomeRatio)
+      : Math.max(0, (1 - ocfToNetIncomeRatio) * 4.5);
+  const accrualRatioToAssets = Number(rawAccrualToAssets.toFixed(2));
+
+  // Anti-Junk Graduated Penalty (Asness et al. 2019 QMJ):
+  // Penalizes quality score when OCF < Net Income (ocfToNetIncomeRatio < 0.90) or OCF is negative while accounting profit > 0.
+  // Never auto-blocks on its own (graduated penalty 0.0 to 2.4 pts on 0-10 scale).
+  let accrualPenaltyScore = 0;
+  if (roe > 0 && ocfToNetIncomeRatio < 0) {
+    accrualPenaltyScore = Math.min(2.4, 1.45 + Math.abs(ocfToNetIncomeRatio) * 0.85);
+  } else if (ocfToNetIncomeRatio < 0.88 || accrualRatioToAssets > 1.5) {
+    const shortfallPenalty = Math.max(0, (0.88 - ocfToNetIncomeRatio) * 2.1);
+    const accrualExcessPenalty = Math.max(0, (accrualRatioToAssets - 1.5) * 0.18);
+    accrualPenaltyScore = Math.min(2.1, shortfallPenalty + accrualExcessPenalty);
+  }
+  accrualPenaltyScore = Number(accrualPenaltyScore.toFixed(2));
+
+  return {
+    grossProfitabilityToAssets,
+    ocfToNetIncomeRatio,
+    accrualRatioToAssets,
+    accrualPenaltyScore
+  };
+}
+
 export function computeDeMiguelFourFactors(item: RawStockInput): {
   dmuMomScore: number;
   dmuLowVolScore: number;
   dmuValueScore: number;
   dmuSizeScore: number;
   dmuCompositeScore: number;
+  grossProfitabilityToAssets: number;
+  ocfToNetIncomeRatio: number;
+  accrualRatioToAssets: number;
+  accrualPenaltyScore: number;
   isHscFlagged: boolean;
   hscSource: 'MANUAL' | 'AUTO_QUANT' | 'NONE';
   hscReason?: string;
@@ -622,14 +751,26 @@ export function computeDeMiguelFourFactors(item: RawStockInput): {
       ? getEmitenDividendYield(item.ticker, item.lastPrice) || item.dividendYieldPct || 0
       : item.dividendYieldPct ?? getEmitenDividendYield(item.ticker);
 
+  const gpAccrual = computeGrossProfitabilityAndAccruals(item, divYield);
+  const {
+    grossProfitabilityToAssets,
+    ocfToNetIncomeRatio,
+    accrualRatioToAssets,
+    accrualPenaltyScore
+  } = gpAccrual;
+
   // If stock is illiquid, stagnant/suspended, gocap (< Rp 68), or unverified on Yahoo Finance:
   // Penalize Low-Vol, Size/Liq, and Composite Score so it NEVER masquerades as a Low-Volatility leader!
   if (!isLiquid) {
-    const roeComp = Math.max(0, Math.min(10, (Math.min(32, item.roe) / 24) * 9.2));
-    const marginComp = Math.max(0, Math.min(10, (item.operatingMargin / 38) * 9.5));
+    const gpaComp = Math.max(0, Math.min(10, (grossProfitabilityToAssets / 26) * 9.4));
+    const unleveredRoa = Math.max(0, item.roe / Math.max(1, 1 + item.debtToEquity * 0.75));
+    const roaComp = Math.max(0, Math.min(10, (unleveredRoa / 16) * 9.0));
     const deComp = Math.max(1, Math.min(10, 10 - (item.debtToEquity / 2.2) * 8));
     const dmuValueScore = Number(
-      Math.max(1.0, Math.min(5.5, (0.42 * roeComp + 0.30 * marginComp + 0.28 * deComp) * 0.65)).toFixed(1)
+      Math.max(
+        1.0,
+        Math.min(5.5, (0.50 * gpaComp + 0.25 * roaComp + 0.25 * deComp) * 0.65 - accrualPenaltyScore * 0.5)
+      ).toFixed(1)
     );
     const hscEval = evaluateHscIndication(item, dmuValueScore, divYield);
     return {
@@ -638,6 +779,10 @@ export function computeDeMiguelFourFactors(item: RawStockInput): {
       dmuValueScore,
       dmuSizeScore: 1.4,
       dmuCompositeScore: Number(Math.min(2.65, 0.25 * dmuValueScore + 1.4).toFixed(2)),
+      grossProfitabilityToAssets,
+      ocfToNetIncomeRatio,
+      accrualRatioToAssets,
+      accrualPenaltyScore,
       ...hscEval
     };
   }
@@ -656,19 +801,26 @@ export function computeDeMiguelFourFactors(item: RawStockInput): {
   const relMomRaw = 5.4 + item.return30D * 0.38 + item.change1D * 0.48 + riskAdjTrend;
   const dmuMomScore = Number(Math.max(1.0, Math.min(9.9, relMomRaw)).toFixed(1));
 
-  // 3. Dynamic Value & Dividend Yield Score (Prioritizes Joeliardi Sunendar ROE, Margin, Prudent DER & Dividend Yield)
+  // 3. Gross Profitability (Novy-Marx GP/A) & Anti-Junk QMJ Value Score (Asness et al. 2019)
+  // Replaces reliance on easily-gamed Operating Margin & raw levered ROE with GP/A + Unlevered ROA - Accrual Penalty
   const anchorPrice = BASELINE_PRICE_ANCHORS[item.ticker] || item.lastPrice;
   const liveValuationMultiplier =
     item.lastPrice > 0
       ? Math.max(0.84, Math.min(1.24, anchorPrice / item.lastPrice))
       : 1.0;
 
-  const roeComp = Math.max(0, Math.min(10, (Math.min(32, item.roe) / 23) * 9.4));
-  const marginComp = Math.max(0, Math.min(10, (item.operatingMargin / 36) * 9.5));
+  const gpaComp = Math.max(0, Math.min(10, (Math.min(38, grossProfitabilityToAssets) / 23.5) * 9.6));
+  const unleveredRoa = Math.max(0, item.roe / Math.max(1, 1 + item.debtToEquity * 0.7));
+  const roaComp = Math.max(0, Math.min(10, (Math.min(24, unleveredRoa) / 14.5) * 9.4));
   const deComp = Math.max(1, Math.min(10, 10 - (item.debtToEquity / 2.1) * 8));
   const divBonus = divYield > 0 ? Math.min(1.35, divYield * 0.18) : 0;
+  const ocfQualityBonus = ocfToNetIncomeRatio >= 1.1 ? 0.35 : 0;
+
   const rawValue =
-    (0.44 * roeComp + 0.28 * marginComp + 0.28 * deComp) * liveValuationMultiplier + divBonus;
+    (0.50 * gpaComp + 0.25 * roaComp + 0.25 * deComp) * liveValuationMultiplier +
+    divBonus +
+    ocfQualityBonus -
+    accrualPenaltyScore;
   const dmuValueScore = Number(Math.max(1.0, Math.min(9.9, rawValue)).toFixed(1));
 
   // 4. Capital Efficiency & Institutional Liquidity Score
@@ -679,7 +831,11 @@ export function computeDeMiguelFourFactors(item: RawStockInput): {
       1.0,
       Math.min(
         9.9,
-        0.50 * deComp + 0.32 * roeComp + (item.change1D >= 0 ? 0.5 : 0.1) + instLiqBonus
+        0.48 * deComp +
+          0.34 * gpaComp +
+          (item.change1D >= 0 ? 0.5 : 0.1) +
+          instLiqBonus -
+          accrualPenaltyScore * 0.35
       )
     ).toFixed(1)
   );
@@ -693,7 +849,7 @@ export function computeDeMiguelFourFactors(item: RawStockInput): {
       ? Math.min(dmuMomScore, 5.6)
       : dmuMomScore;
 
-  // Overall 4-Factor Composite Score (Value-Prioritized: 35% Value, 28% Low-Vol, 22% Momentum, 15% Size/Liquidity)
+  // Overall 4-Factor Composite Score (Value/GP-A Prioritized: 35% Value/GP-A, 28% Low-Vol, 22% Momentum, 15% Size/Liquidity)
   const rawComposite =
     0.35 * dmuValueScore +
     0.28 * dmuLowVolScore +
@@ -710,6 +866,10 @@ export function computeDeMiguelFourFactors(item: RawStockInput): {
     dmuValueScore,
     dmuSizeScore,
     dmuCompositeScore,
+    grossProfitabilityToAssets,
+    ocfToNetIncomeRatio,
+    accrualRatioToAssets,
+    accrualPenaltyScore,
     ...hscEval
   };
 }
@@ -731,6 +891,8 @@ export function computeSleeveSpecificScore(
   const divYield = stock.dividendYieldPct ?? 0;
   const divBoost = divYield > 0 ? Math.min(1.35, divYield * 0.18) : 0;
   const instBoost = isInstitutionalLiquidCandidate(stock.ticker) ? 0.65 : 0;
+  const gpaBoost = Math.min(0.85, (stock.grossProfitabilityToAssets || 15) / 32);
+  const accrualDrag = (stock.accrualPenaltyScore || 0) * 0.45;
 
   if (basket === 'DEFENSIVE') {
     if (mode === 'TOP_GAINERS_MOMENTUM') {
@@ -742,11 +904,13 @@ export function computeSleeveSpecificScore(
           stock.change1D * 0.65 +
           stock.return30D * 0.20 +
           divBoost +
-          instBoost
+          instBoost +
+          gpaBoost -
+          accrualDrag
         ).toFixed(2)
       );
     }
-    // Default Defensive Core: 45% Low-Vol + 38% Live-Adjusted Value + 17% Trend Stability + Dividend Yield Priority
+    // Default Defensive Core: 45% Low-Vol + 38% GP/A Value + 17% Trend Stability + Dividend Yield Priority
     return Number(
       (
         0.45 * stock.dmuLowVolScore +
@@ -754,7 +918,9 @@ export function computeSleeveSpecificScore(
         0.17 * stock.dmuMomScore +
         stock.change1D * 0.15 +
         divBoost +
-        instBoost
+        instBoost +
+        gpaBoost -
+        accrualDrag
       ).toFixed(2)
     );
   }
@@ -768,12 +934,14 @@ export function computeSleeveSpecificScore(
         stock.change1D * 1.15 +
         stock.return30D * 0.38 +
         0.15 * stock.dmuSizeScore +
-        instBoost * 0.7
+        instBoost * 0.7 +
+        gpaBoost -
+        accrualDrag
       ).toFixed(2)
     );
   }
 
-  // Default Momentum Alpha: 45% Live Price Action + 30% Value Quality + 25% Size
+  // Default Momentum Alpha: 45% Live Price Action + 30% GP/A Value Quality + 25% Size
   const liveSurgeComponent = Math.max(
     1,
     Math.min(10, 5.5 + stock.change1D * 0.75 + stock.return30D * 0.30)
@@ -784,7 +952,9 @@ export function computeSleeveSpecificScore(
       0.20 * liveSurgeComponent +
       0.28 * stock.dmuValueScore +
       0.20 * stock.dmuSizeScore +
-      instBoost * 0.7
+      instBoost * 0.7 +
+      gpaBoost -
+      accrualDrag
     ).toFixed(2)
   );
 }
@@ -796,6 +966,7 @@ export function getBasketSelectionReason(
 ): string {
   const c1d = `${stock.change1D >= 0 ? '+' : ''}${stock.change1D.toFixed(2)}%`;
   const r30 = `${stock.return30D >= 0 ? '+' : ''}${stock.return30D.toFixed(2)}%`;
+  const gpaPart = `GP/A ${(stock.grossProfitabilityToAssets ?? 18).toFixed(1)}%`;
   const divPart =
     (stock.dividendYieldPct ?? 0) > 0
       ? ` · DIV ${(stock.dividendYieldPct ?? 0).toFixed(2)}%`
@@ -803,22 +974,22 @@ export function getBasketSelectionReason(
 
   if (basket === 'DEFENSIVE') {
     if (mode === 'TOP_GAINERS_MOMENTUM') {
-      return `Low-Beta Gainer: 1D ${c1d} · 30D ${r30} · β ${stock.beta1Y.toFixed(2)}x${divPart}`;
+      return `1/β Core: 1D ${c1d} · ${gpaPart} · β ${stock.beta1Y.toFixed(2)}x${divPart}`;
     }
-    return `Low-Vol ${stock.dmuLowVolScore.toFixed(1)} · Val ${stock.dmuValueScore.toFixed(1)} · Vol ${stock.volatilityAnn.toFixed(1)}% (β ${stock.beta1Y.toFixed(2)})${divPart}`;
+    return `${gpaPart} · Low-Vol ${stock.dmuLowVolScore.toFixed(1)} · 1/β ${(1 / Math.max(0.35, stock.beta1Y)).toFixed(2)}x (β ${stock.beta1Y.toFixed(2)})${divPart}`;
   }
 
   if (mode === 'TOP_GAINERS_MOMENTUM') {
-    return `Breakout Live: 1D ${c1d} · 30D ${r30} · Val ${stock.dmuValueScore.toFixed(1)}${divPart}`;
+    return `Barbell Alpha: 1D ${c1d} · 30D ${r30} · ${gpaPart} · β ${stock.beta1Y.toFixed(2)}x${divPart}`;
   }
-  return `Val ${stock.dmuValueScore.toFixed(1)} · Mom ${stock.dmuMomScore.toFixed(1)} · 30D ${r30} · 1D ${c1d}${divPart}`;
+  return `${gpaPart} · Mom ${stock.dmuMomScore.toFixed(1)} · 1/β Sizing (β ${stock.beta1Y.toFixed(2)}x) · 1D ${c1d}${divPart}`;
 }
 
 export function classifyBarbellRole(beta1Y: number, dmuCompositeScore: number): BarbellRole {
   if (dmuCompositeScore >= 6.6 && beta1Y <= 0.95) {
     return 'DEFENSIVE_QUALITY';
   }
-  if (dmuCompositeScore >= 6.2 && beta1Y > 0.95) {
+  if (dmuCompositeScore >= 6.0 && beta1Y > 0.95) {
     return 'AGGRESSIVE_GROWTH';
   }
   if (dmuCompositeScore < 4.8) {
@@ -847,8 +1018,14 @@ export function enrichStockMetrics(item: RawStockInput): StockMetrics {
   const factors = computeDeMiguelFourFactors(normalizedInput);
   const isCleanAndLiquid = isLiquid && !factors.isHscFlagged;
 
+  // Beta-Weighted Propensity (Qian 2005 Risk Parity & Taleb 2012 Barbell 1/Beta Sizing)
+  const effectiveBeta = Math.max(0.35, Number(item.beta1Y) || 1.0);
+  const betaWeightedPropensity = isCleanAndLiquid
+    ? Number((factors.dmuCompositeScore / effectiveBeta).toFixed(2))
+    : 0.1;
+
   const hrpPropensity = isCleanAndLiquid
-    ? Number(((factors.dmuCompositeScore / Math.max(11, item.volatilityAnn)) * 10).toFixed(2))
+    ? Number(((factors.dmuCompositeScore / effectiveBeta) * 1.25).toFixed(2))
     : 0.1;
   const role: BarbellRole = isCleanAndLiquid
     ? classifyBarbellRole(item.beta1Y, factors.dmuCompositeScore)
@@ -872,9 +1049,10 @@ export function enrichStockMetrics(item: RawStockInput): StockMetrics {
   return {
     ...normalizedInput,
     ...factors,
+    betaWeightedPropensity,
     dmuRankPct,
     dmuZone,
-    qmjScore: Number(factors.dmuCompositeScore.toFixed(1)),
+    qmjScore: Number(Math.max(1.0, factors.dmuCompositeScore - factors.accrualPenaltyScore * 0.25).toFixed(1)),
     babScore: factors.dmuLowVolScore,
     hrpPropensity,
     role
@@ -1187,16 +1365,100 @@ export function calculateForwardDividend(
 }
 
 /**
- * Joeliardi Sunendar ("Bapak Fundamental Indonesia") + Out-of-Sample (OOS) Quantitative Fundamental Evaluator
- * Computes Business Moat Quality, Balance Sheet Solvency, Intrinsic Fair Value (Graham-Joeliardi ROE-Adjusted Model),
- * Pegged Fair Multiples (PER & PBV), Forward Dividend Yield, ERP-Adjusted Spread, and OOS Cross-Sectional Robustness.
+ * Fabozzi (2012) Multi-Tenor SBN Government Bond Spot Yield Curve (1Y, 5Y, 10Y)
+ * & Damodaran (2012) Duration-Matched Dynamic Cost of Equity (Ke) Calculator.
+ * Per user preference: Uses a weighted combination of SBN 1Y, 5Y, and 10Y spot rates matched to equity cashflow duration.
  */
-export function evaluateJoeliardiOosFundamental(stock: StockMetrics): JoeliardiOosEvaluation {
+export function computeSbnSpotYieldCurveAndKe(
+  stock: StockMetrics,
+  forwardDividendYieldPct: number = 0,
+  macroIndicators: MacroIndicator[] = DEFAULT_GLOBAL_MACRO
+): {
+  sbnSpot1YPct: number;
+  sbnSpot5YPct: number;
+  sbnSpot10YPct: number;
+  sbnBlendedSpotRfPct: number;
+  erpBenchmarkPct: number;
+  dynamicCostOfEquityPct: number;
+} {
+  const us10y = macroIndicators.find((m) => m.id === 'us10y')?.value ?? 4.89;
+  const usdidr = macroIndicators.find((m) => m.id === 'usdidr')?.value ?? 18080;
+
+  // Dynamic macro shift on Indonesian SBN Spot Curve based on US 10Y Treasury & Rupiah FX stress
+  const globalRateShift = Math.max(-0.45, Math.min(0.65, (us10y - 4.45) * 0.35));
+  const fxRiskShift = Math.max(-0.20, Math.min(0.45, ((usdidr - 16200) / 4000) * 0.35));
+  const curveShift = Number((globalRateShift + fxRiskShift).toFixed(2));
+
+  // Indonesian Government Bond (SBN) Spot Curve Tenors (1Y, 5Y, 10Y)
+  const sbnSpot1YPct = Number((6.15 + curveShift * 0.75).toFixed(2));
+  const sbnSpot5YPct = Number((6.48 + curveShift * 0.90).toFixed(2));
+  const sbnSpot10YPct = Number((6.75 + curveShift * 1.00).toFixed(2));
+
+  // Equity Duration Weighting (Fabozzi 2012):
+  // High-dividend / mature cashflow compounders have shorter Macaulay equity duration (higher 1Y & 5Y weight),
+  // whereas low-payout growth stocks have longer cashflow duration (higher 5Y & 10Y weight).
+  let w1Y = 0.20;
+  let w5Y = 0.35;
+  let w10Y = 0.45;
+  if (forwardDividendYieldPct >= 4.5) {
+    w1Y = 0.28;
+    w5Y = 0.42;
+    w10Y = 0.30;
+  } else if (forwardDividendYieldPct >= 2.0) {
+    w1Y = 0.22;
+    w5Y = 0.38;
+    w10Y = 0.40;
+  } else {
+    w1Y = 0.12;
+    w5Y = 0.33;
+    w10Y = 0.55;
+  }
+
+  const sbnBlendedSpotRfPct = Number(
+    (w1Y * sbnSpot1YPct + w5Y * sbnSpot5YPct + w10Y * sbnSpot10YPct).toFixed(2)
+  );
+
+  // Blume-Adjusted Beta toward market mean (0.67 * rawBeta + 0.33 * 1.0), bounded [0.48, 1.55]
+  const rawBeta = Math.max(0.35, Number(stock.beta1Y) || 1.0);
+  const blumeBeta = Math.max(0.48, Math.min(1.55, 0.67 * rawBeta + 0.33 * 1.0));
+  const erpBenchmarkPct = 5.5; // Damodaran Implied Country ERP for Indonesia
+
+  const rawKe = sbnBlendedSpotRfPct + blumeBeta * erpBenchmarkPct;
+  const dynamicCostOfEquityPct = Number(Math.max(8.8, Math.min(16.2, rawKe)).toFixed(2));
+
+  return {
+    sbnSpot1YPct,
+    sbnSpot5YPct,
+    sbnSpot10YPct,
+    sbnBlendedSpotRfPct,
+    erpBenchmarkPct,
+    dynamicCostOfEquityPct
+  };
+}
+
+/**
+ * Damodaran (2012) Forward Valuation + Novy-Marx (2013) GP/A + Asness (2019) QMJ + Out-of-Sample (OOS) Evaluator
+ * Computes Business Moat Quality (GP/A & Anti-Junk Accruals), Balance Sheet Solvency,
+ * Intrinsic Fair Value anchored on Damodaran Justified PBV = (ROE - g) / (Ke - g) with Multi-Tenor SBN Spot Curve,
+ * Pegged Fair Multiples (PER & PBV), Forward Dividend Yield, and 1/Beta Barbell Position Sizing Cap.
+ */
+export function evaluateJoeliardiOosFundamental(
+  stock: StockMetrics,
+  macroIndicators: MacroIndicator[] = DEFAULT_GLOBAL_MACRO
+): JoeliardiOosEvaluation {
   const price = Math.max(50, stock.lastPrice);
   const roe = Math.max(0.5, stock.roe);
   const der = Math.max(0.05, stock.debtToEquity);
   const opMargin = Math.max(0.5, stock.operatingMargin);
   const isInst = isInstitutionalLiquidCandidate(stock.ticker);
+
+  const gpAccrual = computeGrossProfitabilityAndAccruals(stock, stock.dividendYieldPct ?? 0);
+  const grossProfitabilityToAssets =
+    stock.grossProfitabilityToAssets ?? gpAccrual.grossProfitabilityToAssets;
+  const ocfToNetIncomeRatio = stock.ocfToNetIncomeRatio ?? gpAccrual.ocfToNetIncomeRatio;
+  const accrualRatioToAssets = stock.accrualRatioToAssets ?? gpAccrual.accrualRatioToAssets;
+  const accrualPenaltyScore = stock.accrualPenaltyScore ?? gpAccrual.accrualPenaltyScore;
+  const accrualPenaltyPts = Math.round(accrualPenaltyScore * 8.5); // 0 - 20 pts on 0-100 fundamental scale
 
   // Sector-calibrated market PBV baseline adjusted by live price vs anchor
   const anchorPrice = BASELINE_PRICE_ANCHORS[stock.ticker] || price;
@@ -1233,18 +1495,53 @@ export function evaluateJoeliardiOosFundamental(stock: StockMetrics): JoeliardiO
     totalShareholderYieldPct
   } = forwardDivData;
 
-  // Component Fair Multiples (Indonesian Cost of Equity Ke = 10.5%, Sustainable g = 4.0%)
-  const sustainableRoe = Math.min(26.5, roe);
-  const justifiedPbvRaw = Math.max(0.55, (sustainableRoe - 4.0) / (10.5 - 4.0));
+  // Multi-Tenor SBN Spot Curve (1Y, 5Y, 10Y) & Dynamic Cost of Equity (Ke)
+  const sbnCurve = computeSbnSpotYieldCurveAndKe(stock, forwardDividendYieldPct, macroIndicators);
+  const {
+    sbnSpot1YPct,
+    sbnSpot5YPct,
+    sbnSpot10YPct,
+    sbnBlendedSpotRfPct,
+    erpBenchmarkPct,
+    dynamicCostOfEquityPct
+  } = sbnCurve;
+
+  // Damodaran (2012) Forward Valuation: Justified PBV = (ROE_sustainable - g) / (Ke - g)
+  const sustainableRoe = Math.min(28.5, roe * (grossProfitabilityToAssets >= 20 ? 1.04 : 0.98));
+  const retentionRatio = Math.max(0.15, 1 - historicalDpr3YPct / 100);
+  const rawGrowth = sustainableRoe * retentionRatio * 0.45;
+  const sustainableGrowthRatePct = Number(
+    Math.max(2.0, Math.min(6.2, Math.min(rawGrowth, dynamicCostOfEquityPct - 2.4))).toFixed(2)
+  );
+
+  const damodaranJustifiedPbv = Number(
+    Math.max(
+      0.45,
+      Math.min(
+        5.2,
+        (sustainableRoe - sustainableGrowthRatePct) /
+          Math.max(2.2, dynamicCostOfEquityPct - sustainableGrowthRatePct)
+      )
+    ).toFixed(2)
+  );
+
   const derPenaltyMultiplier = der <= 0.6 ? 1.05 : der <= 1.2 ? 0.95 : 0.78;
   const divQualityMultiplier =
-    forwardDividendYieldPct >= 4.0 ? 1.12 : forwardDividendYieldPct > 0 ? 1.05 : 0.88;
+    forwardDividendYieldPct >= 4.0 ? 1.10 : forwardDividendYieldPct > 0 ? 1.04 : 0.90;
+  const accrualQualityMultiplier = Math.max(0.76, 1 - accrualPenaltyScore * 0.08);
   const hscDiscountMultiplier = stock.isHscFlagged ? 0.55 : 1.0;
 
   const standaloneFairPbv = Number(
     Math.max(
       0.5,
-      Math.min(4.8, justifiedPbvRaw * derPenaltyMultiplier * divQualityMultiplier * hscDiscountMultiplier)
+      Math.min(
+        4.9,
+        damodaranJustifiedPbv *
+          derPenaltyMultiplier *
+          divQualityMultiplier *
+          accrualQualityMultiplier *
+          hscDiscountMultiplier
+      )
     ).toFixed(2)
   );
   const standaloneFairPer = Number(
@@ -1252,20 +1549,22 @@ export function evaluateJoeliardiOosFundamental(stock: StockMetrics): JoeliardiO
       5.5,
       Math.min(
         22.5,
-        (9.5 + Math.max(0, sustainableRoe - 10) * 0.48 + forwardDividendYieldPct * 0.42) *
+        ((100 / Math.max(7.5, dynamicCostOfEquityPct - sustainableGrowthRatePct * 0.55)) +
+          forwardDividendYieldPct * 0.35) *
           derPenaltyMultiplier *
+          accrualQualityMultiplier *
           hscDiscountMultiplier
       )
     ).toFixed(2)
   );
 
-  // Graham Number & Blended Intrinsic Value rounded to official BEI tick fraction
+  // Graham Number & Damodaran Justified PBV Blended Intrinsic Value rounded to official BEI tick fraction
   const grahamIntrinsic = Math.sqrt(22.5 * estimatedEpsIdr * estimatedBvpsIdr);
-  const joeliardiPbvIntrinsic = estimatedBvpsIdr * standaloneFairPbv;
-  const joeliardiPerIntrinsic = estimatedEpsIdr * standaloneFairPer;
+  const damodaranPbvIntrinsic = estimatedBvpsIdr * standaloneFairPbv;
+  const dynamicPerIntrinsic = estimatedEpsIdr * standaloneFairPer;
 
   const rawIntrinsic =
-    0.45 * joeliardiPbvIntrinsic + 0.35 * joeliardiPerIntrinsic + 0.20 * grahamIntrinsic;
+    0.55 * damodaranPbvIntrinsic + 0.25 * dynamicPerIntrinsic + 0.20 * grahamIntrinsic;
   const intrinsicValueIdr = roundToIdxTick(Math.max(50, rawIntrinsic));
 
   // Pegged Fair Multiples: Strictly synchronized with final Blended Intrinsic Value so
@@ -1277,15 +1576,18 @@ export function evaluateJoeliardiOosFundamental(stock: StockMetrics): JoeliardiO
     (((intrinsicValueIdr - price) / Math.max(1, intrinsicValueIdr)) * 100).toFixed(1)
   );
 
-  // Earnings Yield vs SBN 10Y (6.75%) + Indonesian Equity Risk Premium (ERP 6.0%)
-  const earningsYieldPct = impliedPer > 0 ? (100 / impliedPer) : 0;
-  const rawSbnSpreadPct = Number((earningsYieldPct - 6.75).toFixed(2));
-  const erpBenchmarkPct = 6.0;
-  const netErpSpreadPct = Number((earningsYieldPct - (6.75 + erpBenchmarkPct)).toFixed(2));
+  // Earnings Yield vs Blended SBN Spot Rate (1Y/5Y/10Y) & Dynamic Cost of Equity (Ke)
+  const earningsYieldPct = impliedPer > 0 ? 100 / impliedPer : 0;
+  const rawSbnSpreadPct = Number((earningsYieldPct - sbnBlendedSpotRfPct).toFixed(2));
+  const netErpSpreadPct = Number((earningsYieldPct - dynamicCostOfEquityPct).toFixed(2));
 
-  // 20-Day ADTV & 5% Daily Liquidity Cap
+  // 20-Day ADTV & 5% Daily Liquidity Cap + Beta-Weighted Position Sizing Cap (1/Beta Barbell)
   const adtv20dIdr = estimateEmitenAdtv20dIdr(stock);
   const maxSafeAllocationIdr = Math.round(adtv20dIdr * 0.05);
+  const effectiveBeta = Math.max(0.35, Number(stock.beta1Y) || 1.0);
+  const betaWeightedSizingCapPct = Number(
+    Math.max(3.5, Math.min(18.0, (12.5 / effectiveBeta))).toFixed(1)
+  );
 
   // Defensive Discount Anomaly Override (Beta < 0.5 AND Value Score > 9.0)
   const isDefensiveDiscountAnomaly =
@@ -1295,28 +1597,41 @@ export function evaluateJoeliardiOosFundamental(stock: StockMetrics): JoeliardiO
   const intrinsicAccumCeiling = roundToIdxTick(intrinsicValueIdr * 0.85);
   const isUndercutDeepDiscount = !stock.isHscFlagged && price <= intrinsicAccumCeiling;
 
-  // Pillar 1: Business Quality & Economic Moat (0 - 100)
-  const roeScore = Math.min(45, (roe / 20) * 40);
-  const marginScore = Math.min(30, (opMargin / 28) * 26);
-  const moatBonus = (isInst ? 15 : 4) + (forwardDividendYieldPct > 0 ? 10 : 0);
-  const businessQualityScore = Math.round(Math.max(15, Math.min(98, roeScore + marginScore + moatBonus)));
-
-  // Pillar 2: Balance Sheet Health & Cashflow Reality (0 - 100)
-  const derScore = Math.max(10, Math.min(55, 55 - der * 22));
-  const cashDivScore =
-    forwardDividendYieldPct >= 5
-      ? 30
-      : forwardDividendYieldPct >= 2
-      ? 22
-      : forwardDividendYieldPct > 0
-      ? 15
-      : 5;
-  const hscSolvencyBonus = stock.isHscFlagged ? -25 : isInst ? 15 : 8;
-  const balanceSheetHealthScore = Math.round(
-    Math.max(12, Math.min(98, derScore + cashDivScore + hscSolvencyBonus))
+  // Pillar 1: Business Quality & Gross Profitability Moat (Novy-Marx GP/A + DuPont ROE - Accrual Penalty) (0 - 100)
+  const gpaScore = Math.min(48, (grossProfitabilityToAssets / 24) * 44);
+  const roeScore = Math.min(28, (roe / 20) * 24);
+  const moatBonus = (isInst ? 14 : 4) + (forwardDividendYieldPct > 0 ? 10 : 0);
+  const businessQualityScore = Math.round(
+    Math.max(15, Math.min(98, gpaScore + roeScore + moatBonus - accrualPenaltyPts * 0.6))
   );
 
-  // Pillar 3: Valuation & Margin of Safety (0 - 100)
+  // Pillar 2: Balance Sheet Health & Anti-Junk Cashflow Reality (Asness QMJ OCF/NI & DER) (0 - 100)
+  const derScore = Math.max(10, Math.min(48, 48 - der * 20));
+  const ocfConversionBonus =
+    ocfToNetIncomeRatio >= 1.1
+      ? 22
+      : ocfToNetIncomeRatio >= 0.9
+      ? 14
+      : ocfToNetIncomeRatio >= 0
+      ? 4
+      : -12;
+  const cashDivScore =
+    forwardDividendYieldPct >= 5
+      ? 22
+      : forwardDividendYieldPct >= 2
+      ? 16
+      : forwardDividendYieldPct > 0
+      ? 10
+      : 3;
+  const hscSolvencyBonus = stock.isHscFlagged ? -25 : isInst ? 10 : 5;
+  const balanceSheetHealthScore = Math.round(
+    Math.max(
+      12,
+      Math.min(98, derScore + ocfConversionBonus + cashDivScore + hscSolvencyBonus - accrualPenaltyPts * 0.5)
+    )
+  );
+
+  // Pillar 3: Forward Valuation & Justified PBV Margin of Safety (0 - 100)
   const mosScore = Math.max(10, Math.min(65, 38 + marginOfSafetyPct * 1.15));
   const valueFactorContribution = (stock.dmuValueScore / 10) * 35;
   const valuationSafetyScore = Math.round(
@@ -1339,7 +1654,7 @@ export function evaluateJoeliardiOosFundamental(stock: StockMetrics): JoeliardiO
   );
 
   let valuationVerdict: JoeliardiOosEvaluation['valuationVerdict'] = 'FAIR_QUALITY';
-  let valuationLabel = 'Wajar Berkualitas (Fairly Valued Compounder)';
+  let valuationLabel = 'Wajar Berkualitas (Fairly Valued QARP Compounder)';
   if (stock.isHscFlagged || totalConvictionScore < 45) {
     valuationVerdict = 'OVERVALUED_OR_TRAP';
     valuationLabel = stock.isHscFlagged
@@ -1350,10 +1665,10 @@ export function evaluateJoeliardiOosFundamental(stock: StockMetrics): JoeliardiO
     valuationLabel = `Strong Buy: Anomali Aset Defensif Terdiskon (MoS +${marginOfSafetyPct}%)`;
   } else if (marginOfSafetyPct >= 15 && stock.dmuValueScore >= 6.8) {
     valuationVerdict = 'STRONG_UNDERVALUED';
-    valuationLabel = `Diskon Nilai Intrinsik (MoS +${marginOfSafetyPct}%)`;
+    valuationLabel = `Diskon Justified PBV Damodaran (MoS +${marginOfSafetyPct}%)`;
   } else if (marginOfSafetyPct < -12) {
     valuationVerdict = 'FULLY_VALUED';
-    valuationLabel = 'Premium / Di Atas Nilai Intrinsik Konservatif';
+    valuationLabel = 'Premium / Di Atas Nilai Intrinsik Justified PBV';
   }
 
   const convictionGrade: JoeliardiOosEvaluation['convictionGrade'] = stock.isHscFlagged
@@ -1371,12 +1686,17 @@ export function evaluateJoeliardiOosFundamental(stock: StockMetrics): JoeliardiO
 
   if (isDefensiveDiscountAnomaly) {
     keyStrengths.push(
-      `Strong Buy — Anomali Aset Defensif Terdiskon: Kombinasi Beta sangat rendah (${stock.beta1Y.toFixed(2)}x) dan Skor Value tinggi (${stock.dmuValueScore.toFixed(1)}/10) mengonfirmasi koreksi jangka pendek sebagai peluang akumulasi utama.`
+      `Strong Buy — Anomali Aset Defensif Terdiskon: Kombinasi Beta sangat rendah (${stock.beta1Y.toFixed(2)}x) dan Skor Value/GP-A tinggi (${stock.dmuValueScore.toFixed(1)}/10) mengonfirmasi koreksi jangka pendek sebagai peluang akumulasi utama.`
     );
   }
-  if (roe >= 15) {
+  if (grossProfitabilityToAssets >= 16) {
     keyStrengths.push(
-      `ROE ${roe.toFixed(1)}% melampaui Cost of Equity RI (10,5%), mencerminkan keunggulan kompetitif (Fundamental Kualitas Moat) yang solid.`
+      `Gross Profitability to Assets (Novy-Marx GP/A) mencapai ${grossProfitabilityToAssets.toFixed(1)}% dengan konversi kas OCF/Laba Bersih ${ocfToNetIncomeRatio.toFixed(2)}x, membuktikan kualitas laba organik di atas garis akuntansi kotor.`
+    );
+  }
+  if (roe >= dynamicCostOfEquityPct) {
+    keyStrengths.push(
+      `ROE ${roe.toFixed(1)}% melampaui Dynamic Cost of Equity RI (${dynamicCostOfEquityPct.toFixed(2)}% dari SBN Spot Blended ${sbnBlendedSpotRfPct.toFixed(2)}%), menghasilkan Justified PBV Damodaran ${damodaranJustifiedPbv.toFixed(2)}x.`
     );
   }
   if (der <= 0.65) {
@@ -1386,22 +1706,17 @@ export function evaluateJoeliardiOosFundamental(stock: StockMetrics): JoeliardiO
   }
   if (forwardDividendYieldPct > 0) {
     keyStrengths.push(
-      `Estimasi Forward Dividend Yield ${forwardDividendYieldPct.toFixed(2)}% (Annualized EPS Q3-2026 Rp ${annualizedEpsQ3Idr.toLocaleString('id-ID')} × DPR 3Y ${historicalDpr3YPct.toFixed(0)}%), memvalidasi arus kas masa depan.`
+      `Estimasi Forward Dividend Yield ${forwardDividendYieldPct.toFixed(2)}% (Annualized EPS Q3-2026 Rp ${annualizedEpsQ3Idr.toLocaleString('id-ID')} × DPR 3Y ${historicalDpr3YPct.toFixed(0)}%), memvalidasi arus kas riil.`
     );
   }
   if (marginOfSafetyPct >= 10 && !stock.isHscFlagged) {
     keyStrengths.push(
-      `Diperdagangkan di bawah estimasi Nilai Intrinsik Rp ${intrinsicValueIdr.toLocaleString('id-ID')} (Wajar PER ${joeliardiFairPer}x · Wajar PBV ${joeliardiFairPbv}x · MoS +${marginOfSafetyPct}%).`
-    );
-  }
-  if (stock.dmuLowVolScore >= 7.0) {
-    keyStrengths.push(
-      `Stabilitas OOS Low-Volatility tinggi (${stock.dmuLowVolScore.toFixed(1)}/10, Beta ${stock.beta1Y.toFixed(2)}x), tahan banting saat IHSG bergejolak.`
+      `Diperdagangkan di bawah Nilai Intrinsik Justified PBV Rp ${intrinsicValueIdr.toLocaleString('id-ID')} (Wajar PER ${joeliardiFairPer}x · Wajar PBV ${joeliardiFairPbv}x · MoS +${marginOfSafetyPct}%).`
     );
   }
   if (keyStrengths.length === 0) {
     keyStrengths.push(
-      `Likuiditas perdagangan tercatat pada harga Rp ${price.toLocaleString('id-ID')} di sektor ${stock.sector}.`
+      `Likuiditas perdagangan tercatat pada harga Rp ${price.toLocaleString('id-ID')} di sektor ${stock.sector} (Batas 1/β Sizing Maks ${betaWeightedSizingCapPct}%).`
     );
   }
 
@@ -1410,19 +1725,24 @@ export function evaluateJoeliardiOosFundamental(stock: StockMetrics): JoeliardiO
       `${stock.hscReason || 'Terindikasi HSC (High Speculative Concentration)'}. Diblokir otomatis dari Top Decile Buy.`
     );
   }
-  if (roe < 10.5) {
+  if (accrualPenaltyScore > 0) {
     keyRisks.push(
-      `ROE (${roe.toFixed(1)}%) berada di bawah Cost of Equity wajar (10,5%), efisiensi penciptaan nilai ekuitas belum optimal.`
+      `Penalti Anti-Junk (QMJ Accrual -${accrualPenaltyScore.toFixed(2)} poin): Konversi OCF/Laba Bersih (${ocfToNetIncomeRatio.toFixed(2)}x, Akrual/Aset ${accrualRatioToAssets.toFixed(1)}%) menunjukkan laba akuntansi belum sepenuhnya didukung kas operasi.`
+    );
+  }
+  if (roe < dynamicCostOfEquityPct) {
+    keyRisks.push(
+      `ROE (${roe.toFixed(1)}%) berada di bawah Dynamic Cost of Equity (${dynamicCostOfEquityPct.toFixed(2)}%), membatasi ekspansi Justified PBV (${damodaranJustifiedPbv.toFixed(2)}x).`
     );
   }
   if (der > 1.1) {
     keyRisks.push(
-      `Leverage neraca relatif tinggi (DER ${der.toFixed(2)}x), sensitif terhadap kenaikan suku bunga.`
+      `Leverage neraca relatif tinggi (DER ${der.toFixed(2)}x), sensitif terhadap pergeseran kurva SBN Spot.`
     );
   }
   if (marginOfSafetyPct < 0) {
     keyRisks.push(
-      `Harga pasar saat ini berada ${Math.abs(marginOfSafetyPct).toFixed(1)}% di atas estimasi Nilai Intrinsik Wajar konservatif.`
+      `Harga pasar saat ini berada ${Math.abs(marginOfSafetyPct).toFixed(1)}% di atas estimasi Nilai Intrinsik Justified PBV.`
     );
   }
   if (adtv20dIdr < 10_000_000_000) {
@@ -1430,16 +1750,17 @@ export function evaluateJoeliardiOosFundamental(stock: StockMetrics): JoeliardiO
       `Kedalaman Likuiditas (ADTV 20D ~Rp ${(adtv20dIdr / 1_000_000_000).toFixed(2)} Miliar/hari): Batasi eksekusi harian maksimal 5% ADTV (~Rp ${(maxSafeAllocationIdr / 1_000_000).toFixed(0)} Juta) untuk menghindari slippage.`
     );
   }
-  if (stock.volatilityAnn >= 32) {
+  if (stock.beta1Y >= 1.15 || stock.volatilityAnn >= 30) {
     keyRisks.push(
-      `Volatilitas tahunan tinggi (${stock.volatilityAnn.toFixed(1)}%), menuntut disiplin ukuran posisi (position sizing) yang ketat.`
+      `Beta (${stock.beta1Y.toFixed(2)}x) / Volatilitas (${stock.volatilityAnn.toFixed(1)}%) tinggi: Porsi keranjang dikecilkan proporsional dengan 1/Beta (Maks ${betaWeightedSizingCapPct}% ekuitas) sesuai strategi Barbell Antifragile.`
     );
   }
   if (keyRisks.length === 0) {
     keyRisks.push(
-      `Pantau dinamika makro sektoral (${stock.sector}) dan realisasi laporan keuangan kuartalan berikutnya.`
+      `Pantau dinamika kurva imbal hasil SBN (${sbnSpot1YPct}%–${sbnSpot10YPct}%) dan realisasi arus kas operasi kuartalan berikutnya.`
     );
   }
+  void opMargin;
 
   return {
     ticker: stock.ticker,
@@ -1465,6 +1786,18 @@ export function evaluateJoeliardiOosFundamental(stock: StockMetrics): JoeliardiO
     rawSbnSpreadPct,
     erpBenchmarkPct,
     netErpSpreadPct,
+    grossProfitabilityToAssets,
+    ocfToNetIncomeRatio,
+    accrualRatioToAssets,
+    accrualPenaltyPts,
+    sbnSpot1YPct,
+    sbnSpot5YPct,
+    sbnSpot10YPct,
+    sbnBlendedSpotRfPct,
+    dynamicCostOfEquityPct,
+    sustainableGrowthRatePct,
+    damodaranJustifiedPbv,
+    betaWeightedSizingCapPct,
     adtv20dIdr,
     maxSafeAllocationIdr,
     isDefensiveDiscountAnomaly,
@@ -1483,9 +1816,49 @@ export function evaluateJoeliardiOosFundamental(stock: StockMetrics): JoeliardiO
 }
 
 /**
- * Portfolio Optimizer & BEI Lot-100 Calculator
- * Strictly blocks illiquid, stagnant/suspended (gocap), HSC-flagged, and unverified Yahoo Finance stocks
- * from entering Keranjang 1 or Keranjang 2, and prioritizes Value & dividend-paying quality issuers.
+ * Helper: Applies 1/Beta Proportional Risk Parity Weighting with a strict Per-Stock Maximum Allocation Cap
+ * (Qian 2005 Risk Parity & Taleb 2012 Antifragile Barbell Position Sizing).
+ * Iteratively redistributes excess weight above `maxIntraSleeveWeightPct` across uncapped candidates.
+ */
+function computeCappedInverseBetaWeights(
+  rawPropensities: number[],
+  maxIntraSleeveWeightPct: number = 34.0
+): number[] {
+  const n = rawPropensities.length;
+  if (n === 0) return [];
+  if (n === 1) return [100];
+
+  const effectiveCap = Math.max(100 / n + 2, maxIntraSleeveWeightPct);
+  const sumRaw = rawPropensities.reduce((a, b) => a + b, 0) || 1;
+  const weights = rawPropensities.map((p) => (p / sumRaw) * 100);
+  const cappedFlags = new Array(n).fill(false);
+
+  for (let iter = 0; iter < 5; iter++) {
+    let excess = 0;
+    let uncappedSum = 0;
+    for (let i = 0; i < n; i++) {
+      if (!cappedFlags[i] && weights[i] > effectiveCap) {
+        excess += weights[i] - effectiveCap;
+        weights[i] = effectiveCap;
+        cappedFlags[i] = true;
+      } else if (!cappedFlags[i]) {
+        uncappedSum += weights[i];
+      }
+    }
+    if (excess <= 1e-4 || uncappedSum <= 1e-4) break;
+    for (let i = 0; i < n; i++) {
+      if (!cappedFlags[i]) {
+        weights[i] += excess * (weights[i] / uncappedSum);
+      }
+    }
+  }
+  return weights;
+}
+
+/**
+ * Portfolio Optimizer & BEI Lot-100 Calculator (1/Beta Barbell Position Sizing — Qian 2005 & Taleb 2012)
+ * Per user preference: All stocks passing the quality filter receive weights proportional to 1/Beta
+ * with a maximum allocation cap per stock (no hard 0% block on high-volatility/high-beta quality stocks).
  */
 export function computeOptimalHRPBarbellPortfolio(
   stocks: StockMetrics[],
@@ -1495,14 +1868,15 @@ export function computeOptimalHRPBarbellPortfolio(
   selectionMode: BasketSelectionMode = 'LIVE_FACTOR_LEADER'
 ): PortfolioAnalyticsSummary {
   const refreshedStocks = rankUniverseWithBuffer(stocks, 40);
-  // Strictly require live-fetched, liquid, non-HSC stocks with solid Value score
+  // Require live-fetched, liquid, non-HSC stocks passing GP/A & Value quality filter
   const institutionalLiquidPool = refreshedStocks.filter(
     (s) =>
       s.isLiveFetched === true &&
       s.isLiquid !== false &&
       !s.isHscFlagged &&
       s.lastPrice >= 80 &&
-      s.dmuValueScore >= 6.0 &&
+      s.dmuValueScore >= 5.8 &&
+      (s.grossProfitabilityToAssets ?? 12) >= 7.5 &&
       isInstitutionalLiquidCandidate(s.ticker)
   );
   const fallbackLiquidPool = refreshedStocks.filter(
@@ -1511,7 +1885,7 @@ export function computeOptimalHRPBarbellPortfolio(
       s.isLiquid !== false &&
       !s.isHscFlagged &&
       s.lastPrice >= 80 &&
-      s.dmuValueScore >= 5.8
+      s.dmuValueScore >= 5.6
   );
   const baseUniverse =
     institutionalLiquidPool.length >= 8
@@ -1559,29 +1933,31 @@ export function computeOptimalHRPBarbellPortfolio(
     return selected;
   };
 
-  // 1. Select Keranjang 1 (Low-Volatility, Dividend & Value Core: Liquid, Beta <= 0.96, Positive ROE)
+  // 1. Select Keranjang 1 (Defensive Core Compounders: Low-Beta Anchor of Barbell)
   const defCandidates = selectSleeveCandidates(
     (s) =>
       s.isLiquid !== false &&
       s.lastPrice >= 80 &&
-      s.roe >= 8 &&
-      s.beta1Y <= 0.96 &&
-      s.dmuLowVolScore >= 5.5,
+      s.roe >= 7 &&
+      s.beta1Y <= 1.02 &&
+      s.dmuValueScore >= 5.8,
     'DEFENSIVE',
     maxPicksPerSleeve
   );
   const selectedDefTickers = new Set(defCandidates.map((s) => s.ticker));
 
-  // 2. Select Keranjang 2 (Momentum & Size Alpha: Liquid Non-Keranjang 1 candidates with strong live momentum/beta)
+  // 2. Select Keranjang 2 (Asymmetric Growth & Momentum Barbell Sleeve: High-Beta / High-Vol Quality stocks are NOT blocked,
+  //    instead their position size is scaled inversely by 1/Beta with a maximum per-stock cap)
   const aggCandidates = selectSleeveCandidates(
     (s) =>
       !selectedDefTickers.has(s.ticker) &&
       s.isLiquid !== false &&
       s.lastPrice >= 80 &&
       s.roe >= 5 &&
+      s.dmuValueScore >= 5.6 &&
       (selectionMode === 'TOP_GAINERS_MOMENTUM'
-        ? s.change1D >= -1.0
-        : s.beta1Y > 0.78 || s.return30D > 0 || s.change1D > 0.5),
+        ? s.change1D >= -1.5
+        : s.beta1Y > 0.72 || s.return30D > -3.0 || s.change1D >= 0),
     'AGGRESSIVE',
     maxPicksPerSleeve
   );
@@ -1591,6 +1967,8 @@ export function computeOptimalHRPBarbellPortfolio(
   const lowVolCoreSleevePct = Math.round(activeEquityWeightPct * 0.55);
   const momAlphaSleevePct = activeEquityWeightPct - lowVolCoreSleevePct;
 
+  const MAX_PORTFOLIO_STOCK_CAP_PCT = 18.0; // Absolute max 18% of total portfolio equity per stock
+
   const buildSleevePositions = (
     candidates: StockMetrics[],
     basketType: 'DEFENSIVE' | 'AGGRESSIVE',
@@ -1598,16 +1976,30 @@ export function computeOptimalHRPBarbellPortfolio(
   ): HRPAllocationPosition[] => {
     if (candidates.length === 0) return [];
 
-    const propensities = candidates.map((s) => {
-      const sleeveScore = computeSleeveSpecificScore(s, basketType, selectionMode);
-      return Math.pow(Math.max(1, sleeveScore), 1.4) / Math.max(10, s.volatilityAnn);
+    // 1/Beta Proportional Risk Parity Weighting (Qian 2005 & Taleb 2012):
+    // Weight_i ∝ (QualityConviction_i) * (1 / max(0.35, Beta_i))
+    const rawInverseBetaPropensities = candidates.map((s) => {
+      const sleeveScore = Math.max(1.5, computeSleeveSpecificScore(s, basketType, selectionMode));
+      const effectiveBeta = Math.max(0.35, Number(s.beta1Y) || 1.0);
+      return (sleeveScore / effectiveBeta);
     });
-    const sumPropensity = propensities.reduce((a, b) => a + b, 0) || 1;
+
+    const maxIntraCapForSleeve =
+      sleeveWeightPct > 0
+        ? Math.min(36.0, (MAX_PORTFOLIO_STOCK_CAP_PCT / sleeveWeightPct) * 100)
+        : 34.0;
+    const cappedIntraWeights = computeCappedInverseBetaWeights(
+      rawInverseBetaPropensities,
+      maxIntraCapForSleeve
+    );
 
     return candidates.map((stock, idx) => {
-      const intraWeight = (propensities[idx] / sumPropensity) * 100;
-      const totalWeight = (intraWeight * sleeveWeightPct) / 100;
-      const allocatedIdr = Math.round((capitalIdr * totalWeight) / 100);
+      const intraWeight = cappedIntraWeights[idx];
+      const rawTotalWeight = (intraWeight * sleeveWeightPct) / 100;
+      const totalWeight = Math.min(MAX_PORTFOLIO_STOCK_CAP_PCT, rawTotalWeight);
+      const rawAllocatedIdr = Math.round((capitalIdr * totalWeight) / 100);
+      const maxAdtv5PctIdr = Math.round(estimateEmitenAdtv20dIdr(stock) * 0.05);
+      const allocatedIdr = Math.min(rawAllocatedIdr, Math.max(rawAllocatedIdr, maxAdtv5PctIdr));
       const lots = Math.max(1, Math.floor(allocatedIdr / (stock.lastPrice * 100)));
 
       return {
@@ -1761,11 +2153,19 @@ export function evaluateActivePortfolio(
       ? Number(((totalUnrealizedPnlIdr / totalInvestedIdr) * 100).toFixed(2))
       : 0;
 
+  // 1/Beta Proportional Sizing for all quality-passing holdings with per-stock max cap
   const eligibleHoldings = resolvedPairs.filter(
-    (p) => p.stock.dmuRankPct <= effectiveBufferPct && p.stock.dmuCompositeScore >= 5.2
+    (p) => !p.stock.isHscFlagged && p.stock.dmuCompositeScore >= 4.8
   );
-  const propSum =
-    eligibleHoldings.reduce((acc, p) => acc + p.stock.hrpPropensity, 0) || 1;
+  const rawEligibleProps = eligibleHoldings.map(
+    (p) => p.stock.betaWeightedPropensity || p.stock.hrpPropensity || 1
+  );
+  const cappedEligibleShares = computeCappedInverseBetaWeights(rawEligibleProps, 36.0);
+  const targetWeightMap = new Map<string, number>();
+  eligibleHoldings.forEach((p, idx) => {
+    const w = Math.min(22.0, (cappedEligibleShares[idx] * regime.aggressiveWeight) / 100);
+    targetWeightMap.set(p.holding.ticker, Number(w.toFixed(1)));
+  });
 
   let weightedBeta = 0;
   let weightedDmu = 0;
@@ -1790,15 +2190,12 @@ export function evaluateActivePortfolio(
       weightedDmu += wEq * stock.dmuCompositeScore;
     }
 
-    let targetOptimalWeightPct = 0;
+    const isQualityEligible = !stock.isHscFlagged && stock.dmuCompositeScore >= 4.8;
     const isInsideBuffer =
-      stock.dmuRankPct <= effectiveBufferPct && stock.dmuCompositeScore >= 5.2;
-
-    if (isInsideBuffer) {
-      targetOptimalWeightPct = Number(
-        ((stock.hrpPropensity / propSum) * regime.aggressiveWeight).toFixed(1)
-      );
-    }
+      isQualityEligible && (stock.dmuRankPct <= effectiveBufferPct || stock.dmuValueScore >= 6.2);
+    const targetOptimalWeightPct = isQualityEligible
+      ? targetWeightMap.get(holding.ticker) ?? 0
+      : 0;
 
     const weightDriftPct = Number((actualWeightPct - targetOptimalWeightPct).toFixed(1));
     const targetValueIdr = (totalPortfolioEquityIdr * targetOptimalWeightPct) / 100;

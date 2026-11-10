@@ -249,11 +249,19 @@ async function fetchSingleChart(symbol, range = '3mo', hostIdx = 0) {
         result?.meta?.fulldayChangePercent ??
         NaN
       );
-      const prevClose = Number(
-        result?.meta?.previousClose ??
-        result?.meta?.chartPreviousClose ??
-        (closes.length >= 2 ? closes[closes.length - 2] : lastPrice)
-      );
+      const dailyPrevClose =
+        closes.length >= 2
+          ? closes[closes.length - 2] !== lastPrice
+            ? closes[closes.length - 2]
+            : closes.length >= 3
+            ? closes[closes.length - 3]
+            : closes[closes.length - 2]
+          : lastPrice;
+      const metaPrevClose = Number(result?.meta?.previousClose ?? 0);
+      const prevClose =
+        Number.isFinite(metaPrevClose) && metaPrevClose > 0 && metaPrevClose !== lastPrice
+          ? metaPrevClose
+          : dailyPrevClose;
       const change1D = Number.isFinite(metaChangePct)
         ? Number(metaChangePct.toFixed(2))
         : prevClose > 0
@@ -310,11 +318,19 @@ async function fetchSparkChunk(chunk, range = '3mo', chunkIdx = 0) {
             entry?.fulldayChangePercent ??
             NaN
           );
-          const prevClose = Number(
-            entry?.previousClose ??
-            entry?.chartPreviousClose ??
-            (closes.length >= 2 ? closes[closes.length - 2] : lastPrice)
-          );
+          const dailyPrevClose =
+            closes.length >= 2
+              ? closes[closes.length - 2] !== lastPrice
+                ? closes[closes.length - 2]
+                : closes.length >= 3
+                ? closes[closes.length - 3]
+                : closes[closes.length - 2]
+              : lastPrice;
+          const entryPrevClose = Number(entry?.previousClose ?? 0);
+          const prevClose =
+            Number.isFinite(entryPrevClose) && entryPrevClose > 0 && entryPrevClose !== lastPrice
+              ? entryPrevClose
+              : dailyPrevClose;
           const change1D = Number.isFinite(rawChangePct)
             ? Number(rawChangePct.toFixed(2))
             : prevClose > 0

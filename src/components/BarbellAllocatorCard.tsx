@@ -236,18 +236,18 @@ export function BarbellAllocatorCard({
         {/* Formula Comparison Strip */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 pt-2 border-t border-[#E4E2DD]/80 text-[11px]">
           <div className="px-2.5 py-1.5 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs">
-            <span className="font-bold text-[#0D5C46]">Rumus Keranjang 1 (Defensive &amp; Dividend Core): </span>
+            <span className="font-bold text-[#0D5C46]">Keranjang 1 (Defensive &amp; GP/A Quality Core · 1/β Sizing): </span>
             <span className="text-neutral-600">
-              Syarat <code className="font-bold">Likuid &amp; β ≤ 0.96</code> · Diurutkan dari{' '}
-              <strong>50% Low-Vol Live + 30% Value &amp; Dividen Yield + 20% Stabilitas Tren</strong>
+              Lolos Kualitas (<code className="font-bold">GP/A Novy-Marx &amp; Bebas HSC</code>) · Pembobotan{' '}
+              <strong>Proporsional 1/Beta (Risk Parity Qian 2005)</strong> dengan batas alokasi maksimum per saham
               {selectionMode === 'SECTOR_ROTATION' ? ' (Maks 1 saham/sektor).' : ' (Maks 2 saham/sektor).'}
             </span>
           </div>
           <div className="px-2.5 py-1.5 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs">
-            <span className="font-bold text-[#0284C7] bb-cyan">Rumus Keranjang 2 (Momentum Alpha): </span>
+            <span className="font-bold text-[#0284C7] bb-cyan">Keranjang 2 (Asymmetric Barbell Alpha · Taleb 2012): </span>
             <span className="text-neutral-600">
-              Kandidat Likuid Non-Keranjang 1 · Diurutkan dari{' '}
-              <strong>60% Akselerasi Harga Live (Return 30D + Breakout 1D) + 25% Size/Liq + 15% Value</strong>.
+              Semua saham lolos kualitas (termasuk Beta tinggi) diberi bobot{' '}
+              <strong>1/Beta Terukur (Inverse Volatility)</strong> untuk menangkap upside asimetris tanpa risiko total ruin.
             </span>
           </div>
         </div>
@@ -414,7 +414,9 @@ export function BarbellAllocatorCard({
                       </span>
                     </div>
                     <div className="text-[11px] text-neutral-500 mt-0.5">
-                      {pos.stock.name} · {pos.stock.sector} · Bobot {pos.totalPortfolioWeightPct.toFixed(1)}% · Skor Defensif{' '}
+                      {pos.stock.name} · {pos.stock.sector} · Bobot 1/β{' '}
+                      <strong>{pos.totalPortfolioWeightPct.toFixed(1)}%</strong> (β {pos.stock.beta1Y.toFixed(2)}x · GP/A{' '}
+                      {(pos.stock.grossProfitabilityToAssets ?? pos.stock.roe * 0.85).toFixed(1)}%) · Skor Defensif{' '}
                       <strong className="text-[#0D5C46]">{sleeveScore.toFixed(2)}</strong>
                     </div>
                     <div className="text-[10px] font-semibold text-[#0D5C46] mt-0.5">
@@ -454,16 +456,16 @@ export function BarbellAllocatorCard({
             <div>
               <div className="text-xs font-bold text-[#0284C7] bb-cyan">
                 <MetricTooltip
-                  label={`Keranjang 2 · Momentum Live & Size Alpha (${momentumValuePositions.length} Saham)`}
-                  title="Keranjang 2: Akselerasi Momentum Live (45% Porsi Saham)"
-                  laymanExplanation="Berisi saham-saham likuid di luar Keranjang 1 yang sedang memiliki tarikan kenaikan harga terkuat dalam 1 hari & 30 hari terakhir (live dari Yahoo Finance)."
-                  practicalGuide="Berfungsi sebagai mesin pendongkrak keuntungan (alpha) ketika tren pasar sedang mendukung."
+                  label={`Keranjang 2 · Momentum Live & Barbell 1/β Alpha (${momentumValuePositions.length} Saham)`}
+                  title="Keranjang 2: Akselerasi Momentum & Upside Asimetris (45% Porsi Saham)"
+                  laymanExplanation="Berisi saham-saham berkualitas tinggi (termasuk bervolatilitas/Beta tinggi) dengan alokasi proporsional 1/Beta dan batas maksimum per saham sesuai pendekatan Barbell Taleb (2012)."
+                  practicalGuide="Berfungsi sebagai mesin pendongkrak keuntungan (alpha) dengan ukuran posisi yang dikendalikan secara matematis oleh 1/Beta."
                   align="right"
                   className="text-[#0284C7] bb-cyan"
                 />
               </div>
               <span className="text-[11px] text-neutral-500 block mt-0.5">
-                Kriteria: Likuid Institusional · Akselerasi Return 30D + Breakout 1D
+                Kriteria: Lolos Kualitas GP/A · Sizing Proporsional 1/β dengan Batas Alokasi Maksimum
               </span>
             </div>
             <div className="text-right">
@@ -550,7 +552,9 @@ export function BarbellAllocatorCard({
                       </span>
                     </div>
                     <div className="text-[11px] text-neutral-500 mt-0.5">
-                      {pos.stock.name} · {pos.stock.sector} · Bobot {pos.totalPortfolioWeightPct.toFixed(1)}% · Skor Momentum{' '}
+                      {pos.stock.name} · {pos.stock.sector} · Bobot 1/β{' '}
+                      <strong>{pos.totalPortfolioWeightPct.toFixed(1)}%</strong> (β {pos.stock.beta1Y.toFixed(2)}x · GP/A{' '}
+                      {(pos.stock.grossProfitabilityToAssets ?? pos.stock.roe * 0.85).toFixed(1)}%) · Skor Momentum{' '}
                       <strong className="text-[#0284C7] bb-cyan">{sleeveScore.toFixed(2)}</strong>
                     </div>
                     <div className="text-[10px] font-semibold text-[#0284C7] bb-cyan mt-0.5">

@@ -386,9 +386,35 @@ async function loadStaticMarketSnapshot(
 }
 
 /**
+ * 60-Second In-Memory Live Quote Cache to prevent redundant Yahoo Finance requests
+ * and protect against rate-limiting / IP throttling.
+ */
+const LIVE_QUOTE_CACHE_TTL_MS = 60_000;
+const RAPID_CLICK_GUARD_MS = 12_000;
+const liveQuoteMemoryCache = new Map<string, { item: SparkSeriesItem; fetchedAt: number }>();
+
+function getCachedLiveQuote(symbol: string, maxAgeMs: number = LIVE_QUOTE_CACHE_TTL_MS): SparkSeriesItem | null {
+  const entry = liveQuoteMemoryCache.get(symbol);
+  if (!entry) return null;
+  if (Date.now() - entry.fetchedAt <= maxAgeMs) {
+    return entry.item;
+  }
+  return null;
+}
+
+function setCachedLiveQuotes(map: Record<string, SparkSeriesItem>): void {
+  const now = Date.now();
+  for (const [sym, item] of Object.entries(map)) {
+    if (item && item.lastPrice > 0) {
+      liveQuoteMemoryCache.set(sym, { item, fetchedAt: now });
+    }
+  }
+}
+
+/**
  * Parses a raw Yahoo Finance `/v8/finance/spark` or `/v7/finance/spark` JSON payload into a map of `SparkSeriesItem`.
- * Strictly prioritizes `regularMarketPrice` and `fulldayPrice` (plus `regularMarketChangePercent` / `fulldayChangePercent`)
- * over the daily `close` array so intraday prices never get stuck on Friday's `previousClose`.
+ * Strictly prioritizes `regularMarketPrice` and `fulldayPrice` and computes `prevClose` from the previous daily candle
+ * `closes[closes.length - 2]` rather than multi-month `chartPreviousClose`.
  */
 function parseYahooSparkPayload(rawJson: any): Record<string, SparkSeriesItem> {
   const out: Record<string, SparkSeriesItem> = {};
@@ -435,8 +461,7 @@ function parseYahooSparkPayload(rawJson: any): Record<string, SparkSeriesItem> {
           rawCloses.length > 0 && rawCloses[rawCloses.length - 1] === null;
 
         if (closes.length === 0) {
-          const basePrev =
-            meta.previousClose || meta.chartPreviousClose || lastPrice;
+          const basePrev = meta.previousClose || lastPrice;
           closes.push(Number(Number(basePrev).toFixed(2)), lastPrice);
         } else if (rawTrailingWasNull && closes[closes.length - 1] !== lastPrice) {
           closes.push(lastPrice);
@@ -447,15 +472,24 @@ function parseYahooSparkPayload(rawJson: any): Record<string, SparkSeriesItem> {
           closes[closes.length - 1] = lastPrice;
         }
 
+        const dailyPrevClose =
+          closes.length >= 2
+            ? closes[closes.length - 2] !== lastPrice
+              ? closes[closes.length - 2]
+              : closes.length >= 3
+              ? closes[closes.length - 3]
+              : closes[closes.length - 2]
+            : 0;
+
         const prevCloseCandidate =
           typeof meta.previousClose === 'number' &&
           Number.isFinite(meta.previousClose) &&
           meta.previousClose > 0 &&
           meta.previousClose !== lastPrice
             ? meta.previousClose
-            : closes.length >= 2
-            ? closes[closes.length - 2]
-            : meta.chartPreviousClose || lastPrice;
+            : dailyPrevClose > 0
+            ? dailyPrevClose
+            : lastPrice;
 
         const officialChangePct =
           typeof meta.regularMarketChangePercent === 'number' &&
@@ -527,8 +561,7 @@ function parseYahooSparkPayload(rawJson: any): Record<string, SparkSeriesItem> {
           rawCloses.length > 0 && rawCloses[rawCloses.length - 1] === null;
 
         if (closes.length === 0) {
-          const basePrev =
-            entry.previousClose || entry.chartPreviousClose || lastPrice;
+          const basePrev = entry.previousClose || lastPrice;
           closes.push(Number(Number(basePrev).toFixed(2)), lastPrice);
         } else if (rawTrailingWasNull && closes[closes.length - 1] !== lastPrice) {
           closes.push(lastPrice);
@@ -536,15 +569,24 @@ function parseYahooSparkPayload(rawJson: any): Record<string, SparkSeriesItem> {
           closes[closes.length - 1] = lastPrice;
         }
 
+        const dailyPrevClose =
+          closes.length >= 2
+            ? closes[closes.length - 2] !== lastPrice
+              ? closes[closes.length - 2]
+              : closes.length >= 3
+              ? closes[closes.length - 3]
+              : closes[closes.length - 2]
+            : 0;
+
         const prevCloseCandidate =
           typeof entry.previousClose === 'number' &&
           Number.isFinite(entry.previousClose) &&
           entry.previousClose > 0 &&
           entry.previousClose !== lastPrice
             ? entry.previousClose
-            : closes.length >= 2
-            ? closes[closes.length - 2]
-            : entry.chartPreviousClose || lastPrice;
+            : dailyPrevClose > 0
+            ? dailyPrevClose
+            : lastPrice;
 
         const officialChangePct =
           typeof entry.regularMarketChangePercent === 'number' &&
@@ -581,7 +623,7 @@ function parseYahooSparkPayload(rawJson: any): Record<string, SparkSeriesItem> {
 
 /**
  * Browser-side CORS-safe Yahoo Finance v8 Single Chart Fetcher.
- * Prioritizes `meta.regularMarketPrice` and `meta.fulldayPrice` along with official intraday change percentages.
+ * Prioritizes `meta.regularMarketPrice` and `meta.fulldayPrice` along with accurate previous daily candle close.
  */
 async function fetchYahooChartSingleViaBrowserCors(
   symbol: string,
@@ -648,15 +690,26 @@ async function fetchYahooChartSingleViaBrowserCors(
         }
       }
 
+      const dailyPrevClose =
+        closes.length >= 2
+          ? closes[closes.length - 2] !== lastPrice
+            ? closes[closes.length - 2]
+            : closes.length >= 3
+            ? closes[closes.length - 3]
+            : closes[closes.length - 2]
+          : 0;
+
       const prevClose =
         typeof meta.previousClose === 'number' &&
         Number.isFinite(meta.previousClose) &&
         meta.previousClose > 0 &&
         meta.previousClose !== lastPrice
           ? meta.previousClose
-          : closes.length >= 2
-          ? closes[closes.length - 2]
-          : meta.chartPreviousClose || lastPrice;
+          : dailyPrevClose > 0
+          ? dailyPrevClose
+          : range === '1d' && typeof meta.chartPreviousClose === 'number' && meta.chartPreviousClose > 0
+          ? meta.chartPreviousClose
+          : lastPrice;
 
       const officialChangePct =
         typeof meta.regularMarketChangePercent === 'number' &&
@@ -706,55 +759,84 @@ async function fetchYahooChartSingleViaBrowserCors(
 
 /**
  * Browser-side CORS-safe Yahoo Finance Spark Batch Fetcher for Static Hosts (GitHub Pages `*.github.io`).
- * Queries both `/v8/finance/spark` and `/v7/finance/spark` across multiple public CORS relays.
+ * Splits symbols into polite chunks of 18 symbols max to prevent URL length / proxy timeouts.
  */
 async function fetchYahooSparkViaBrowserCors(
   batchSymbols: string[],
   range: string = '3mo'
 ): Promise<Record<string, SparkSeriesItem>> {
-  const joinedSymbols = encodeURIComponent(batchSymbols.join(','));
-  const targetV8 = `https://query1.finance.yahoo.com/v8/finance/spark?symbols=${joinedSymbols}&range=${encodeURIComponent(
-    range
-  )}&interval=1d`;
-  const targetV7 = `https://query1.finance.yahoo.com/v7/finance/spark?symbols=${joinedSymbols}&range=${encodeURIComponent(
-    range
-  )}&interval=1d`;
+  const CHUNK_SIZE = 18;
+  const chunks: string[][] = [];
+  for (let i = 0; i < batchSymbols.length; i += CHUNK_SIZE) {
+    chunks.push(batchSymbols.slice(i, i + CHUNK_SIZE));
+  }
 
-  const proxyCandidates = [
-    { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetV8)}`, wrapped: false },
-    { url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetV8)}`, wrapped: false },
-    { url: `https://api.allorigins.win/get?url=${encodeURIComponent(targetV8)}`, wrapped: true }
-  ];
+  const fetchSingleSparkChunkCors = async (chunkSymbols: string[]): Promise<Record<string, SparkSeriesItem>> => {
+    const joinedSymbols = encodeURIComponent(chunkSymbols.join(','));
+    const targetV8 = `https://query1.finance.yahoo.com/v8/finance/spark?symbols=${joinedSymbols}&range=${encodeURIComponent(
+      range
+    )}&interval=1d`;
 
-  let out: Record<string, SparkSeriesItem> = {};
+    const proxyCandidates = [
+      { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetV8)}`, wrapped: false },
+      { url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetV8)}`, wrapped: false },
+      { url: `https://api.allorigins.win/get?url=${encodeURIComponent(targetV8)}`, wrapped: true }
+    ];
 
-  for (const proxy of proxyCandidates) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 3500);
-      const res = await fetch(proxy.url, {
-        signal: controller.signal,
-        cache: 'no-store'
-      });
-      clearTimeout(timer);
-      if (res.ok) {
-        const rawPayload = await res.json();
-        const json =
-          proxy.wrapped && typeof rawPayload?.contents === 'string'
-            ? JSON.parse(rawPayload.contents)
-            : rawPayload;
-        const parsed = parseYahooSparkPayload(json);
-        if (Object.keys(parsed).length > 0) {
-          out = parsed;
-          break;
+    for (const proxy of proxyCandidates) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 4500);
+        const res = await fetch(proxy.url, {
+          signal: controller.signal,
+          cache: 'no-store'
+        });
+        clearTimeout(timer);
+        if (res.ok) {
+          const rawPayload = await res.json();
+          const json =
+            proxy.wrapped && typeof rawPayload?.contents === 'string'
+              ? JSON.parse(rawPayload.contents)
+              : rawPayload;
+          const parsed = parseYahooSparkPayload(json);
+          if (Object.keys(parsed).length > 0) {
+            return parsed;
+          }
         }
+      } catch {
+        // try next relay
       }
-    } catch {
-      // try next relay
+    }
+    return {};
+  };
+
+  const [chunkMaps, jkseExactQuote] = await Promise.all([
+    Promise.all(chunks.map((c) => fetchSingleSparkChunkCors(c))),
+    batchSymbols.includes('^JKSE') ? fetchYahooChartSingleViaBrowserCors('^JKSE', '5d') : Promise.resolve(null)
+  ]);
+
+  const out: Record<string, SparkSeriesItem> = {};
+  for (const m of chunkMaps) {
+    Object.assign(out, m);
+  }
+
+  if (jkseExactQuote && jkseExactQuote.lastPrice > 0) {
+    const existingJkse = out['^JKSE'];
+    if (existingJkse && existingJkse.closes.length >= 2) {
+      const updatedCloses = [...existingJkse.closes];
+      updatedCloses[updatedCloses.length - 1] = jkseExactQuote.lastPrice;
+      out['^JKSE'] = {
+        ...existingJkse,
+        lastPrice: jkseExactQuote.lastPrice,
+        change1D: jkseExactQuote.change1D,
+        closes: updatedCloses
+      };
+    } else {
+      out['^JKSE'] = jkseExactQuote;
     }
   }
 
-  // If this was a targeted single-ticker lookup (e.g. clicking Inspect or "Tarik Ticker .JK") and spark missed a symbol
+  // If this was a targeted lookup (<= 3 symbols) and spark missed a symbol, fallback to single chart
   if (batchSymbols.length <= 3) {
     for (const sym of batchSymbols) {
       if (!out[sym]) {
@@ -783,6 +865,11 @@ export async function fetchYahooChartSeries(
   shortName?: string;
   adtv20dIdr?: number;
 }> {
+  const cached = getCachedLiveQuote(symbol, RAPID_CLICK_GUARD_MS);
+  if (cached && cached.lastPrice > 0 && cached.closes.length >= 2) {
+    return cached;
+  }
+
   if (canUseLocalExpressBackend()) {
     try {
       const controller = new AbortController();
@@ -796,6 +883,10 @@ export async function fetchYahooChartSeries(
         cachedLocalServerAvailable = true;
         const item = (await srvRes.json()) as SparkSeriesItem;
         if (item && item.lastPrice > 0 && Array.isArray(item.closes)) {
+          setCachedLiveQuotes({ [symbol]: item });
+          if (embeddedSnapshot.data) {
+            embeddedSnapshot.data[symbol] = item;
+          }
           return item;
         }
       } else if (srvRes.status === 404) {
@@ -807,6 +898,10 @@ export async function fetchYahooChartSeries(
   } else {
     const corsLive = await fetchYahooSparkViaBrowserCors([symbol], range);
     if (corsLive[symbol] && corsLive[symbol].lastPrice > 0) {
+      setCachedLiveQuotes(corsLive);
+      if (embeddedSnapshot.data) {
+        Object.assign(embeddedSnapshot.data, corsLive);
+      }
       return corsLive[symbol];
     }
   }
@@ -834,10 +929,11 @@ export async function fetchYahooChartSeries(
 }
 
 /**
- * Lightweight On-Demand & Macro Yahoo Spark Fetcher
- * - During Login / Master Sync: Only fetches IHSG (^JKSE) and Global Macro indicators (zero heavy .JK stock loops).
- * - On Inspect Click / Single Ticker Lookup: Fetches the specific .JK ticker on demand in < 1s.
- * - Full 957 JCI baseline is hydrated instantaneously from the calibrated snapshot without network lag.
+ * 3-Tier Smart Hybrid Yahoo Spark Fetcher (Lightweight, Fast < 1.5s, & Anti-Block)
+ * - Tier 1 (Priority Live Batch): Fetches up to 48 priority symbols (IHSG ^JKSE, 8 Global Macro, active holdings,
+ *   Keranjang 1 & 2 picks, and top Screener leaders) in 2–3 parallel Spark chunks.
+ * - Tier 2 (On-Demand Micro-Sync): Single ticker or search query fetches in 1 lightweight call (< 400ms).
+ * - Tier 3 (60s Memory Cache + Static Snapshot): Prevents redundant requests and keeps full 957 JCI universe responsive.
  */
 export async function fetchYahooSparkBatch(
   symbols: string[],
@@ -860,25 +956,32 @@ export async function fetchYahooSparkBatch(
     }
   }
 
-  // Filter live network targets:
-  // If called with <= 12 symbols (e.g. IHSG + Global Macro on Sync, or single-ticker on Inspect click), fetch them all in 1 request.
-  // Never bulk-fetch ratusan .JK emiten upfront! Emiten are fetched lazily only when clicking Inspect.
-  const liveTargets =
-    uniqueSymbols.length <= 12
-      ? uniqueSymbols
-      : uniqueSymbols.filter((sym) => !sym.endsWith('.JK'));
+  // 2. Check 60-second in-memory live cache (or 12-second rapid-click guard when forceLiveNetwork is true)
+  const cacheWindowMs = forceLiveNetwork ? RAPID_CLICK_GUARD_MS : LIVE_QUOTE_CACHE_TTL_MS;
+  const uncachedTargets: string[] = [];
+  for (const sym of uniqueSymbols) {
+    const cached = getCachedLiveQuote(sym, cacheWindowMs);
+    if (cached) {
+      resultMap[sym] = cached;
+    } else {
+      uncachedTargets.push(sym);
+    }
+  }
+
+  // Cap live network batch to max 48 symbols per call (at most 3 polite chunks of 16 symbols) so Yahoo never blocks
+  const liveTargets = uncachedTargets.slice(0, 48);
 
   if (liveTargets.length > 0 && (forceLiveNetwork || canUseLocalExpressBackend())) {
     onChunkProgress?.(
       1,
       liveTargets.length,
-      `IHSG & Global Macro (${liveTargets.length} Indikator)`
+      `Live Batch (${liveTargets.length} Simbol Utama)`
     );
 
     if (canUseLocalExpressBackend()) {
       try {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 6000);
+        const timer = setTimeout(() => controller.abort(), 7500);
         const res = await fetch(
           `/api/yahoo/spark?symbols=${encodeURIComponent(
             liveTargets.join(',')
@@ -890,6 +993,7 @@ export async function fetchYahooSparkBatch(
           const json = await res.json();
           if (json?.data && typeof json.data === 'object') {
             cachedLocalServerAvailable = true;
+            setCachedLiveQuotes(json.data);
             Object.assign(resultMap, json.data);
             if (embeddedSnapshot.data) {
               Object.assign(embeddedSnapshot.data, json.data);
@@ -897,11 +1001,22 @@ export async function fetchYahooSparkBatch(
           }
         }
       } catch {
-        // Fallback to snapshot values already in resultMap
+        // Fallback to browser CORS if local backend timed out
+        if (forceLiveNetwork) {
+          const liveBatchData = await fetchYahooSparkViaBrowserCors(liveTargets, range);
+          if (Object.keys(liveBatchData).length > 0) {
+            setCachedLiveQuotes(liveBatchData);
+            Object.assign(resultMap, liveBatchData);
+            if (embeddedSnapshot.data) {
+              Object.assign(embeddedSnapshot.data, liveBatchData);
+            }
+          }
+        }
       }
     } else if (forceLiveNetwork) {
       const liveBatchData = await fetchYahooSparkViaBrowserCors(liveTargets, range);
       if (Object.keys(liveBatchData).length > 0) {
+        setCachedLiveQuotes(liveBatchData);
         Object.assign(resultMap, liveBatchData);
         if (embeddedSnapshot.data) {
           Object.assign(embeddedSnapshot.data, liveBatchData);
@@ -913,7 +1028,7 @@ export async function fetchYahooSparkBatch(
   onChunkProgress?.(
     uniqueSymbols.length,
     uniqueSymbols.length,
-    'IHSG & Makro Selesai'
+    'Sinkronisasi Live Selesai'
   );
 
   return resultMap;
@@ -1048,14 +1163,51 @@ export async function fetchLiveIdxTicker(rawTicker: string): Promise<StockMetric
 }
 
 /**
- * High-Speed Batch Live Refresh for IHSG (^JKSE), Global Macro Indicators, and All JCI Emiten (~956 -> 1000+ Stocks)
- * Dynamically discovers any newly added .JK tickers in the market snapshot so the universe count adapts in real-time.
+ * Default Priority IDX Liquid Leaders synced in Tier-1 alongside user's active holdings & top Screener picks.
+ */
+const DEFAULT_PRIORITY_IDX_LEADERS = [
+  'ARNA',
+  'BBCA',
+  'BMRI',
+  'BBRI',
+  'BBNI',
+  'TLKM',
+  'ASII',
+  'ADRO',
+  'ITMG',
+  'PTBA',
+  'ICBP',
+  'INDF',
+  'KLBF',
+  'SIDO',
+  'UNTR',
+  'AMMN',
+  'ANTM',
+  'INCO',
+  'PGAS',
+  'MEDC',
+  'AKRA',
+  'MYOR',
+  'CMRY',
+  'MIKA',
+  'UNVR',
+  'BRIS',
+  'MPMX',
+  'TOTL',
+  'SMSM',
+  'TAPG'
+];
+
+/**
+ * 3-Tier Smart Hybrid Batch Live Refresh for IHSG (^JKSE), Global Macro Indicators,
+ * Priority Portfolio & Screener Leaders (~36 tickers in 2-3 polite Spark batches), and JCI Snapshot.
  */
 export async function refreshLiveGlobalMacroAndIhsg(
   currentMacro: MacroIndicator[],
   currentStocks: StockMetrics[],
   onProgress?: (syncedCount: number, totalCount: number, tickerLabel: string) => void,
-  forceLiveNetwork: boolean = false
+  forceLiveNetwork: boolean = false,
+  priorityTickers: string[] = []
 ): Promise<{
   updatedMacro: MacroIndicator[];
   ihsgReturns30D?: number[];
@@ -1078,8 +1230,8 @@ export async function refreshLiveGlobalMacroAndIhsg(
   });
   const fullTimestampStr = formatFullIndonesianDateTime(now);
 
-  // Dynamically check if the market snapshot has any newly listed .JK emiten (e.g. if JCI grows from 956 to 1000+ emiten)
-  const snapshot = await loadStaticMarketSnapshot(false);
+  // Refresh static snapshot in background if forceLiveNetwork is requested
+  const snapshot = await loadStaticMarketSnapshot(forceLiveNetwork);
   const existingTickerSet = new Set(currentStocks.map((s) => s.ticker));
   const expandedStocks: StockMetrics[] = [...currentStocks];
 
@@ -1154,23 +1306,39 @@ export async function refreshLiveGlobalMacroAndIhsg(
     }
   }
 
-  // On Sync: Only network-fetch IHSG (^JKSE) and Global Macro Indicators (9 symbols total).
-  // Individual .JK stocks are hydrated from the snapshot and fetched live on-demand when clicking Inspect!
+  // Build Tier-1 Priority Live Batch:
+  // 1) ^JKSE + 8 Global Macro symbols
+  // 2) User's priority tickers (active portfolio holdings + Keranjang 1 & 2 picks)
+  // 3) Top Screener Composite Leaders & Default Priority IDX Leaders (capped at 36 .JK symbols -> max 3 Spark chunks total)
   const macroSymbols = ['IDR=X', 'DX-Y.NYB', '^TNX', '^VIX', '^GSPC', '^HSI', 'GC=F', 'BZ=F'];
-  const macroAndIhsgTargets = ['^JKSE', ...macroSymbols];
+  const topScreenerLeaders = [...expandedStocks]
+    .filter((s) => s.isLiquid !== false && !s.isHscFlagged && s.lastPrice >= 68)
+    .sort((a, b) => b.dmuCompositeScore - a.dmuCompositeScore)
+    .slice(0, 16)
+    .map((s) => s.ticker);
 
-  onProgress?.(1, macroAndIhsgTargets.length, 'IHSG (^JKSE) & Global Macro');
+  const combinedPriorityJk = Array.from(
+    new Set([...priorityTickers, ...topScreenerLeaders, ...DEFAULT_PRIORITY_IDX_LEADERS])
+  )
+    .map((t) => t.trim().toUpperCase().replace(/\.JK$/i, ''))
+    .filter((t) => t.length === 4)
+    .slice(0, 36)
+    .map((t) => `${t}.JK`);
 
-  const liveMacroBatchMap = await fetchYahooSparkBatch(
-    macroAndIhsgTargets,
+  const tier1LiveTargets = ['^JKSE', ...macroSymbols, ...combinedPriorityJk];
+
+  onProgress?.(1, tier1LiveTargets.length, 'IHSG (^JKSE), Makro & Saham Utama');
+
+  const livePriorityBatchMap = await fetchYahooSparkBatch(
+    tier1LiveTargets,
     '3mo',
-    undefined,
+    onProgress,
     forceLiveNetwork
   );
 
   const batchMap: Record<string, SparkSeriesItem> = {
     ...(snapshot?.data || {}),
-    ...liveMacroBatchMap
+    ...livePriorityBatchMap
   };
 
   // 1. Process ^JKSE (IHSG)

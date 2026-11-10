@@ -56,10 +56,16 @@ export interface StockMetrics {
   roe: number;             // Return on Equity (%)
   debtToEquity: number;    // Debt-to-Equity ratio (x)
   operatingMargin: number; // Operating Margin (%)
+  // Novy-Marx (2013) Gross Profitability & Asness/AQR (2019) Anti-Junk Accruals
+  grossProfitabilityToAssets?: number; // Gross Profit / Total Assets (%)
+  ocfToNetIncomeRatio?: number;        // Operating Cash Flow / Net Income (x)
+  accrualRatioToAssets?: number;       // (Net Income - OCF) / Total Assets (%)
+  accrualPenaltyScore?: number;        // Quality score deduction for high accruals / negative OCF
+  betaWeightedPropensity?: number;     // 1/Beta Risk-Parity Barbell propensity
   // 4-Factor Standardized Scores (1.0 - 10.0)
   dmuMomScore: number;     // Momentum (12-1) factor score (22% weight)
   dmuLowVolScore: number;  // Low-Volatility factor score (28% weight)
-  dmuValueScore: number;   // Value / Cashflow Yield proxy score (35% weight)
+  dmuValueScore: number;   // Value / Gross Profitability & Anti-Junk score (35% weight)
   dmuSizeScore: number;    // Size & Liquidity efficiency score (15% weight)
   dmuCompositeScore: number; // 4-Factor Composite Score (1.0 - 10.0)
   dmuRankPct: number;      // Percentile rank in current universe (1% = best, 100% = worst)
@@ -104,16 +110,30 @@ export interface JoeliardiOosEvaluation {
   rawSbnSpreadPct: number;
   erpBenchmarkPct: number;
   netErpSpreadPct: number;
+  // Novy-Marx GP/A & AQR QMJ Accrual Reality
+  grossProfitabilityToAssets?: number;
+  ocfToNetIncomeRatio?: number;
+  accrualRatioToAssets?: number;
+  accrualPenaltyPts?: number;
+  // Damodaran Justified PBV & Fabozzi SBN Multi-Tenor Spot Curve (1Y, 5Y, 10Y)
+  sbnSpot1YPct?: number;
+  sbnSpot5YPct?: number;
+  sbnSpot10YPct?: number;
+  sbnBlendedSpotRfPct?: number;
+  dynamicCostOfEquityPct?: number;
+  sustainableGrowthRatePct?: number;
+  damodaranJustifiedPbv?: number;
+  betaWeightedSizingCapPct?: number;
   adtv20dIdr: number;
   maxSafeAllocationIdr: number;
   isDefensiveDiscountAnomaly: boolean;
   isUndercutDeepDiscount: boolean;
   valuationVerdict: 'STRONG_UNDERVALUED' | 'FAIR_QUALITY' | 'FULLY_VALUED' | 'OVERVALUED_OR_TRAP';
   valuationLabel: string;
-  businessQualityScore: number;   // 0 - 100 (Joeliardi Pillar 1: ROE vs Cost of Equity, Op Margin, Moat)
-  balanceSheetHealthScore: number; // 0 - 100 (Joeliardi Pillar 2: DER, Solvency, Cashflow/Dividend Reality)
-  valuationSafetyScore: number;   // 0 - 100 (Joeliardi Pillar 3: Margin of Safety, Earnings Yield vs SBN + ERP)
-  oosQuantRobustnessScore: number; // 0 - 100 (Pillar 4: Out-of-Sample Cross-Sectional Factor & Low-Vol Stability)
+  businessQualityScore: number;   // 0 - 100 (Pillar 1: GP/A, ROE vs Dynamic Ke, Anti-Junk Accruals)
+  balanceSheetHealthScore: number; // 0 - 100 (Pillar 2: DER, OCF Conversion, Dividend Reality)
+  valuationSafetyScore: number;   // 0 - 100 (Pillar 3: Justified PBV MoS, Earnings Yield vs SBN Spot + ERP)
+  oosQuantRobustnessScore: number; // 0 - 100 (Pillar 4: Out-of-Sample Cross-Sectional Factor & 1/Beta Stability)
   totalConvictionScore: number;   // 0 - 100
   convictionGrade: 'A+ (CORE CONVICTION)' | 'A (SOLID VALUE)' | 'B (WATCHLIST / HOLD)' | 'C (SPECULATIVE)' | 'D (AVOID / HSC)';
   keyStrengths: string[];

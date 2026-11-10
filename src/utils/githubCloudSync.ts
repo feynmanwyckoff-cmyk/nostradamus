@@ -982,7 +982,7 @@ export async function syncForkUpstreamAndRebuildPages(
       const bundleAssets: Array<{ fetchUrl: string; targetPaths: string[] }> = [
         { fetchUrl: '/docs/assets/app.js', targetPaths: ['docs/assets/app.js'] },
         { fetchUrl: '/docs/assets/index.css', targetPaths: ['docs/assets/index.css'] },
-        { fetchUrl: '/docs/index.html', targetPaths: ['docs/index.html', 'index.html'] }
+        { fetchUrl: '/docs/index.html', targetPaths: ['docs/index.html'] }
       ];
 
       const headRefRes = await fetch(

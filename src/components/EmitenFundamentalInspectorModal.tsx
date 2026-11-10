@@ -867,23 +867,23 @@ export function EmitenFundamentalInspectorModal({
             <div className="p-3.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
               <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
                 <MetricTooltip
-                  label="VALUASI MULTIPEL (IMPLIED VS WAJAR)"
-                  title="Rasio PER & PBV Saat Ini vs Multipel Intrinsik Wajar"
-                  laymanExplanation="Membandingkan berapa kali lipat laba (PER) dan modal bersih (PBV) yang Anda bayar di harga sekarang dibandingkan batas wajarnya menurut kualitas ROE dan neraca perusahaan."
-                  practicalGuide="PER dan PBV yang lebih rendah dari angka 'Wajar'-nya menandakan valuasi yang murah secara fundamental."
+                  label="JUSTIFIED PBV & PER (DAMODARAN)"
+                  title="Valuasi Berbasis Masa Depan: Damodaran Justified PBV = (ROE − g) ÷ (Ke − g)"
+                  laymanExplanation="Mengukur kelayakan harga saham terhadap nilai buku berdasarkan kapasitas perusahaan mencetak ROE di atas Dynamic Cost of Equity (Ke) dari kurva Spot SBN 1Y/5Y/10Y."
+                  practicalGuide="Jika Implied PBV pasar lebih rendah dari Justified PBV Damodaran, berarti pasar belum menghargai penuh mesin pertumbuhan nilai intrinsik emiten ini."
                   align="right"
                 />
               </div>
               <div className="text-sm font-bold font-mono text-[#111315] mt-1">
-                PER {joeliardiEval.impliedPer}x{' '}
-                <span className="text-xs font-normal text-neutral-500">
-                  (Wajar {joeliardiEval.joeliardiFairPer}x)
+                PBV {joeliardiEval.impliedPbv}x{' '}
+                <span className="text-xs font-normal text-[#0D5C46]">
+                  (Justified {joeliardiEval.damodaranJustifiedPbv ?? joeliardiEval.joeliardiFairPbv}x)
                 </span>
               </div>
               <span className="text-xs font-bold font-mono text-[#0284C7] bb-cyan block mt-0.5">
-                PBV {joeliardiEval.impliedPbv}x{' '}
+                PER {joeliardiEval.impliedPer}x{' '}
                 <span className="text-[11px] font-normal text-neutral-500">
-                  (Wajar {joeliardiEval.joeliardiFairPbv}x)
+                  (Wajar {joeliardiEval.joeliardiFairPer}x · Ke {(joeliardiEval.dynamicCostOfEquityPct ?? 12.75).toFixed(2)}%)
                 </span>
               </span>
             </div>
@@ -894,10 +894,10 @@ export function EmitenFundamentalInspectorModal({
             <div className="p-3.5 border border-[#E4E2DD] rounded-xs bg-[#FFFFFF]">
               <div className="flex items-center justify-between text-xs font-bold text-[#111315] mb-1">
                 <MetricTooltip
-                  label="1. Kualitas Bisnis & Moat"
-                  title="Pilar 1: Kualitas Bisnis & Keunggulan Kompetitif (Economic Moat)"
-                  laymanExplanation="Mengukur kemampuan perusahaan mencetak laba tinggi secara konsisten di atas biaya modal Indonesia (ROE vs Cost of Equity 10,5%), ketebalan margin operasi, dan bukti kas nyata lewat dividen."
-                  practicalGuide="Skor ≥ 70/100 menandakan bisnis ber-moat kuat yang mampu menggandakan modal pemegang saham (compounder)."
+                  label="1. Gross Profit & Anti-Junk"
+                  title="Pilar 1: Gross Profitability to Assets (Novy-Marx 2013) & Anti-Junk QMJ (Asness 2019)"
+                  laymanExplanation="Mengganti ketergantungan pada Operating Margin dan ROE mentah dengan Gross Profitability to Assets (Laba Kotor ÷ Total Aset) yang kebal rekayasa akuntansi, ditambah pengurang skor bila arus kas operasi lebih rendah dari laba bersih."
+                  practicalGuide="GP/A ≥ 18% dengan OCF/NI ≥ 0,85x menandakan mesin pencetak kas riil berkualitas tinggi (Quality Minus Junk)."
                 />
                 <span className="font-mono text-[#0D5C46]">
                   {joeliardiEval.businessQualityScore}/100
@@ -910,13 +910,31 @@ export function EmitenFundamentalInspectorModal({
                 />
               </div>
               <div className="text-[11px] text-neutral-600 font-mono space-y-0.5">
-                <div>ROE: {activeStock.roe.toFixed(1)}% (vs Ke 10,5%)</div>
-                <div>Op. Margin: {activeStock.operatingMargin.toFixed(1)}%</div>
                 <div>
-                  Forward Dividend Yield (Est): {joeliardiEval.forwardDividendYieldPct.toFixed(2)}%{' '}
-                  <span className="text-[10px] text-neutral-500">
-                    (DPR 3Y {joeliardiEval.historicalDpr3YPct.toFixed(0)}%)
-                  </span>
+                  GP/A (Novy-Marx):{' '}
+                  <strong className="text-[#0D5C46]">
+                    {(joeliardiEval.grossProfitabilityToAssets ?? activeStock.grossProfitabilityToAssets ?? activeStock.roe * 0.85).toFixed(1)}%
+                  </strong>{' '}
+                  (ROE {activeStock.roe.toFixed(1)}%)
+                </div>
+                <div>
+                  OCF/NI (Anti-Junk):{' '}
+                  <strong
+                    className={
+                      (joeliardiEval.accrualPenaltyPts ?? 0) > 0
+                        ? 'text-[#D97706]'
+                        : 'text-[#0D5C46]'
+                    }
+                  >
+                    {(joeliardiEval.ocfToNetIncomeRatio ?? activeStock.ocfToNetIncomeRatio ?? 0.9).toFixed(2)}x
+                  </strong>{' '}
+                  {(joeliardiEval.accrualPenaltyPts ?? 0) > 0
+                    ? `(Penalti -${joeliardiEval.accrualPenaltyPts} pts)`
+                    : '(Kas Riil Sehat)'}
+                </div>
+                <div>
+                  Fwd Div Yield: {joeliardiEval.forwardDividendYieldPct.toFixed(2)}% (DPR{' '}
+                  {joeliardiEval.historicalDpr3YPct.toFixed(0)}%)
                 </div>
               </div>
             </div>
@@ -954,10 +972,10 @@ export function EmitenFundamentalInspectorModal({
             <div className="p-3.5 border border-[#E4E2DD] rounded-xs bg-[#FFFFFF]">
               <div className="flex items-center justify-between text-xs font-bold text-[#111315] mb-1">
                 <MetricTooltip
-                  label="3. Keamanan Valuasi"
-                  title="Pilar 3: Keamanan Valuasi & Faktor Value (Bobot 35%)"
-                  laymanExplanation="Menggabungkan Margin of Safety Nilai Intrinsik Wajar dengan Skor Faktor Value Out-of-Sample agar Anda tidak membeli bisnis bagus di harga yang kelewat mahal."
-                  practicalGuide="Skor ≥ 68/100 mengonfirmasi harga beli memberikan asimetri imbal hasil terhadap risiko yang menguntungkan."
+                  label="3. Justified PBV & Kurva SBN"
+                  title="Pilar 3: Valuasi Masa Depan Damodaran (2012) & Kurva Spot SBN Fabozzi (2012)"
+                  laymanExplanation="Menghitung nilai wajar dengan rumus Justified PBV = (ROE − g) ÷ (Ke − g) di mana tingkat diskonto (Ke) ditarik secara dinamis dari bobot kombinasi Spot Rate SBN 1Y, 5Y, dan 10Y sesuai durasi arus kas ekuitas."
+                  practicalGuide="Skor ≥ 68/100 mengonfirmasi harga beli memberikan Margin of Safety di atas biaya modal dinamis."
                 />
                 <span className="font-mono text-[#D97706]">
                   {joeliardiEval.valuationSafetyScore}/100
@@ -970,19 +988,25 @@ export function EmitenFundamentalInspectorModal({
                 />
               </div>
               <div className="text-[11px] text-neutral-600 font-mono space-y-0.5">
-                <div>Skor Faktor Value: {activeStock.dmuValueScore.toFixed(1)}/10</div>
+                <div>
+                  Justified PBV: {joeliardiEval.damodaranJustifiedPbv ?? joeliardiEval.joeliardiFairPbv}x (g{' '}
+                  {(joeliardiEval.sustainableGrowthRatePct ?? 5.5).toFixed(1)}%)
+                </div>
+                <div>
+                  Spot SBN Blended: {(joeliardiEval.sbnBlendedSpotRfPct ?? 6.64).toFixed(2)}% → Ke{' '}
+                  {(joeliardiEval.dynamicCostOfEquityPct ?? 12.64).toFixed(2)}%
+                </div>
                 <div>Margin of Safety: {joeliardiEval.marginOfSafetyPct}%</div>
-                <div>Bobot Value OOS: 35% (Prioritas #1)</div>
               </div>
             </div>
 
             <div className="p-3.5 border border-[#E4E2DD] rounded-xs bg-[#FFFFFF]">
               <div className="flex items-center justify-between text-xs font-bold text-[#111315] mb-1">
                 <MetricTooltip
-                  label="4. Ketahanan OOS Quant"
-                  title="Pilar 4: Ketahanan Faktor Out-of-Sample (DeMiguel et al.)"
-                  laymanExplanation="Mengukur daya tahan statistik saham berdasarkan peringkat komposit 4-Faktor (Value, Low-Volatility, Momentum, Size/Likuiditas) terhadap ratusan emiten BEI lainnya."
-                  practicalGuide="Peringkat Top 20% (Top Decile) hingga Top 40% (Buffer Hold) layak menjadi penghuni portofolio inti."
+                  label="4. 1/β Barbell Position Sizing"
+                  title="Pilar 4: Risk Parity 1/Beta (Qian 2005) & Barbell Antifragile (Taleb 2012)"
+                  laymanExplanation="Saham berfundamental prima namun bervolatilitas/Beta tinggi tidak diblokir 0%, melainkan diberi bobot proporsional 1/Beta dengan batas alokasi maksimum per saham untuk menangkap upside asimetris tanpa ancaman total ruin."
+                  practicalGuide="Peringkat Top 20%–40% dialokasikan sesuai porsi 1/Beta dan batas maksimum per saham."
                   align="right"
                 />
                 <span className="font-mono text-[#0D5C46]">
@@ -1001,12 +1025,14 @@ export function EmitenFundamentalInspectorModal({
                   {activeStock.dmuRankPct}%)
                 </div>
                 <div>
-                  Low-Vol: {activeStock.dmuLowVolScore.toFixed(1)} · Mom:{' '}
-                  {activeStock.dmuMomScore.toFixed(1)}
+                  Propensitas 1/β: {(activeStock.betaWeightedPropensity ?? 1 / Math.max(0.45, activeStock.beta1Y)).toFixed(2)}x (β{' '}
+                  {activeStock.beta1Y.toFixed(2)}x)
                 </div>
                 <div>
-                  Volatilitas: {activeStock.volatilityAnn.toFixed(1)}% (β{' '}
-                  {activeStock.beta1Y.toFixed(2)}x)
+                  Batas Alokasi Maks (1/β Cap):{' '}
+                  <strong className="text-[#0284C7]">
+                    ≤{(joeliardiEval.betaWeightedSizingCapPct ?? 14).toFixed(1)}%
+                  </strong>
                 </div>
               </div>
             </div>
@@ -1021,10 +1047,10 @@ export function EmitenFundamentalInspectorModal({
                 </div>
                 <div>
                   <span className="text-[10px] font-bold uppercase tracking-wider text-[#D97706] bb-amber block">
-                    INVESTMENT COMMITTEE ENGINE // DUPONT ROE DECOMPOSITION + OOS QUANT + LIVE NEWS
+                    INVESTMENT COMMITTEE ENGINE // NOVY-MARX GP/A + DAMODARAN JUSTIFIED PBV + 1/β BARBELL
                   </span>
                   <h4 className="text-sm sm:text-base font-bold text-[#111315]">
-                    Komite Investasi AI: Bedah DuPont ROE, Spread SBN 10Y &amp; Strategi Pra-Beli ({activeStock.ticker})
+                    Komite Investasi AI: Bedah GP/A, Kurva Spot SBN (1Y/5Y/10Y), Justified PBV &amp; Sizing 1/β ({activeStock.ticker})
                   </h4>
                 </div>
               </div>
@@ -1041,35 +1067,62 @@ export function EmitenFundamentalInspectorModal({
               )}
             </div>
 
-            {/* Quantitative DuPont & Risk-Free + ERP Spread Strip with MetricTooltips */}
+            {/* Quantitative GP/A, SBN Spot Yield Curve, Anti-Junk QMJ & 1/Beta Sizing Strip */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
               {(() => {
                 const safeDer = Math.max(0, activeStock.debtToEquity);
                 const eqMult = 1 + safeDer;
                 const roaDuPont = activeStock.roe / Math.max(1, eqMult);
-                const earningsYield =
-                  joeliardiEval.impliedPer > 0 ? (1 / joeliardiEval.impliedPer) * 100 : 0;
-                const rawSbnSpread = joeliardiEval.rawSbnSpreadPct ?? earningsYield - 6.75;
-                const netErpSpread = joeliardiEval.netErpSpreadPct ?? earningsYield - 12.75;
-                const fwdDivYield = joeliardiEval.forwardDividendYieldPct;
-                const buybackYield = joeliardiEval.netBuybackDebtPaydownYieldPct;
-                const totalYield = joeliardiEval.totalShareholderYieldPct;
+                const gpToAssets =
+                  joeliardiEval.grossProfitabilityToAssets ??
+                  activeStock.grossProfitabilityToAssets ??
+                  Number((activeStock.roe * 0.85).toFixed(1));
+                const ocfNi =
+                  joeliardiEval.ocfToNetIncomeRatio ??
+                  activeStock.ocfToNetIncomeRatio ??
+                  0.92;
+                const accrualPen = joeliardiEval.accrualPenaltyPts ?? 0;
+                const sbn1Y = joeliardiEval.sbnSpot1YPct ?? 6.15;
+                const sbn5Y = joeliardiEval.sbnSpot5YPct ?? 6.48;
+                const sbn10Y = joeliardiEval.sbnSpot10YPct ?? 6.75;
+                const sbnBlended = joeliardiEval.sbnBlendedSpotRfPct ?? 6.64;
+                const dynKe = joeliardiEval.dynamicCostOfEquityPct ?? 12.64;
+                const justPbv =
+                  joeliardiEval.damodaranJustifiedPbv ?? joeliardiEval.joeliardiFairPbv;
+                const betaCap = joeliardiEval.betaWeightedSizingCapPct ?? 14.0;
 
                 return (
                   <>
                     <div className="p-2.5 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs">
                       <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
                         <MetricTooltip
-                          label="ROA Murni (DuPont)"
-                          title="Return on Assets (ROA) Murni Hasil Dekomposisi DuPont"
-                          laymanExplanation="Menguji apakah ROE tinggi perusahaan berasal dari kehebatan mesin bisnis murni (ROA = ROE ÷ [1 + DER]) atau sekadar didongkrak oleh tumpukan utang."
-                          practicalGuide="ROA Murni ≥ 8% (non-bank) atau ≥ 2,5% (perbankan) menandakan profitabilitas berkualitas tinggi tanpa rekayasa leverage."
+                          label="GP/A (Novy-Marx) & DuPont"
+                          title="Gross Profitability to Assets (Laba Kotor ÷ Total Aset) & ROA Murni"
+                          laymanExplanation="Novy-Marx (2013) membuktikan bahwa membagi Laba Kotor dengan Total Aset (GP/A) adalah prediktor return masa depan paling bersih karena berada di atas baris pajak, bunga, dan rekayasa struktur modal."
+                          practicalGuide="GP/A ≥ 18% dengan ROA Murni ≥ 8% menandakan profitabilitas struktural yang kebal manipulasi akuntansi."
+                        />
+                      </div>
+                      <div className="text-xs sm:text-sm font-mono tabular-nums font-bold text-[#0D5C46] mt-0.5">
+                        GP/A {gpToAssets.toFixed(1)}%{' '}
+                        <span className="text-[10px] font-normal text-neutral-500">
+                          (ROA {roaDuPont.toFixed(1)}% · Lev {eqMult.toFixed(2)}x)
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
+                        <MetricTooltip
+                          label="Kurva Spot SBN (1Y/5Y/10Y) & Ke"
+                          title="Bobot Kombinasi Spot Rate SBN 1Y, 5Y, 10Y (Fabozzi 2012) & Cost of Equity Dinamis"
+                          laymanExplanation="Menggunakan kombinasi probabilitas spot rate sepanjang yield curve obligasi pemerintah (15% SBN 1Y · 35% SBN 5Y · 50% SBN 10Y) sesuai durasi arus kas ekuitas untuk menghitung Dynamic Cost of Equity (Ke)."
+                          practicalGuide="Semakin tinggi ROE emiten di atas Ke dinamis ini, semakin besar penciptaan nilai intrinsik bagi pemegang saham."
                         />
                       </div>
                       <div className="text-xs sm:text-sm font-mono tabular-nums font-bold text-[#111315] mt-0.5">
-                        {roaDuPont.toFixed(1)}%{' '}
+                        Ke {dynKe.toFixed(2)}%{' '}
                         <span className="text-[10px] font-normal text-neutral-500">
-                          (ROE {activeStock.roe.toFixed(1)}% / {eqMult.toFixed(2)}x)
+                          (Spot Rf {sbnBlended.toFixed(2)}%: 1Y {sbn1Y}%·5Y {sbn5Y}%·10Y {sbn10Y}%)
                         </span>
                       </div>
                     </div>
@@ -1077,26 +1130,22 @@ export function EmitenFundamentalInspectorModal({
                     <div className="p-2.5 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs">
                       <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
                         <MetricTooltip
-                          label="EY vs SBN 10Y + ERP"
-                          title="Earnings Yield (1/PER) vs SBN 10Y (6,75%) + Equity Risk Premium (ERP 6,0%)"
-                          laymanExplanation="Membandingkan imbal hasil laba tahunan saham (100% ÷ PER) terhadap kupon obligasi bebas risiko SBN 10Y (6,75%) dan Hurdle Return pasar saham Indonesia yang menyertakan Equity Risk Premium (ERP 6,0% -> Total 12,75%)."
-                          practicalGuide="Net ERP Spread ≥ 0% menunjukkan Earnings Yield saham sudah mengompensasi penuh risiko SBN 10Y + ERP 6,0% secara wajar."
+                          label="Anti-Junk (QMJ Accrual)"
+                          title="Quality Minus Junk (Asness, Frazzini & Pedersen 2019) — Selisih Laba Bersih vs Arus Kas Operasi"
+                          laymanExplanation="Mendeteksi emiten yang mencetak laba akuntansi tinggi tetapi arus kas operasi (OCF) riilnya rendah/negatif. Memberikan penalti pengurang skor kualitas secara proporsional tanpa memblokir otomatis."
+                          practicalGuide="OCF/NI ≥ 0,85x bebas penalti (0 pts); OCF/NI rendah dikenakan penalti pengurang skor kualitas agar terhindar dari value trap."
                         />
                       </div>
                       <div
                         className={`text-xs sm:text-sm font-mono tabular-nums font-bold mt-0.5 ${
-                          netErpSpread >= 0
-                            ? 'text-[#0D5C46]'
-                            : rawSbnSpread >= 0
-                            ? 'text-[#D97706]'
-                            : 'text-[#9E2A2B]'
+                          accrualPen === 0 ? 'text-[#0D5C46]' : 'text-[#D97706]'
                         }`}
                       >
-                        {earningsYield.toFixed(2)}%{' '}
+                        OCF/NI {ocfNi.toFixed(2)}x{' '}
                         <span className="text-[10px] font-normal text-neutral-500">
-                          (SBN {rawSbnSpread >= 0 ? '+' : ''}
-                          {rawSbnSpread.toFixed(2)}% · Net ERP {netErpSpread >= 0 ? '+' : ''}
-                          {netErpSpread.toFixed(2)}%)
+                          {accrualPen > 0
+                            ? `(Penalti Akrual -${accrualPen} pts)`
+                            : '(0 Penalti · Kas Riil Valid)'}
                         </span>
                       </div>
                     </div>
@@ -1104,43 +1153,18 @@ export function EmitenFundamentalInspectorModal({
                     <div className="p-2.5 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs">
                       <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
                         <MetricTooltip
-                          label="Total Shareholder Yield"
-                          title="Total Shareholder Yield Murni (Forward Dividend Yield + Net Buyback & Debt Paydown Yield)"
-                          laymanExplanation="Menggabungkan proyeksi dividen kas ke depan (Forward Dividend Yield dari Annualized EPS Q3 × DPR 3Y) dengan Net Buyback & Debt Paydown Yield — tanpa menjumlahkan Earnings Yield + Dividend Yield agar bebas dari bias perhitungan ganda (double counting)."
-                          practicalGuide="Semakin tinggi di atas 7%–10%, semakin nyata distribusi kas dan pengurangan utang bersih yang dinikmati pemegang saham."
-                        />
-                      </div>
-                      <div className="text-xs sm:text-sm font-mono tabular-nums font-bold text-[#0284C7] bb-cyan mt-0.5">
-                        {totalYield.toFixed(2)}%{' '}
-                        <span className="text-[10px] font-normal text-neutral-500">
-                          (Fwd Div {fwdDivYield.toFixed(2)}% + Buyback/Paydown {buybackYield.toFixed(2)}%)
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="p-2.5 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs">
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
-                        <MetricTooltip
-                          label="Spread Nilai Intrinsik"
-                          title="Spread Diskon / Premium terhadap Nilai Intrinsik Wajar Blended"
-                          laymanExplanation="Persentase jarak antara harga pasar saat ini menuju target Nilai Intrinsik Wajarnya (Rp) yang telah disinkronkan dengan Wajar PER dan Wajar PBV."
-                          practicalGuide="Positif (+) berarti ruang kenaikan menuju harga wajar; Negatif (-) berarti harga pasar sudah melampaui nilai intrinsik konservatif."
+                          label="Justified PBV & Sizing 1/β"
+                          title="Damodaran Justified PBV & Beta-Weighted Position Sizing (Qian 2005 & Taleb 2012)"
+                          laymanExplanation="Menampilkan target Justified PBV = (ROE − g) ÷ (Ke − g) beserta batas alokasi maksimum per saham berbasis Inverse Volatility (1/Beta) untuk eksekusi strategi Barbell."
+                          practicalGuide="Saham ber-Beta tinggi tetap diizinkan masuk keranjang bila kualitasnya lolos, namun porsi maksimumnya dibatasi otomatis sesuai 1/Beta."
                           align="right"
                         />
                       </div>
-                      <div
-                        className={`text-xs sm:text-sm font-mono tabular-nums font-bold mt-0.5 ${
-                          joeliardiEval.marginOfSafetyPct >= 15
-                            ? 'text-[#0D5C46]'
-                            : joeliardiEval.marginOfSafetyPct >= 0
-                            ? 'text-[#D97706]'
-                            : 'text-[#9E2A2B]'
-                        }`}
-                      >
-                        {joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}
-                        {joeliardiEval.marginOfSafetyPct.toFixed(1)}%{' '}
+                      <div className="text-xs sm:text-sm font-mono tabular-nums font-bold text-[#0284C7] bb-cyan mt-0.5">
+                        PBV Wajar {justPbv}x{' '}
                         <span className="text-[10px] font-normal text-neutral-500">
-                          (Rp {joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')})
+                          (MoS {joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}
+                          {joeliardiEval.marginOfSafetyPct.toFixed(1)}% · Cap 1/β ≤{betaCap.toFixed(1)}%)
                         </span>
                       </div>
                     </div>

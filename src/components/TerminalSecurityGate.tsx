@@ -49,10 +49,32 @@ export function TerminalSecurityGate({
   const [showPassphrase, setShowPassphrase] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const mountedAtRef = React.useRef<number>(Date.now());
+  const hasHumanInteractedRef = React.useRef<boolean>(false);
+
+  React.useEffect(() => {
+    mountedAtRef.current = Date.now();
+    hasHumanInteractedRef.current = false;
+    setPassphrase('');
+  }, []);
+
+  const markHumanInteraction = (e: React.SyntheticEvent) => {
+    if (e.nativeEvent && e.nativeEvent.isTrusted !== false) {
+      hasHumanInteractedRef.current = true;
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
+
+    // Block programmatic / browser password-manager auto-submit on page refresh
+    const elapsedSinceMount = Date.now() - mountedAtRef.current;
+    if (!hasHumanInteractedRef.current || elapsedSinceMount < 250) {
+      setPassphrase('');
+      setErrorMsg('Silakan ketik sandi terminal secara manual lalu klik tombol Verifikasi.');
+      return;
+    }
 
     const trimmed = passphrase.trim();
     if (!trimmed) {
@@ -93,6 +115,8 @@ export function TerminalSecurityGate({
 
   return (
     <div
+      onKeyDown={markHumanInteraction}
+      onPointerDown={markHumanInteraction}
       className={
         themeMode === 'dark'
           ? 'theme-dark min-h-screen flex items-center justify-center bg-[#090C10] text-[#E5E7EB] px-4 py-8'
@@ -150,7 +174,12 @@ export function TerminalSecurityGate({
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form
+          onSubmit={handleSubmit}
+          autoComplete="off"
+          data-form-type="other"
+          className="space-y-4"
+        >
           <div>
             <label className="block text-xs font-bold text-[#111315] mb-1.5">
               Sandi Terminal
@@ -159,10 +188,20 @@ export function TerminalSecurityGate({
               <KeyRound className="w-4 h-4 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type={showPassphrase ? 'text' : 'password'}
+                name="nostradamus_vault_pin_gate"
                 value={passphrase}
-                onChange={(e) => setPassphrase(e.target.value)}
+                onKeyDown={markHumanInteraction}
+                onChange={(e) => {
+                  if (e.nativeEvent && e.nativeEvent.isTrusted !== false) {
+                    hasHumanInteractedRef.current = true;
+                  }
+                  setPassphrase(e.target.value);
+                }}
                 autoFocus
-                autoComplete="current-password"
+                autoComplete="new-password"
+                data-lpignore="true"
+                data-1p-ignore="true"
+                data-form-type="other"
                 placeholder="Masukkan sandi untuk membuka kunci..."
                 className="w-full pl-9 pr-10 py-2 text-xs font-semibold bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs focus:outline-none focus:border-[#F59E0B]"
               />
@@ -191,6 +230,7 @@ export function TerminalSecurityGate({
           <button
             type="submit"
             disabled={isProcessing}
+            onPointerDown={markHumanInteraction}
             className="bb-btn-primary w-full py-2.5 px-4 bg-[#D97706] hover:bg-[#B45309] text-white text-xs font-bold rounded-xs transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
           >
             <Lock className="w-3.5 h-3.5" />

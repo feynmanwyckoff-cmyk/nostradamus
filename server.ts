@@ -102,15 +102,26 @@ async function fetchSingleChartDirect(
         }
       }
 
+      const dailyPrevClose =
+        closes.length >= 2
+          ? closes[closes.length - 2] !== lastPrice
+            ? closes[closes.length - 2]
+            : closes.length >= 3
+            ? closes[closes.length - 3]
+            : closes[closes.length - 2]
+          : 0;
+
       const prevClose =
         typeof meta.previousClose === 'number' &&
         Number.isFinite(meta.previousClose) &&
         meta.previousClose > 0 &&
         meta.previousClose !== lastPrice
           ? meta.previousClose
-          : closes.length >= 2
-          ? closes[closes.length - 2]
-          : meta.chartPreviousClose || lastPrice;
+          : dailyPrevClose > 0
+          ? dailyPrevClose
+          : range === '1d' && typeof meta.chartPreviousClose === 'number' && meta.chartPreviousClose > 0
+          ? meta.chartPreviousClose
+          : lastPrice;
 
       const officialChangePct =
         typeof meta.regularMarketChangePercent === 'number' &&
@@ -212,7 +223,7 @@ async function fetchSparkBatchChunk(
 
           if (closes.length === 0) {
             const basePrev =
-              entry.previousClose || entry.chartPreviousClose || lastPrice;
+              entry.previousClose || (range === '1d' ? entry.chartPreviousClose : lastPrice) || lastPrice;
             closes.push(Number(Number(basePrev).toFixed(2)), lastPrice);
           } else if (rawTrailingWasNull && closes[closes.length - 1] !== lastPrice) {
             closes.push(lastPrice);
@@ -220,15 +231,26 @@ async function fetchSparkBatchChunk(
             closes[closes.length - 1] = lastPrice;
           }
 
+          const dailyPrevClose =
+            closes.length >= 2
+              ? closes[closes.length - 2] !== lastPrice
+                ? closes[closes.length - 2]
+                : closes.length >= 3
+                ? closes[closes.length - 3]
+                : closes[closes.length - 2]
+              : 0;
+
           const prevClose =
             typeof entry.previousClose === 'number' &&
             Number.isFinite(entry.previousClose) &&
             entry.previousClose > 0 &&
             entry.previousClose !== lastPrice
               ? entry.previousClose
-              : closes.length >= 2
-              ? closes[closes.length - 2]
-              : entry.chartPreviousClose || lastPrice;
+              : dailyPrevClose > 0
+              ? dailyPrevClose
+              : range === '1d' && typeof entry.chartPreviousClose === 'number' && entry.chartPreviousClose > 0
+              ? entry.chartPreviousClose
+              : lastPrice;
 
           const officialChangePct =
             typeof entry.regularMarketChangePercent === 'number' &&
@@ -538,13 +560,30 @@ async function startServer() {
         chunks.push(symbols.slice(i, i + CHUNK_SIZE));
       }
 
-      const chunkResults = await Promise.all(
-        chunks.map((chunk, idx) => fetchSparkBatchChunk(chunk, range, idx))
-      );
+      const [chunkResults, jkseExactQuote] = await Promise.all([
+        Promise.all(chunks.map((chunk, idx) => fetchSparkBatchChunk(chunk, range, idx))),
+        symbols.includes('^JKSE') ? fetchSingleChartDirect('^JKSE', '5d', 0) : Promise.resolve(null)
+      ]);
 
       const combined: Record<string, SparkSeriesItem> = {};
       for (const map of chunkResults) {
         Object.assign(combined, map);
+      }
+
+      if (jkseExactQuote && jkseExactQuote.lastPrice > 0) {
+        const existingJkse = combined['^JKSE'];
+        if (existingJkse && existingJkse.closes.length >= 2) {
+          const updatedCloses = [...existingJkse.closes];
+          updatedCloses[updatedCloses.length - 1] = jkseExactQuote.lastPrice;
+          combined['^JKSE'] = {
+            ...existingJkse,
+            lastPrice: jkseExactQuote.lastPrice,
+            change1D: jkseExactQuote.change1D,
+            closes: updatedCloses
+          };
+        } else {
+          combined['^JKSE'] = jkseExactQuote;
+        }
       }
 
       res.json({

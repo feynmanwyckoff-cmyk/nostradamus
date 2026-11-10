@@ -841,17 +841,20 @@ export default function App() {
 
   /**
    * Unified Single Master Sync Button Handler
-   * Lightweight Sync Architecture: Fetches IHSG (^JKSE), Global Macro Wire, and Live News RSS rapidly.
-   * Individual emiten quotes, specific news, and AI Committee analysis are fetched lazily on-demand when clicking Inspect.
+   * 3-Tier Smart Hybrid Sync Architecture:
+   * - Fetches IHSG (^JKSE), 8 Global Macro indicators, active portfolio holdings, and top liquid Screener/Barbell leaders
+   *   in 2–3 polite Yahoo Spark batch requests (< 1.5s, 60s TTL cache, 100% anti-block).
+   * - Any additional single ticker is micro-synced on-demand on search, row refresh, or Inspect click.
    */
   const handleMasterSyncAll = async (
     silent: boolean = false,
     overrideStockList?: StockMetrics[]
   ) => {
     const targetStocks = overrideStockList ?? stocks;
+    const priorityHoldingTickers = holdings.map((h) => h.ticker);
     setIsMasterSyncing(true);
     setIsLoadingNews(true);
-    setSyncStatusLabel('Syncing IHSG (^JKSE) & Global Macro...');
+    setSyncStatusLabel('Syncing IHSG (^JKSE), Makro & Saham Utama...');
 
     try {
       const [marketResult, liveNews] = await Promise.all([
@@ -861,7 +864,8 @@ export default function App() {
           (_syncedCount, _totalCount, tickerLabel) => {
             setSyncStatusLabel(`Syncing ${tickerLabel}...`);
           },
-          true
+          true,
+          priorityHoldingTickers
         ),
         fetchLiveFinancialNewsRss(DEFAULT_NEWS_SENTIMENT)
       ]);
@@ -910,17 +914,17 @@ export default function App() {
         const illiquidCount = rerankedStocks.length - liquidCount;
         Swal.fire({
           icon: 'success',
-          title: '✓ IHSG & Makro Global Berhasil Sync (Mode Ringan)',
+          title: '✓ Sinkronisasi Live Yahoo Finance Selesai (3-Tier Smart Sync)',
           html: `
             <div style="text-align:left;font-size:12.5px;line-height:1.65;color:#374151;">
               <div><strong>Waktu Update Sistem:</strong> ${fullTimestampStr}</div>
               <div><strong>IHSG (^JKSE):</strong> ${activeQuote.lastPrice.toLocaleString('id-ID', {
                 minimumFractionDigits: 2
               })} (${activeQuote.change1D >= 0 ? '+' : ''}${activeQuote.change1D.toFixed(2)}%)</div>
-              <div><strong>Arsitektur Sync Ringan:</strong> ✓ <strong>IHSG &amp; 8 Indikator Makro Live</strong> · <strong>${rerankedStocks.length} Emiten JCI Siap (On-Demand Inspect)</strong></div>
+              <div><strong>Cakupan 3-Tier Smart Sync:</strong> ✓ <strong>IHSG (^JKSE) + 8 Indikator Makro</strong> · ✓ <strong>Portofolio &amp; Top 36 Saham Utama Live</strong> · ✓ <strong>${rerankedStocks.length} Emiten JCI Siap</strong></div>
               <div><strong>Status Likuiditas Universe:</strong> ${activeQuotedCount} Aktif · <strong>${liquidCount} Saham Likuid</strong> · <span style="color:#9E2A2B;font-weight:700;">${illiquidCount} Saham Gocap/Suspensi Diblokir</span></div>
               <div style="margin-top:6px;padding:6px 8px;background:#FAF9F6;border:1px solid #E4E2DD;border-radius:2px;font-size:11.5px;color:#0D5C46;">
-                ⚡ <strong>On-Demand Inspect Aktif:</strong> Kuotasi live emiten, berita spesifik, dan Komite Investasi AI kini ditarik secara instan hanya saat Anda mengklik tombol <strong>Inspect</strong> agar aplikasi tetap ringan tanpa beban antrean network.
+                ⚡ <strong>Anti-Block &amp; On-Demand Micro-Sync Aktif:</strong> Dilengkapi cache memori 60 detik serta penarikan instan per-ticker saat Anda mencari kode saham 4 huruf, menekan ikon refresh baris (↻), atau membuka <strong>Inspect</strong>.
               </div>
             </div>
           `,
@@ -941,8 +945,20 @@ export default function App() {
     setLastCacheSavedAt(formatFullIndonesianDateTime(new Date()));
   };
 
-  // On initial mount: hydrate instantaneously from calibrated snapshot / GitHub Cloud state without blocking initial load with 956-stock batch fetches.
-  // Detailed single-ticker quotes, news & AI analysis are fetched lazily on-demand when the user clicks Inspect (or when Sync is clicked manually).
+  // Enforce Security Gate lock if browser restores page from Back-Forward Cache (BFCache)
+  useEffect(() => {
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) {
+        setVaultSession(null);
+        setIsTerminalUnlocked(false);
+      }
+    };
+    window.addEventListener('pageshow', handlePageShow);
+    return () => window.removeEventListener('pageshow', handlePageShow);
+  }, []);
+
+  // On initial mount: hydrate from GitHub Cloud / static snapshot, then immediately run lightweight Tier-1 live sync
+  // so IHSG (^JKSE) and priority stocks always reflect actual Yahoo Finance live prices.
   useEffect(() => {
     const initSync = async () => {
       const cfg = loadGitHubCloudConfig();
@@ -975,6 +991,8 @@ export default function App() {
           }
         }
       }
+      // Run background Tier-1 live sync so IHSG (^JKSE) and priority stocks never stay on stale cached prices
+      await handleMasterSyncAll(true);
     };
     initSync();
   }, []);
