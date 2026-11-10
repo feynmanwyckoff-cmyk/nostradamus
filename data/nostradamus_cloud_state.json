@@ -1,6 +1,6 @@
 {
   "schemaVersion": "3.0-DEMIGUEL-MF24",
-  "updatedAt": "2026-11-10T08:50:11.052Z",
+  "updatedAt": "2026-11-10T09:02:21.028Z",
   "strategyName": "Vol-Managed Multifactor + 40% Buffer",
   "rebalanceBufferPct": 40,
   "thresholdAnnVol": 18,
@@ -72,6 +72,44 @@
     }
   ],
   "stocks": [
+    {
+      "ticker": "SINI",
+      "idxTicker": "IDX:SINI",
+      "yfTicker": "SINI.JK",
+      "name": "Surya SINI Indonesia Tbk",
+      "sector": "Industrials",
+      "lastPrice": 7675,
+      "change1D": 0.33,
+      "return30D": -48.83,
+      "beta1Y": 1.01,
+      "volatilityAnn": 65,
+      "roe": 6,
+      "debtToEquity": 1.17,
+      "operatingMargin": 7.6,
+      "isLiveFetched": true,
+      "isLiquid": true,
+      "dividendYieldPct": 0,
+      "lastSyncedAt": "16.01.33",
+      "dmuMomScore": 1,
+      "dmuLowVolScore": 3,
+      "dmuValueScore": 3.3,
+      "dmuSizeScore": 4.1,
+      "dmuCompositeScore": 1.47,
+      "grossProfitabilityToAssets": 7.2,
+      "ocfToNetIncomeRatio": 0.83,
+      "accrualRatioToAssets": 0.51,
+      "accrualPenaltyScore": 0.11,
+      "isHscFlagged": true,
+      "hscSource": "AUTO_QUANT",
+      "hscReason": "Auto HSC: Volatilitas ekstrem (>40%) non-institusional ber-Value rendah",
+      "betaWeightedPropensity": 0.1,
+      "dmuRankPct": 88,
+      "dmuZone": "ROTATE_OUT",
+      "qmjScore": 1.4,
+      "babScore": 3,
+      "hrpPropensity": 0.1,
+      "role": "AVOID_JUNK"
+    },
     {
       "ticker": "SSMS",
       "idxTicker": "IDX:SSMS",
@@ -29473,44 +29511,6 @@
       "role": "NEUTRAL_HOLD"
     },
     {
-      "ticker": "SINI",
-      "idxTicker": "IDX:SINI",
-      "yfTicker": "SINI.JK",
-      "name": "Surya SINI Indonesia Tbk",
-      "sector": "Industrials",
-      "lastPrice": 7675,
-      "change1D": 0.33,
-      "return30D": -48.83,
-      "beta1Y": 1.01,
-      "volatilityAnn": 65,
-      "roe": 6,
-      "debtToEquity": 1.17,
-      "operatingMargin": 7.6,
-      "isLiveFetched": true,
-      "isLiquid": true,
-      "dividendYieldPct": 0,
-      "lastSyncedAt": "15.49.47",
-      "dmuMomScore": 1,
-      "dmuLowVolScore": 3,
-      "dmuValueScore": 3.3,
-      "dmuSizeScore": 4.1,
-      "dmuCompositeScore": 1.47,
-      "grossProfitabilityToAssets": 7.2,
-      "ocfToNetIncomeRatio": 0.83,
-      "accrualRatioToAssets": 0.51,
-      "accrualPenaltyScore": 0.11,
-      "isHscFlagged": true,
-      "hscSource": "AUTO_QUANT",
-      "hscReason": "Auto HSC: Volatilitas ekstrem (>40%) non-institusional ber-Value rendah",
-      "betaWeightedPropensity": 0.1,
-      "dmuRankPct": 88,
-      "dmuZone": "ROTATE_OUT",
-      "qmjScore": 1.4,
-      "babScore": 3,
-      "hrpPropensity": 0.1,
-      "role": "AVOID_JUNK"
-    },
-    {
       "ticker": "SKRN",
       "idxTicker": "IDX:SKRN",
       "yfTicker": "SKRN.JK",
@@ -36264,70 +36264,64 @@
       "category": "FX_RATES",
       "value": 18080,
       "unit": "Rp",
-      "change1D": 0.42,
+      "change1D": 3.1,
       "ihsgImpact": "BEARISH",
-      "transmissionNote": "Tekanan depresiasi Rupiah memicu penyesuaian eksposur ekuitas ke cadangan kas.",
-      "isLiveFetched": true
+      "transmissionNote": "Tekanan depresiasi Rupiah memicu penyesuaian eksposur ekuitas ke cadangan kas."
     },
     {
       "id": "dxy",
       "symbol": "DX-Y.NYB",
       "label": "US Dollar Index (DXY)",
       "category": "FX_RATES",
-      "value": 101.86,
+      "value": 101.22,
       "unit": "pts",
-      "change1D": -0.43,
+      "change1D": -0.29,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Pelemahan indeks DXY memberi ruang stabilisasi bagi mata uang Asia.",
-      "isLiveFetched": true
+      "transmissionNote": "Pelemahan indeks DXY memberi ruang stabilisasi bagi mata uang Asia."
     },
     {
       "id": "us10y",
       "symbol": "^TNX",
       "label": "US 10Y Treasury Yield",
       "category": "FX_RATES",
-      "value": 4.84,
+      "value": 4.89,
       "unit": "%",
-      "change1D": -0.29,
+      "change1D": -1.17,
       "ihsgImpact": "BEARISH",
-      "transmissionNote": "Yield US 10Y di atas 4.5% menjaga cost of equity pasar berkembang tetap ketat.",
-      "isLiveFetched": true
+      "transmissionNote": "Yield US 10Y di atas 4.5% menjaga cost of equity pasar berkembang tetap ketat."
     },
     {
       "id": "vix",
       "symbol": "^VIX",
       "label": "CBOE VIX Volatility",
       "category": "GLOBAL_RISK",
-      "value": 23.18,
+      "value": 16.61,
       "unit": "pts",
-      "change1D": -9.59,
+      "change1D": -20.26,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Penurunan tajam VIX meredakan kepanikan ekor (tail-risk) di bursa global.",
-      "isLiveFetched": true
+      "transmissionNote": "Penurunan tajam VIX meredakan kepanikan ekor (tail-risk) di bursa global."
     },
     {
       "id": "sp500",
       "symbol": "^GSPC",
       "label": "S&P 500 Index",
       "category": "GLOBAL_RISK",
-      "value": 7376.86,
+      "value": 7688.62,
       "unit": "pts",
-      "change1D": 0.32,
+      "change1D": 1.58,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Reli ekuitas AS memberikan dukungan sentimen jangka pendek ke bursa regional.",
-      "isLiveFetched": true
+      "transmissionNote": "Reli ekuitas AS memberikan dukungan sentimen jangka pendek ke bursa regional."
     },
     {
       "id": "hsi",
       "symbol": "^HSI",
       "label": "Hang Seng Index",
       "category": "GLOBAL_RISK",
-      "value": 24448.95,
+      "value": 24779.33,
       "unit": "pts",
-      "change1D": -0.13,
+      "change1D": 3.59,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Penguatan bursa Asia Timur menopang permintaan komoditas ekspor Indonesia.",
-      "isLiveFetched": true
+      "transmissionNote": "Penguatan bursa Asia Timur menopang permintaan komoditas ekspor Indonesia."
     },
     {
       "id": "coal",
@@ -36338,32 +36332,29 @@
       "unit": "USD/t",
       "change1D": 1.25,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Menopang faktor Value & arus kas bebas emiten batubara (ITMG, PTBA, ADRO).",
-      "isLiveFetched": true
+      "transmissionNote": "Menopang faktor Value & arus kas bebas emiten batubara (ITMG, PTBA, ADRO)."
     },
     {
       "id": "gold",
       "symbol": "GC=F",
       "label": "Gold Spot (XAU)",
       "category": "COMMODITIES",
-      "value": 4133.7,
+      "value": 4136.5,
       "unit": "USD/oz",
-      "change1D": 1.44,
+      "change1D": 1.56,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Rekor harga emas menjadi lindung nilai & katalis emiten tambang emas/tembaga (AMMN, ANTM).",
-      "isLiveFetched": true
+      "transmissionNote": "Rekor harga emas menjadi lindung nilai & katalis emiten tambang emas/tembaga (AMMN, ANTM)."
     },
     {
       "id": "brent",
       "symbol": "BZ=F",
       "label": "Brent Crude Oil",
       "category": "COMMODITIES",
-      "value": 94.11,
+      "value": 94.19,
       "unit": "USD/bbl",
-      "change1D": -4.28,
+      "change1D": -0.45,
       "ihsgImpact": "NEUTRAL",
-      "transmissionNote": "Harga minyak tinggi menguntungkan MEDC/AKRA namun perlu dipantau terhadap inflasi.",
-      "isLiveFetched": true
+      "transmissionNote": "Harga minyak tinggi menguntungkan MEDC/AKRA namun perlu dipantau terhadap inflasi."
     },
     {
       "id": "nickel",
@@ -36374,8 +36365,7 @@
       "unit": "USD/t",
       "change1D": 0.95,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Mendukung margin emiten hilirisasi nikel (INCO, NCKL, ANTM).",
-      "isLiveFetched": true
+      "transmissionNote": "Mendukung margin emiten hilirisasi nikel (INCO, NCKL, ANTM)."
     },
     {
       "id": "cpo",
@@ -36386,8 +36376,7 @@
       "unit": "MYR/t",
       "change1D": 1.4,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Mandatori biodiesel B40 menopang harga jual rata-rata (ASP) emiten sawit (TAPG).",
-      "isLiveFetched": true
+      "transmissionNote": "Mandatori biodiesel B40 menopang harga jual rata-rata (ASP) emiten sawit (TAPG)."
     }
   ],
   "liveIhsgQuote": {
