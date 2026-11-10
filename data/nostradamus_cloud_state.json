@@ -1,11 +1,11 @@
 {
   "schemaVersion": "3.0-DEMIGUEL-MF24",
-  "updatedAt": "2026-11-10T12:27:10.839Z",
+  "updatedAt": "2026-11-10T12:28:04.625Z",
   "strategyName": "Vol-Managed Multifactor + 40% Buffer",
   "rebalanceBufferPct": 40,
   "thresholdAnnVol": 18,
-  "capitalIdr": 18850721,
-  "cashReserveIdr": 7573021,
+  "capitalIdr": 17781521,
+  "cashReserveIdr": 5,
   "holdings": [
     {
       "ticker": "BRIS",
@@ -36416,9 +36416,9 @@
     "version": 1,
     "saltBase64": "VnsorMcDCpdVWdhPJy1n1A==",
     "verifierHashBase64": "4n2Mmvj0WYbqgIZRTAlg7solExkFmaKEMwbBRhc0KNM=",
-    "ivBase64": "cJOBxSslEJ5o//RH",
-    "cipherTextBase64": "7jTRq0P/VrHrsHzjBh3Qx1AVV86X9NldPAi5ILhnDDxJk1ba1HU15soGK74/pYtCCYWaCPkGadqHJJPSttRcduPQPGyxYf/vAs0a2D8a1R6lTDLsBZve+y0kjocfvE/Aglq0i8RH2T+DhlojWXJpD2Szww7mM4Ci2FnD+abmGHomZuf73ikzcK5P2pOpTlQZrVbvASzNxJ4W7pTieFsgh2Da1aUzrsxWwRyBI20PRh+1jbxye3F0pSRuIP4zwkZXfirQG4W6+PVt+qYlJdEpR2a54RX2X+9smmPzktkGfUnocr5gmOg+c9Scqa83/Jo1F6uToGekTYNbMMUltowj+32kw2Xds3LyUPDe0qksL11xsTGoSqpbOcy196Ghu3bIxcu0wwMkUcV1F8ZG/OmLrUGqNMlcLKQRupUhLULAlFx31tXsNW9FqclkWEuFYMxj82BJGeNREzkgpQ9VXEu3c3gf5yRbrjjBMxHN7+TrtL67QIqKK7U6kuDDdXScqP/zBNcBYCGMOrQa0+DMSJn4QiddzQycKOTwXGT3A7qSDMtvmbI0l2fNBQiEuPNknFkD5doNSBmRrWjvQS/sEB2rOOObwQP9Mt2+DS3WRP3ScyodG5HiVUGdGiHkBBsXC/U09sFu8dz0mXhJuFOAYKLCqKX9gfl7gXzd6rOWFyQGKVSFz2F1zrPuBNT5kHIvBtXKZbEy5/u5D7dN4R4eD14uy7t+TMFRgGqyQqhoYCSd/Ef6MxPb2Wmqpt2BsC+EdBIbCtCm6hTQeK8PVv8KQHCnAeMEh3rzfErNtrEXQzz2QUNDFnSRDuhYZ1YT32TfmO8ptHZYT2RT2I7zxmm10VH5muKLjLi6mAhA1xO/JJs7DLFS9rEWmBSV9RSa/+3uacbxzJmVX678dpmbziovA5sn/ncgbiMbIFYHflAlwUynDJvZBmjb6gmahIhuw3iTCef5nKB9Oam0jRXl3byObBk4jO1njwfUMFOQwBmbw3b2TdjTNC58mFGl3mNksP2LB7ZSxxA/PMUKEq8sCRRen+7HnIwMK2tbfc9JR6OG5zB8rM2NDGpwJJF/QifDHXOAi++L26wDbpw/zfq5vXiCOTpk4IhDeL+WCJMlMQDkaQBbl6WxUMRkff8YhYXr5HE7guz4jxce9G4DgX4IbdU4vIjt/k+MZ2lANqEvXvXXwSX0eqVcyb1xGM9KFm5NLgR78vqy7Q4ZlU9W1m3mZQBRi8loFqFu9tSQv0WR/9BpcZNFW/SyFk6Igd7MiPUecMx+rzMh",
-    "updatedAt": "2026-11-10T12:25:08.271Z",
+    "ivBase64": "OiMiz1fZqAemzTLo",
+    "cipherTextBase64": "22AIIBETMZQJ1MdeLvYifEe+dDjFcTuAq/2BX5xWOOZKifoRjQ202MDAL2xyd3Gs+4WQnYhcuJywB6omm31wikQ2WQB8coYDya6d+EKbMlhgsD3cMKufqMSbFMZt+s0b7i8Bj+VRNtqhJ9lWpEVC1J3vS1FEgHCsxpWuhil4FBn9IeyaRD/U9Is0VuLxPo71fOJLtxJqdUz6K8gRIYo1hiX5KIoSVCqoOE8+OpZJ2EuJMQVzEvLeqcWtbaF9hkemInJmhwwEg8f9TKD3lLudpVXr0Mw83O8UvDAFc4eQf1p0/sGTaRcBcW3t2G7sEzvNRYc7rx8pXEFVSa3Y237nCuVg6A5OTfBmanSTvW87q8LpWibuqLVRgx5HReQQtVYp1OAp6jysTG5akF1OzVccJ03fwh4vsTgsNA1NqS2ALQQJdFTgmo/pCbb8UT7hauWvon52dBe2QUdw1KFS4DMi3WpqiaQn6jPADP/3kc7NHqZKRKwWXdMnSU1ajP/4HjwqnXrpUoFmMqqrtp56A/8lk4/Ieo1EXrCQP7EZILDMZ3JNUXGcw1TzzfGyuR742WetbDNg376V2sT5mTLfZ9NlC77Glcv/+2jFGxFt9UMrHSJMec4AOBVWdgjW91z3jGWuUyLv9pqRLdPPDGgRczcXd5dRUeYCYzkzBkwrkalhOpcxSrxG96sAuGQtsPf7cci8if41UxPrHqa8x0jNpyoj4/W3u5BJ71pGY1hj15Lv7lZUprpZSGt+0XnAWMgzeN2r9eAcUqHkHltGdKpXaZ6uGs+Q60RsGQEm6HF9aCFW86eEiqy+/PeNrO32ehMSzwqE6Y5o6U0GD3mIVV1PxvAKZiArWsFV2UqkljNNkJs6Y8ndfYCPFYk/hxKLyv39fLpHffA0ZD7GfQLPf2bxawy2WadR7JLw7spJKGIo4aZufuGWFx1uPDtgAvDFCXwMsrckM/+mkQsRJrrvkSaxiUeUsIjeajB9L05BEazNbx3xLkvK9VJrgTKUxdIst5ZuGyRMhNoIZvcTpUMkFJegSpMghNsvVLyjx5xEhd+JB8ZxdJGcptIuCnDUlmq3YaJxKYFzlZ5NU4pgsNRxB73LkqV2gEhmFGEEukWzdYOovpO29VxE8g==",
+    "updatedAt": "2026-11-10T12:27:10.898Z",
     "scopeHash": "16183f276edb0072818f889699df444fbc598e280371cccb5181968464c88546",
     "originHash": "f3a7d76bbb9d13f907952d46bed14f67d329db4e664ede97c181f9d289e94aa3",
     "repoScope": "feynmanwyckoff-cmyk/nostradamus",
