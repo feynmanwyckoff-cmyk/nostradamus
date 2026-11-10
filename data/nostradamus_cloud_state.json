@@ -1,10 +1,10 @@
 {
   "schemaVersion": "3.0-DEMIGUEL-MF24",
-  "updatedAt": "2026-11-10T09:53:12.526Z",
+  "updatedAt": "2026-11-10T09:54:16.724Z",
   "strategyName": "Vol-Managed Multifactor + 40% Buffer",
   "rebalanceBufferPct": 40,
   "thresholdAnnVol": 18,
-  "capitalIdr": 18935707,
+  "capitalIdr": 18852107,
   "cashReserveIdr": 7020207,
   "holdings": [
     {
@@ -72,6 +72,44 @@
     }
   ],
   "stocks": [
+    {
+      "ticker": "RAJA",
+      "idxTicker": "IDX:RAJA",
+      "yfTicker": "RAJA.JK",
+      "name": "Rukun Raharja Tbk",
+      "sector": "Energy",
+      "lastPrice": 466,
+      "change1D": 23.28,
+      "return30D": -29.92,
+      "beta1Y": 1.59,
+      "volatilityAnn": 65,
+      "roe": 16.4,
+      "debtToEquity": 0.68,
+      "operatingMargin": 21.2,
+      "isLiveFetched": true,
+      "isLiquid": true,
+      "dividendYieldPct": 2.79,
+      "lastSyncedAt": "16.53.53",
+      "dmuMomScore": 5.6,
+      "dmuLowVolScore": 1.6,
+      "dmuValueScore": 8.6,
+      "dmuSizeScore": 7.6,
+      "dmuCompositeScore": 5.83,
+      "grossProfitabilityToAssets": 20.2,
+      "ocfToNetIncomeRatio": 1.26,
+      "accrualRatioToAssets": -2.7,
+      "accrualPenaltyScore": 0,
+      "isHscFlagged": false,
+      "hscSource": "NONE",
+      "betaWeightedPropensity": 3.67,
+      "dmuRankPct": 5,
+      "dmuZone": "TOP_DECILE_BUY",
+      "qmjScore": 5.8,
+      "babScore": 1.6,
+      "hrpPropensity": 4.58,
+      "role": "NEUTRAL_HOLD",
+      "adtv20dIdr": 40535236010
+    },
     {
       "ticker": "SINI",
       "idxTicker": "IDX:SINI",
@@ -1218,43 +1256,6 @@
       "qmjScore": 5.4,
       "babScore": 4.3,
       "hrpPropensity": 18.18,
-      "role": "NEUTRAL_HOLD"
-    },
-    {
-      "ticker": "RAJA",
-      "idxTicker": "IDX:RAJA",
-      "yfTicker": "RAJA.JK",
-      "name": "Rukun Raharja Tbk",
-      "sector": "Energy",
-      "lastPrice": 466,
-      "change1D": 23.28,
-      "return30D": -29.92,
-      "beta1Y": 1.59,
-      "volatilityAnn": 65,
-      "roe": 16.4,
-      "debtToEquity": 0.68,
-      "operatingMargin": 21.2,
-      "isLiveFetched": true,
-      "isLiquid": true,
-      "dividendYieldPct": 2.79,
-      "lastSyncedAt": "16.52.55",
-      "dmuMomScore": 5.6,
-      "dmuLowVolScore": 1.6,
-      "dmuValueScore": 8.6,
-      "dmuSizeScore": 7.6,
-      "dmuCompositeScore": 5.83,
-      "grossProfitabilityToAssets": 20.2,
-      "ocfToNetIncomeRatio": 1.26,
-      "accrualRatioToAssets": -2.7,
-      "accrualPenaltyScore": 0,
-      "isHscFlagged": false,
-      "hscSource": "NONE",
-      "betaWeightedPropensity": 3.67,
-      "dmuRankPct": 5,
-      "dmuZone": "TOP_DECILE_BUY",
-      "qmjScore": 5.8,
-      "babScore": 1.6,
-      "hrpPropensity": 4.58,
       "role": "NEUTRAL_HOLD"
     },
     {
@@ -36262,66 +36263,72 @@
       "symbol": "IDR=X",
       "label": "USD / IDR Spot",
       "category": "FX_RATES",
-      "value": 18080,
+      "value": 18039,
       "unit": "Rp",
-      "change1D": 3.1,
+      "change1D": 0,
       "ihsgImpact": "BEARISH",
-      "transmissionNote": "Tekanan depresiasi Rupiah memicu penyesuaian eksposur ekuitas ke cadangan kas."
+      "transmissionNote": "Tekanan depresiasi Rupiah memicu penyesuaian eksposur ekuitas ke cadangan kas.",
+      "isLiveFetched": true
     },
     {
       "id": "dxy",
       "symbol": "DX-Y.NYB",
       "label": "US Dollar Index (DXY)",
       "category": "FX_RATES",
-      "value": 101.22,
+      "value": 101.66,
       "unit": "pts",
-      "change1D": -0.29,
+      "change1D": 0.01,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Pelemahan indeks DXY memberi ruang stabilisasi bagi mata uang Asia."
+      "transmissionNote": "Pelemahan indeks DXY memberi ruang stabilisasi bagi mata uang Asia.",
+      "isLiveFetched": true
     },
     {
       "id": "us10y",
       "symbol": "^TNX",
       "label": "US 10Y Treasury Yield",
       "category": "FX_RATES",
-      "value": 4.89,
+      "value": 4.86,
       "unit": "%",
-      "change1D": -1.17,
+      "change1D": 0.1,
       "ihsgImpact": "BEARISH",
-      "transmissionNote": "Yield US 10Y di atas 4.5% menjaga cost of equity pasar berkembang tetap ketat."
+      "transmissionNote": "Yield US 10Y di atas 4.5% menjaga cost of equity pasar berkembang tetap ketat.",
+      "isLiveFetched": true
     },
     {
       "id": "vix",
       "symbol": "^VIX",
       "label": "CBOE VIX Volatility",
       "category": "GLOBAL_RISK",
-      "value": 16.61,
+      "value": 20.18,
       "unit": "pts",
-      "change1D": -20.26,
+      "change1D": 1.3,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Penurunan tajam VIX meredakan kepanikan ekor (tail-risk) di bursa global."
+      "transmissionNote": "Penurunan tajam VIX meredakan kepanikan ekor (tail-risk) di bursa global.",
+      "isLiveFetched": true
     },
     {
       "id": "sp500",
       "symbol": "^GSPC",
       "label": "S&P 500 Index",
       "category": "GLOBAL_RISK",
-      "value": 7688.62,
+      "value": 7549.94,
       "unit": "pts",
-      "change1D": 1.58,
+      "change1D": 2.35,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Reli ekuitas AS memberikan dukungan sentimen jangka pendek ke bursa regional."
+      "transmissionNote": "Reli ekuitas AS memberikan dukungan sentimen jangka pendek ke bursa regional.",
+      "isLiveFetched": true
     },
     {
       "id": "hsi",
       "symbol": "^HSI",
       "label": "Hang Seng Index",
       "category": "GLOBAL_RISK",
-      "value": 24779.33,
+      "value": 24557.04,
       "unit": "pts",
-      "change1D": 3.59,
+      "change1D": 0.44,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Penguatan bursa Asia Timur menopang permintaan komoditas ekspor Indonesia."
+      "transmissionNote": "Penguatan bursa Asia Timur menopang permintaan komoditas ekspor Indonesia.",
+      "isLiveFetched": true
     },
     {
       "id": "coal",
@@ -36332,29 +36339,32 @@
       "unit": "USD/t",
       "change1D": 1.25,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Menopang faktor Value & arus kas bebas emiten batubara (ITMG, PTBA, ADRO)."
+      "transmissionNote": "Menopang faktor Value & arus kas bebas emiten batubara (ITMG, PTBA, ADRO).",
+      "isLiveFetched": true
     },
     {
       "id": "gold",
       "symbol": "GC=F",
       "label": "Gold Spot (XAU)",
       "category": "COMMODITIES",
-      "value": 4136.5,
+      "value": 4103.1,
       "unit": "USD/oz",
-      "change1D": 1.56,
+      "change1D": -0.28,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Rekor harga emas menjadi lindung nilai & katalis emiten tambang emas/tembaga (AMMN, ANTM)."
+      "transmissionNote": "Rekor harga emas menjadi lindung nilai & katalis emiten tambang emas/tembaga (AMMN, ANTM).",
+      "isLiveFetched": true
     },
     {
       "id": "brent",
       "symbol": "BZ=F",
       "label": "Brent Crude Oil",
       "category": "COMMODITIES",
-      "value": 94.19,
+      "value": 90.35,
       "unit": "USD/bbl",
-      "change1D": -0.45,
+      "change1D": -2.4,
       "ihsgImpact": "NEUTRAL",
-      "transmissionNote": "Harga minyak tinggi menguntungkan MEDC/AKRA namun perlu dipantau terhadap inflasi."
+      "transmissionNote": "Harga minyak tinggi menguntungkan MEDC/AKRA namun perlu dipantau terhadap inflasi.",
+      "isLiveFetched": true
     },
     {
       "id": "nickel",
@@ -36365,7 +36375,8 @@
       "unit": "USD/t",
       "change1D": 0.95,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Mendukung margin emiten hilirisasi nikel (INCO, NCKL, ANTM)."
+      "transmissionNote": "Mendukung margin emiten hilirisasi nikel (INCO, NCKL, ANTM).",
+      "isLiveFetched": true
     },
     {
       "id": "cpo",
@@ -36376,15 +36387,15 @@
       "unit": "MYR/t",
       "change1D": 1.4,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Mandatori biodiesel B40 menopang harga jual rata-rata (ASP) emiten sawit (TAPG)."
+      "transmissionNote": "Mandatori biodiesel B40 menopang harga jual rata-rata (ASP) emiten sawit (TAPG).",
+      "isLiveFetched": true
     }
   ],
   "liveIhsgQuote": {
-    "lastPrice": 5073.77,
-    "change1D": 0.46
+    "lastPrice": 5125.726,
+    "change1D": 1.02
   },
   "liveIhsgReturns": [
-    -0.43,
     -0.83,
     -1.02,
     0.46,
@@ -36413,15 +36424,16 @@
     0.32,
     2.25,
     0.4,
-    0.46
+    0.46,
+    1.02
   ],
   "encryptedVault": {
     "version": 1,
     "saltBase64": "VnsorMcDCpdVWdhPJy1n1A==",
     "verifierHashBase64": "4n2Mmvj0WYbqgIZRTAlg7solExkFmaKEMwbBRhc0KNM=",
-    "ivBase64": "X+erGKiQsGux5ECf",
-    "cipherTextBase64": "IeMU0tY32VeEGVGLh/J34GVt96LSFFbVSCsB3uDM/qWFeRrf/m95PGi0ZTUV7uauDtaqaPIur0eygd4Df/bPMrrcA2lp6VwKQlisnUy3apQb82JIEaGs+H5fxYrjT1qhdpqg+wbeZO6Hq1aKLPyqy3kZqQjDsoI804WZWfadn95TqRGtlJ00V1jPK3qAm0Pxg4UaDC504KhbDLaXfxJspKKQyZcLmmJMxt+3oKTXdYy4ueilDFMCeIzpGWK7Ps2glwOO2yQKxHhOfHRHX1WvmWNMij+08kM1AyhezFetzNePBwgdbsdAhd54QrNpwIZNBPy5Ia63wv95bZFB7PW9vuPXMyG5cASMf+O1OFWGYgu2sXamoQeTUiaBRDdGB5huHR+uTHgqVMfBRLtScfzO9MzmR0QaVE3KEbaHJeKvEG8Dc0qoaWNFNwoYBXVRx1Rml6g9psDExxqVkEoas17veQnhXJT4sLi4K2SQt/9wwhlFsfkQbpHdNCV0MKjfivtNqQm5CcVG4fl6D8+v09d++EttpXTT7s0WLc/vfJ2SZeAQyocsa1JcimG9deqNu6geGQDqjeu4anlzB07ADrfV18Jw2v8mBETJ89OtFqNFTm1KdJuLawglw4MbTj5R20AQGglhS1954CJeKinT9OlHxCLhnDkSrBTZ7wI5mD1fr6z/EfHukRKxzJ3YztAPg9gnxXprbto3d148tLd6F+ZD/6C7H/uoBuQ9gXUNYNK6NhWBNEcpNyJ+cP5EdxA9El9fjvu8nl8cTTOg80ALNqiumi1s9eqNcfAy2ONgbchXgnQfjwxMQv4HbBYumDyBOK04Qhzyf17Lo+ULJ23obt1mJW1SPSlRDRT5X86nKSpJ+O9R0CUMTe1xOiJ+ro9+MY91IMxheHFMhNi1KlGxTE963N+dFdsFWav5AKDmMJO0OPiPbA7M4VkxADZcF6BoOxXw+KhYWsapXrIOi01u14OpfVqv194tImb2IiDHB3y93Jtrvj6AC1apy+9HBAE8sIRZeI3Ce9uuvxzHfLFOHIGehXBDy0254eqBWh5Naj+NEgLlSfJD8Zom0tPVcaHHg75jf7etO0NYzPJIoWcIlkKB0He5LunjXvybaA/kBco+xOc7u4trvFXe6TujHIUnSTUBEY3bNHYVI74QhuhQJ2Gq5XVq44on7QwgW1ivWIXidOzpq4rmmBYXOyzGJisIUtw89LcIqexYv/rvjOZVCLgNB5VzxHnDbc3nek9R0wnTjCPVZm6q95tT3p/rXfemD6i9Ms2yqyse2G+HaCYlxnD2s5pVrofq91o9hs8pVnwsJsx+X9iYc0YYRhR23NDjZ/pD3x67uLaBYBgLl2O7mGd/4M2HJ9K6MZyy+oRg8BHjG91zHdE3Q0bTRR2lEc+SxpYh94MLzTKSvWw6vAicWj0=",
-    "updatedAt": "2026-11-10T08:12:41.324Z",
+    "ivBase64": "GwPd6hBHOlAhdXXU",
+    "cipherTextBase64": "dIgC9PueJN5eRMKoSfv59jofQ1ZS2LR4Xy/hztexH4KkBZ13lCbFhYYhRLcPqVdQubEW2oYoJACQhPwBFV5Z4pSUvphongg1OkYzvEFJxmJ18cntxpnI9PyJ6OcTxn3DABZcqf83hy4FkNLxQenhi1eo42jh1M0dy75sYQgBD0NCcXxWaxPoYa55BIOyDw1ESNmBcP+TnZy6rFbEdyFz/d2/W9xVmvxHYgEEpphyulttr2TcwvbkUJ8mH+h5c4guLIjhHmo356H0gE64r2mjVT7/5jxvR07WSRK6wvH78te9TO2rG2ywmeMHt6vbX1DXgnQ1rfr0jBFC8bTDL7gqOxoGCVMjkMipdbvjFrKUnfHAcFW5AsPGJ9JeFRpgK9cu2IOJ5kkxgJvtvIzCiqh0aWF/BNWxVSVssFtNLuUhkpeil/9ptkpO+ByL+HgwgkVpZKBHA/QUAFAF3W3+nemoXIRijWdMWzN6rRAd0RWxjXcGJ3+lvMtqakQ2xy+seo/b56zWo5jkuLEWMWXLf6dIHuw6AlIN2PqvebAtW5UG8sQurh/V8jS26bPECNjZ4q9Lr2U+gjMHZEbnaRaJ3uvCiLaYsxzJ1zSVWyVadDXg1QTBEQ+BRJguP8Rze3OUhvxexTowGgHaIt/XCgBncZegcgEFLx3HsfKm7pJIG8mTWm37/RXnpdRk+zaNDXxzYvDzSy0SA2jOK0IubH3lljMIAcgGq2wNFuHRnJSJwiZIvDdduClNsO0I12Y5RoXy24v+LiFsQsby4u5AyHVip2lM/30XR38CAYLTwg7PNOoycEzisk2LADAXivpcUKw5J4lielNA2vNtECAOkw4AGnytQNKB3enn5JstMcLaAv/AEhBBjj+NFAtnwrTXLRVRR3l3J3ruTTxYGdXVr5ntjokLyHC5Nsf8vm/z/nb1v2vU6hXARg4O9Nt4ZkuihFjW2RF3Pbu/QpdANlv2dyU0u6XrNJ4TDc4PUVTzcFYWJHQX6xfeEMgmv00p++Fqv368pnTaa4K4XuDQ/ZjU8s+wY2ubYSC3f0QtHSfnNwqZpbgbpxHz2sSRnjkD3pQwJa1cIz1ZPySiR6ONyhcewtQCDyYFCWGSPqEQ2FNRUm0jyse+oF7bR2wS/mFCe0rUPpx1lnLFFn0QMtbQy3xZVc6a+i+cgRbmvCuCaxyr+XEM16TSlWFcsj+gyMM+lJegZB3DQQL3zyuz2T1MUIApy0Bukm5v53X0bZ7fY8vCelTjiEXAFLAA7ITV2aXXmaJceL+6+5A6Q87geSLy90U+uysn32tJcf+T93+ztfNE8fg1I3mmlWjnnQOWykVCaZs/Dy4hiTFdSpYXNYyZ7yWhpSEceTy5fXprd5hPygC5jOKSE7EkMn2wlaXKV6C7RgXUB5z/TaC77WqX92sG6CL8KF9KpZs=",
+    "updatedAt": "2026-11-10T09:53:12.659Z",
     "scopeHash": "16183f276edb0072818f889699df444fbc598e280371cccb5181968464c88546",
     "originHash": "f3a7d76bbb9d13f907952d46bed14f67d329db4e664ede97c181f9d289e94aa3",
     "repoScope": "feynmanwyckoff-cmyk/nostradamus",
