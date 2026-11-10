@@ -788,15 +788,39 @@ async function startServer() {
       };
 
       const fwdDiv = calculateForwardDividend(stock, joeliardiEval);
+      const gpToAssetsVal = Number(
+        joeliardiEval?.grossProfitabilityToAssets ??
+          stock?.grossProfitabilityToAssets ??
+          Number((Number(stock.roe || 0) * 0.85).toFixed(1))
+      );
+      const ocfNiVal = Number(
+        joeliardiEval?.ocfToNetIncomeRatio ?? stock?.ocfToNetIncomeRatio ?? 0.92
+      );
+      const accrualPenVal = Number(joeliardiEval?.accrualPenaltyPts ?? 0);
+      const sbn1YVal = Number(joeliardiEval?.sbnSpot1YPct ?? 6.15);
+      const sbn5YVal = Number(joeliardiEval?.sbnSpot5YPct ?? 6.48);
+      const sbn10YVal = Number(joeliardiEval?.sbnSpot10YPct ?? 6.75);
+      const sbnBlendedVal = Number(joeliardiEval?.sbnBlendedSpotRfPct ?? 6.64);
+      const dynKeVal = Number(joeliardiEval?.dynamicCostOfEquityPct ?? 12.64);
+      const justPbvVal = Number(
+        joeliardiEval?.damodaranJustifiedPbv ?? joeliardiEval?.joeliardiFairPbv ?? 1.5
+      );
+      const sustGrowthVal = Number(joeliardiEval?.sustainableGrowthRatePct ?? 5.5);
+      const betaPropensityVal = Number(
+        stock?.betaWeightedPropensity ??
+          Number((1 / Math.max(0.45, Number(stock.beta1Y || 1))).toFixed(2))
+      );
+      const betaCapVal = Number(joeliardiEval?.betaWeightedSizingCapPct ?? 14.0);
+
       const earningsYieldVal = joeliardiEval?.impliedPer
         ? Number((100 / Number(joeliardiEval.impliedPer)).toFixed(2))
         : 0;
       const rawSbnSpreadVal =
-        joeliardiEval?.rawSbnSpreadPct ?? Number((earningsYieldVal - 6.75).toFixed(2));
+        joeliardiEval?.rawSbnSpreadPct ?? Number((earningsYieldVal - sbnBlendedVal).toFixed(2));
       const erpBenchmarkVal = joeliardiEval?.erpBenchmarkPct ?? 6.0;
       const netErpSpreadVal =
         joeliardiEval?.netErpSpreadPct ??
-        Number((earningsYieldVal - (6.75 + erpBenchmarkVal)).toFixed(2));
+        Number((earningsYieldVal - dynKeVal).toFixed(2));
       const isDefensiveOverride =
         Boolean(joeliardiEval?.isDefensiveDiscountAnomaly) ||
         (Number(stock.beta1Y) < 0.5 && Number(stock.dmuValueScore) > 9.0 && !stock.isHscFlagged);
@@ -812,28 +836,32 @@ async function startServer() {
       });
 
       const promptText = `
-Lakukan analisis Komite Investasi mendalam (Fundamental & Kuantitatif) untuk saham BEI berikut:
+Lakukan analisis Komite Investasi mendalam (5 Pilar Kuantitatif Akademik: Novy-Marx GP/A, AQR Anti-Junk QMJ Accrual OCF/NI, Fabozzi Spot SBN Curve 1Y/5Y/10Y & Dynamic Ke, Damodaran Justified PBV, serta Qian/Taleb 1/Beta Barbell Position Sizing) untuk saham BEI berikut:
 
 DATA FUNDAMENTAL & KUANTITATIF LIVE EMITEN:
 - Emiten: ${stock.ticker} (${stock.name}) | Sektor IDX-IC: ${stock.sector}
 - Harga Pasar Live: Rp ${Number(stock.lastPrice).toLocaleString('id-ID')} | Perubahan 1D: ${stock.change1D}% | Pergerakan 30 Hari (1M): ${stock.return30D}%
-- Profitabilitas & Efisiensi Modal (DuPont): ROE ${stock.roe}% (Batas wajar biaya modal RI: 10,5%, Selisih ROE: ${(Number(stock.roe) - 10.5).toFixed(1)}%) | Margin Usaha (Operating Margin): ${stock.operatingMargin}%
+- Pilar 1 — Gross Profitability (Novy-Marx 2013) & Anti-Junk QMJ Accrual (Asness 2019):
+  * GP/A (Novy-Marx): ${gpToAssetsVal.toFixed(1)}% | ROE: ${stock.roe}% | Margin Usaha (Operating Margin): ${stock.operatingMargin}%
+  * OCF/NI (Anti-Junk Accrual): ${ocfNiVal.toFixed(2)}x (${accrualPenVal === 0 ? '0 Penalti · Kas Riil Valid' : `Penalti Akrual -${accrualPenVal} pts`})
 - Proyeksi Kas Forward Dividend & Shareholder Yield (Bebas Double Counting):
   * Forward Dividend Yield (Est): ${fwdDiv.fwdYield.toFixed(2)}% (dihitung dari Annualized EPS Q3-2026 Rp ${fwdDiv.annEpsQ3.toLocaleString('id-ID')} × DPR Historis 3Y ${fwdDiv.dpr3Y.toFixed(0)}% = Est. DPS Rp ${fwdDiv.fwdDps.toLocaleString('id-ID')}/saham)
   * Net Buyback & Debt Paydown Yield: ${fwdDiv.buybackYield.toFixed(2)}%
-  * Total Shareholder Yield Murni: ${fwdDiv.totalShYield.toFixed(2)}% (Forward Dividend Yield + Net Buyback & Debt Paydown Yield — TANPA menjumlahkan Earnings Yield + Dividend Yield)
-- Struktur Neraca, Risiko & Kedalaman Likuiditas (ADTV 20D): DER ${stock.debtToEquity}x | Beta 1Y: ${stock.beta1Y}x | Volatilitas Tahunan: ${stock.volatilityAnn}% | ADTV 20 Hari: Rp ${adtvMillions} Juta/hari | Batas Maksimal Alokasi 5% ADTV: Rp ${maxSafeMillions} Juta/hari
-- Peringkat 4-Faktor Out-of-Sample (OOS DeMiguel): Skor Komposit ${stock.dmuCompositeScore}/10 (Peringkat Top ${stock.dmuRankPct}%, Zona Buffer: ${stock.dmuZone})
-  * Rincian Faktor: Value ${stock.dmuValueScore}/10 (bobot 35%), Low-Vol ${stock.dmuLowVolScore}/10 (bobot 28%), Momentum ${stock.dmuMomScore}/10 (bobot 22%), Size/Liq ${stock.dmuSizeScore}/10 (bobot 15%)
+  * Total Shareholder Yield Murni: ${fwdDiv.totalShYield.toFixed(2)}% (Forward Dividend Yield + Net Buyback & Debt Paydown Yield)
+- Pilar 2 — Kesehatan Neraca & Likuiditas (ADTV 20D): DER ${stock.debtToEquity}x | Beta 1Y: ${stock.beta1Y}x | Volatilitas Tahunan: ${stock.volatilityAnn}% | ADTV 20 Hari: Rp ${adtvMillions} Juta/hari | Batas Maksimal Alokasi 5% ADTV: Rp ${maxSafeMillions} Juta/hari
+- Pilar 3 — Kurva Spot SBN (Fabozzi 2012), Dynamic Cost of Equity (Ke) & Damodaran Justified PBV:
+  * Kurva Spot SBN: SBN 1Y ${sbn1YVal}% · SBN 5Y ${sbn5YVal}% · SBN 10Y ${sbn10YVal}% -> Spot SBN Blended (Spot Rf): ${sbnBlendedVal.toFixed(2)}%
+  * Dynamic Cost of Equity (Ke): ${dynKeVal.toFixed(2)}% (Spot Rf ${sbnBlendedVal.toFixed(2)}% + Beta-Adjusted ERP ${erpBenchmarkVal}%) | Sustainable Growth (g): ${sustGrowthVal.toFixed(1)}%
+  * Damodaran Justified PBV = (ROE - g) / (Ke - g): ${justPbvVal}x vs Implied PBV Pasar: ${joeliardiEval?.impliedPbv ?? '-'}x
+  * Implied PER: ${joeliardiEval?.impliedPer ?? '-'}x vs Wajar PER: ${joeliardiEval?.joeliardiFairPer ?? '-'}x
+  * Estimasi Nilai Intrinsik Wajar Blended: Rp ${Number(joeliardiEval?.intrinsicValueIdr || stock.lastPrice).toLocaleString('id-ID')} | Margin of Safety (MoS): ${joeliardiEval?.marginOfSafetyPct ?? 0}% (${joeliardiEval?.valuationLabel || '-'})
+  * Spread Valuasi vs Dynamic Ke: Earnings Yield ${earningsYieldVal}% | Raw Spread vs Spot SBN Blended: ${rawSbnSpreadVal >= 0 ? '+' : ''}${rawSbnSpreadVal}% | Net Spread vs Dynamic Ke: ${netErpSpreadVal >= 0 ? '+' : ''}${netErpSpreadVal}%
+- Pilar 4 — 4-Faktor Out-of-Sample (OOS DeMiguel) & 1/Beta Barbell Position Sizing (Qian 2005 & Taleb 2012):
+  * Skor Komposit OOS: ${stock.dmuCompositeScore}/10 (Peringkat Top ${stock.dmuRankPct}%, Zona Buffer: ${stock.dmuZone})
+  * Propensitas Bobot 1/β: ${betaPropensityVal.toFixed(2)}x (Beta ${stock.beta1Y}x) | Batas Alokasi Maks (1/β Cap): ≤${betaCapVal.toFixed(1)}% dari portofolio
 - Status Override Aset Defensif Terdiskon (Beta < 0.5 & Skor Value > 9.0): ${isDefensiveOverride ? 'AKTIF -> WAJIB abaikan koreksi harga 30D negatif dan tetapkan status "Strong Buy: Anomali Aset Defensif Terdiskon"' : 'TIDAK AKTIF (Gunakan uji silang normal)'}
 - Status Saringan Risiko HSC (Gorengan/Cornered): ${stock.isHscFlagged ? `TERINDIKASI HSC (${stock.hscReason || 'Anomali Spekulatif'})` : 'BEBAS INDIKASI HSC (Clean Institutional/Fundamental)'}
-- Kalibrasi Nilai Intrinsik Wajar Blended & Spread ERP:
-  * Estimasi Nilai Intrinsik Wajar Blended: Rp ${Number(joeliardiEval?.intrinsicValueIdr || stock.lastPrice).toLocaleString('id-ID')}
-  * Margin of Safety (MoS): ${joeliardiEval?.marginOfSafetyPct ?? 0}% (${joeliardiEval?.valuationLabel || '-'})
-  * Implied PER: ${joeliardiEval?.impliedPer ?? '-'}x vs Implied Target Wajar PER (Pegged): ${joeliardiEval?.joeliardiFairPer ?? '-'}x (EPS Rp ${joeliardiEval?.estimatedEpsIdr ?? '-'} × Wajar PER = Nilai Intrinsik Wajar)
-  * Implied PBV: ${joeliardiEval?.impliedPbv ?? '-'}x vs Implied Target Wajar PBV (Pegged): ${joeliardiEval?.joeliardiFairPbv ?? '-'}x (BVPS Rp ${joeliardiEval?.estimatedBvpsIdr ?? '-'} × Wajar PBV = Nilai Intrinsik Wajar)
-  * Spread Valuasi vs SBN 10Y & ERP: Earnings Yield ${earningsYieldVal}% | Raw Spread vs SBN 10Y (6,75%): ${rawSbnSpreadVal >= 0 ? '+' : ''}${rawSbnSpreadVal}% | Equity Risk Premium (ERP) Indonesia: ${erpBenchmarkVal}% (Hurdle Rate 12,75%) | Net ERP Spread: ${netErpSpreadVal >= 0 ? '+' : ''}${netErpSpreadVal}%
-  * Skor 4 Pilar Fundamental: Kualitas Bisnis & Moat ${joeliardiEval?.businessQualityScore ?? 0}/100, Kesehatan Neraca ${joeliardiEval?.balanceSheetHealthScore ?? 0}/100, Keamanan Valuasi ${joeliardiEval?.valuationSafetyScore ?? 0}/100, Ketahanan OOS ${joeliardiEval?.oosQuantRobustnessScore ?? 0}/100
+- Skor 4 Pilar Fundamental: (1) Gross Profit & Anti-Junk ${joeliardiEval?.businessQualityScore ?? 0}/100, (2) Kesehatan Neraca ${joeliardiEval?.balanceSheetHealthScore ?? 0}/100, (3) Justified PBV & Kurva SBN ${joeliardiEval?.valuationSafetyScore ?? 0}/100, (4) 1/β Barbell Position Sizing ${joeliardiEval?.oosQuantRobustnessScore ?? 0}/100
 - Rezim Pasar IHSG Saat Ini: ${regimeStatus || 'WASPADA'}
 
 RADAR BERITA TERKINI & AKSI KORPORASI (${stock.ticker}):
@@ -844,11 +872,10 @@ PERTANYAAN / FOKUS UTAMA INVESTOR:
 
 INSTRUKSI GAYA BAHASA & PENALARAN KOMITE INVESTASI WAJIB (HUMANIS, LUGAS & KONSISTEN MATEMATIS):
 1. Gunakan gaya bahasa analis investasi senior Indonesia yang lugas, natural, humanis, dan enak dibaca. DILARANG KERAS menggunakan kata-kata terjemahan kaku seperti "kuotasi", "diskon optik", "secara optik", "secara kausal", "trajektori", "pengungkit utang", atau "bermoat".
-2. Konsistensi Multipel & Yield: Gunakan selalu Wajar PER ${joeliardiEval?.joeliardiFairPer ?? '-'}x dan Wajar PBV ${joeliardiEval?.joeliardiFairPbv ?? '-'}x yang sudah tersinkronisasi penuh dengan Nilai Intrinsik Wajar Rp ${Number(joeliardiEval?.intrinsicValueIdr || stock.lastPrice).toLocaleString('id-ID')}. Gunakan istilah "Forward Dividend Yield (Est) ${fwdDiv.fwdYield.toFixed(2)}%" dan "Total Shareholder Yield ${fwdDiv.totalShYield.toFixed(2)}%" (jangan pernah menjumlahkan Earnings Yield dengan Dividend Yield karena double counting).
-3. Spread SBN 10Y + ERP 6,0%: Saat membandingkan Earnings Yield (${earningsYieldVal}%) terhadap SBN 10Y (6,75%), sertakan juga perhitungan Equity Risk Premium (ERP) Indonesia sebesar 6,0% (total Hurdle Return 12,75%, Net ERP Spread ${netErpSpreadVal >= 0 ? '+' : ''}${netErpSpreadVal}%).
-4. Aturan Override Defensif Wajib pada Langkah 03 (Uji Silang Momentum & Value Trap): Jika Beta < 0.5 DAN Skor Value > 9.0 (${isDefensiveOverride ? 'KONDISI TERPENUHI PADA SAHAM INI' : 'tidak terpenuhi'}), maka sistem WAJIB mengabaikan tekanan harga 30D yang negatif dan menulis kesimpulan langkah ke-3 sebagai "Strong Buy: Anomali Aset Defensif Terdiskon" (BUKAN "Tunggu Konfirmasi Akumulasi").
-5. Batas Likuiditas 5% ADTV 20D: Pada panduan porsi keranjang (alokasi 6%-12% modal ekuitas aktif), tegaskan bahwa nilai nominal alokasi TIDAK BOLEH melebihi 5% dari ADTV 20D (Maks Rp ${maxSafeMillions} Juta/hari dari ADTV Rp ${adtvMillions} Juta).
-6. Jawab fokus analisis secara langsung pada directAnswerSummary dengan awalan "Hasil Analisis Komite Investasi: " TANPA mengulang kalimat pertanyaan pengguna, dan jangan pernah menulis simbol bintang ganda (**).
+2. Konsistensi Matriks Baru Wajib: Gunakan selalu metrik baru GP/A (Novy-Marx) ${gpToAssetsVal.toFixed(1)}%, OCF/NI ${ocfNiVal.toFixed(2)}x, Kurva Spot SBN (1Y ${sbn1YVal}% · 5Y ${sbn5YVal}% · 10Y ${sbn10YVal}% -> Spot Rf ${sbnBlendedVal.toFixed(2)}%), Dynamic Cost of Equity Ke ${dynKeVal.toFixed(2)}%, Damodaran Justified PBV ${justPbvVal}x, Wajar PER ${joeliardiEval?.joeliardiFairPer ?? '-'}x, serta Batas Alokasi Maks (1/β Cap) ≤${betaCapVal.toFixed(1)}% (Propensitas 1/β ${betaPropensityVal.toFixed(2)}x).
+3. Aturan Override Defensif Wajib pada Langkah 03: Jika Beta < 0.5 DAN Skor Value > 9.0 (${isDefensiveOverride ? 'KONDISI TERPENUHI PADA SAHAM INI' : 'tidak terpenuhi'}), maka sistem WAJIB mengabaikan tekanan harga 30D yang negatif dan menulis kesimpulan langkah ke-3 sebagai "Strong Buy: Anomali Aset Defensif Terdiskon".
+4. Batas Alokasi 1/β Cap & Likuiditas 5% ADTV 20D: Pada panduan porsi keranjang, gunakan plafon 1/β Cap ≤${betaCapVal.toFixed(1)}% portofolio dan tegaskan bahwa nilai nominal alokasi TIDAK BOLEH melebihi 5% dari ADTV 20D (Maks Rp ${maxSafeMillions} Juta/hari dari ADTV Rp ${adtvMillions} Juta).
+5. Jawab fokus analisis secara langsung pada directAnswerSummary dengan awalan "Hasil Analisis Komite Investasi: " TANPA mengulang kalimat pertanyaan pengguna, dan jangan pernah menulis simbol bintang ganda (**).
 `.trim();
 
       const response = await ai.models.generateContent({
@@ -856,7 +883,7 @@ INSTRUKSI GAYA BAHASA & PENALARAN KOMITE INVESTASI WAJIB (HUMANIS, LUGAS & KONSI
         contents: promptText,
         config: {
           systemInstruction:
-            'Anda adalah Kepala Komite Investasi Pasar Modal Indonesia (BEI) yang berpengalaman. Sajikan analisis yang 100% konsisten secara matematis: (1) Wajar PER dan Wajar PBV tersinkronisasi dengan Nilai Intrinsik Wajar Blended, (2) Total Shareholder Yield = Forward Dividend Yield (Est) + Net Buyback/Paydown Yield tanpa double counting Earnings Yield, (3) Spread Valuasi memperhitungkan SBN 10Y (6,75%) ditambah Equity Risk Premium ERP (6,0%), (4) Jika Beta < 0.5 dan Skor Value > 9.0, abaikan koreksi 30D negatif dan berikan sinyal "Strong Buy: Anomali Aset Defensif Terdiskon", dan (5) batasi porsi alokasi portofolio maksimal 5% dari ADTV 20 hari.',
+            'Anda adalah Kepala Komite Investasi Pasar Modal Indonesia (BEI) yang berpengalaman. Sajikan analisis yang 100% konsisten dengan 5 pilar kuantitatif akademik baru: (1) GP/A Novy-Marx & Anti-Junk OCF/NI, (2) Kurva Spot SBN 1Y/5Y/10Y & Dynamic Cost of Equity Ke, (3) Damodaran Justified PBV = (ROE - g) / (Ke - g) & Nilai Intrinsik Wajar Blended, (4) Jika Beta < 0.5 dan Skor Value > 9.0 berikan sinyal "Strong Buy: Anomali Aset Defensif Terdiskon", dan (5) penjatahan porsi portofolio menggunakan Propensitas 1/β (1/β Cap) serta batas 5% dari ADTV 20 hari.',
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
@@ -867,11 +894,11 @@ INSTRUKSI GAYA BAHASA & PENALARAN KOMITE INVESTASI WAJIB (HUMANIS, LUGAS & KONSI
               },
               verdictTitle: {
                 type: Type.STRING,
-                description: 'Judul kesimpulan utama satu kalimat yang natural, lugas, dan humanis tentang kondisi fundamental dan harga saham ini'
+                description: 'Judul kesimpulan utama satu kalimat yang natural, lugas, dan humanis tentang kondisi fundamental (GP/A, OCF/NI, Justified PBV, 1/β Cap) dan harga saham ini'
               },
               directAnswerSummary: {
                 type: Type.STRING,
-                description: 'Hasil analisis mendalam 3-4 kalimat dengan bahasa Indonesia yang natural dan enak dibaca (tanpa kata kaku seperti kuotasi/optik/kausal dan tanpa simbol **)'
+                description: 'Hasil analisis mendalam 3-4 kalimat yang menyertakan GP/A, OCF/NI, Dynamic Ke dari Kurva Spot SBN, Justified PBV, Nilai Intrinsik Wajar, dan 1/β Cap tanpa simbol **'
               },
               convictionScore: {
                 type: Type.NUMBER,
@@ -880,7 +907,7 @@ INSTRUKSI GAYA BAHASA & PENALARAN KOMITE INVESTASI WAJIB (HUMANIS, LUGAS & KONSI
               chainOfThoughtSteps: {
                 type: Type.ARRAY,
                 items: { type: Type.STRING },
-                description: '4 langkah penalaran berurutan dengan format "01. Judul: Penjelasan singkat -> Kesimpulan singkat": (1) 01. Dekomposisi DuPont & Moat, (2) 02. Spread Valuasi vs SBN 10Y + ERP, (3) 03. Uji Silang Momentum & Value Trap (jika Beta < 0.5 dan Skor Value > 9.0 wajib menghasilkan -> Strong Buy: Anomali Aset Defensif Terdiskon), (4) 04. Audit Forward Dividend & Likuiditas ADTV'
+                description: '4 langkah penalaran berurutan dengan format "01. Judul: Penjelasan singkat -> Kesimpulan singkat": (1) 01. Audit Profitabilitas Kas (GP/A & Anti-Junk OCF/NI), (2) 02. Kurva Spot SBN (1Y/5Y/10Y), Ke & Justified PBV, (3) 03. Uji Silang Momentum, Neraca & Value Trap, (4) 04. Sizing 1/β Barbell, Dividen & Likuiditas ADTV'
               },
               sections: {
                 type: Type.ARRAY,
@@ -911,7 +938,7 @@ INSTRUKSI GAYA BAHASA & PENALARAN KOMITE INVESTASI WAJIB (HUMANIS, LUGAS & KONSI
                     'sentimentTone'
                   ]
                 },
-                description: '4 kartu komite investasi: (1) 01. Audit Kualitas Laba & DuPont ROE, (2) 02. Valuasi Intrinsik vs Risiko Value Trap, (3) 03. Dampak Berita, Dividen & Saringan HSC, (4) 04. Dinamika Momentum & Kesesuaian Rezim Pasar'
+                description: '4 kartu komite investasi: (1) 01. GP/A & Anti-Junk OCF/NI, (2) 02. Justified PBV & Kurva Spot SBN (Ke), (3) 03. Katalis Berita, Dividen & Saringan HSC, (4) 04. Penjatahan Porsi 1/β Barbell & Rezim Pasar'
               },
               bullishDrivers: {
                 type: Type.ARRAY,

@@ -366,8 +366,9 @@ export async function pushStateToGitHubRepo(
 }
 
 /**
- * Pulls the latest `public/static-market-snapshot.json` directly via GitHub REST API (`api.github.com`)
- * with raw media type (`application/vnd.github.raw+json`) to bypass GitHub Pages CDN cache completely.
+ * Pulls the latest `public/static-market-snapshot.json` and `data/nostradamus_cloud_state.json`
+ * directly via GitHub REST API (`api.github.com`) with raw media type (`application/vnd.github.raw+json`)
+ * to bypass GitHub Pages CDN cache completely and ensure `^JKSE` never reverts to a stale static quote.
  */
 export async function pullLiveMarketSnapshotFromGitHubApi(
   customConfig?: GitHubCloudConfig
@@ -379,9 +380,13 @@ export async function pullLiveMarketSnapshotFromGitHubApi(
 
   if (!owner || !repo) return null;
 
-  const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(
+  const snapUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(
     repo
   )}/contents/public/static-market-snapshot.json?ref=${encodeURIComponent(branch)}&t=${Date.now()}`;
+  const statePath = (cfg.filePath || 'data/nostradamus_cloud_state.json').trim().replace(/^\/+/, '');
+  const stateUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(
+    repo
+  )}/contents/${statePath}?ref=${encodeURIComponent(branch)}&t=${Date.now()}`;
 
   const headers: Record<string, string> = {
     Accept: 'application/vnd.github.raw+json',
@@ -391,23 +396,110 @@ export async function pullLiveMarketSnapshotFromGitHubApi(
     headers.Authorization = `Bearer ${cfg.patToken.trim()}`;
   }
 
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 6500);
-    const res = await fetch(url, {
-      method: 'GET',
-      headers,
-      signal: controller.signal,
-      cache: 'no-store'
-    });
-    clearTimeout(timer);
-    if (res.ok) {
-      return await res.json();
+  const [snapPayload, cloudStatePayload] = await Promise.all([
+    (async (): Promise<any> => {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 6500);
+        const res = await fetch(snapUrl, {
+          method: 'GET',
+          headers,
+          signal: controller.signal,
+          cache: 'no-store'
+        });
+        clearTimeout(timer);
+        if (res.ok) {
+          return await res.json();
+        }
+      } catch {
+        // ignore and fallback
+      }
+      return null;
+    })(),
+    (async (): Promise<Partial<CloudStateBundle> | null> => {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 6500);
+        const res = await fetch(stateUrl, {
+          method: 'GET',
+          headers,
+          signal: controller.signal,
+          cache: 'no-store'
+        });
+        clearTimeout(timer);
+        if (res.ok) {
+          return (await res.json()) as Partial<CloudStateBundle>;
+        }
+      } catch {
+        // ignore and fallback
+      }
+      return null;
+    })()
+  ]);
+
+  if (!snapPayload && !cloudStatePayload) return null;
+
+  const mergedSnapshot: Record<string, any> =
+    snapPayload && typeof snapPayload === 'object'
+      ? { ...snapPayload, data: { ...(snapPayload.data || {}) } }
+      : { generatedAt: new Date().toISOString(), data: {} };
+
+  // Merge fresher liveIhsgQuote / liveIhsgReturns from cloud state JSON if static snapshot still has old 5073.77
+  if (cloudStatePayload?.liveIhsgQuote && cloudStatePayload.liveIhsgQuote.lastPrice > 0) {
+    const cloudQuote = cloudStatePayload.liveIhsgQuote;
+    const existingJkse = mergedSnapshot.data['^JKSE'];
+    const isExistingStaleDefault =
+      !existingJkse ||
+      Math.abs(Number(existingJkse.lastPrice) - 5073.77) < 0.05 ||
+      (cloudStatePayload.updatedAt &&
+        mergedSnapshot.generatedAt &&
+        new Date(cloudStatePayload.updatedAt).getTime() >
+          new Date(mergedSnapshot.generatedAt).getTime());
+
+    if (isExistingStaleDefault && Math.abs(cloudQuote.lastPrice - 5073.77) >= 0.05) {
+      const baseCloses: number[] =
+        existingJkse && Array.isArray(existingJkse.closes) && existingJkse.closes.length >= 2
+          ? [...existingJkse.closes]
+          : [];
+      if (
+        Array.isArray(cloudStatePayload.liveIhsgReturns) &&
+        cloudStatePayload.liveIhsgReturns.length >= 15
+      ) {
+        // Reconstruct recent closes from cloudStatePayload.liveIhsgReturns ending at cloudQuote.lastPrice
+        const rets = cloudStatePayload.liveIhsgReturns;
+        const reconstructed: number[] = new Array(rets.length + 1);
+        reconstructed[rets.length] = Number(cloudQuote.lastPrice.toFixed(2));
+        for (let i = rets.length - 1; i >= 0; i--) {
+          const rDec = Number(rets[i]) / 100;
+          const prev = reconstructed[i + 1] / Math.max(0.5, 1 + rDec);
+          reconstructed[i] = Number(prev.toFixed(2));
+        }
+        mergedSnapshot.data['^JKSE'] = {
+          symbol: '^JKSE',
+          lastPrice: Number(cloudQuote.lastPrice.toFixed(2)),
+          change1D: Number(cloudQuote.change1D.toFixed(2)),
+          closes: reconstructed,
+          shortName: 'IDX Composite'
+        };
+      } else {
+        if (baseCloses.length > 0) {
+          baseCloses[baseCloses.length - 1] = Number(cloudQuote.lastPrice.toFixed(2));
+        } else {
+          baseCloses.push(Number(cloudQuote.lastPrice.toFixed(2)));
+        }
+        mergedSnapshot.data['^JKSE'] = {
+          ...(existingJkse || {}),
+          symbol: '^JKSE',
+          lastPrice: Number(cloudQuote.lastPrice.toFixed(2)),
+          change1D: Number(cloudQuote.change1D.toFixed(2)),
+          closes: baseCloses,
+          shortName: 'IDX Composite'
+        };
+      }
     }
-  } catch {
-    // ignore and fallback
   }
-  return null;
+
+  return mergedSnapshot;
 }
 
 export function getActiveRepoScope(config?: GitHubCloudConfig): string {
@@ -977,12 +1069,21 @@ export async function syncForkUpstreamAndRebuildPages(
       syncSummaryNote = `Repo ${rawOwner}/${rawRepo} adalah repository utama (upstream).`;
     }
 
-    // 2B. Sync latest prebuilt static bundle (/docs/assets/app.js, /docs/assets/index.css, /docs/index.html) if running from a newer build
+    // 2B. Sync latest prebuilt static bundle (/docs/assets/app.js, /docs/assets/index.css, /docs/index.html, and static-market-snapshot.json) if running from a newer build
     try {
       const bundleAssets: Array<{ fetchUrl: string; targetPaths: string[] }> = [
         { fetchUrl: '/docs/assets/app.js', targetPaths: ['docs/assets/app.js'] },
         { fetchUrl: '/docs/assets/index.css', targetPaths: ['docs/assets/index.css'] },
-        { fetchUrl: '/docs/index.html', targetPaths: ['docs/index.html'] }
+        { fetchUrl: '/docs/index.html', targetPaths: ['docs/index.html'] },
+        {
+          fetchUrl: '/static-market-snapshot.json',
+          targetPaths: [
+            'public/static-market-snapshot.json',
+            'static-market-snapshot.json',
+            'src/data/staticMarketSnapshot.json',
+            'docs/static-market-snapshot.json'
+          ]
+        }
       ];
 
       const headRefRes = await fetch(

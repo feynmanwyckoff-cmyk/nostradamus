@@ -10,6 +10,8 @@ interface MarketRegimeBannerProps {
   dataSourceLabel: string;
   rebalanceBufferPct: number;
   isIhsgSynced?: boolean;
+  isRefreshingIhsg?: boolean;
+  onRefreshIhsg?: () => void;
   onUpdateRebalanceBuffer: (nextBuffer: number) => void;
   onSelectSimRegime: (mode: SimRegimeMode) => void;
   onUpdateThreshold: (newThreshold: number) => void;
@@ -22,6 +24,8 @@ export function MarketRegimeBanner({
   dataSourceLabel,
   rebalanceBufferPct,
   isIhsgSynced = true,
+  isRefreshingIhsg = false,
+  onRefreshIhsg,
   onUpdateRebalanceBuffer,
   onSelectSimRegime,
   onUpdateThreshold,
@@ -253,16 +257,19 @@ export function MarketRegimeBanner({
               practicalGuide="Hijau (+) berarti rata-rata pasar menguat; Merah (-) berarti pasar sedang terkoreksi."
               className="text-[#D97706] bb-amber"
             />
-            <span
-              title="Data IHSG Tersinkronisasi Live"
-              className={`inline-flex items-center p-1 rounded-xs border ${
+            <button
+              type="button"
+              onClick={onRefreshIhsg}
+              disabled={isRefreshingIhsg}
+              title="Klik untuk menyegarkan kuotasi IHSG (^JKSE) & Volatilitas 30D Live sekarang"
+              className={`inline-flex items-center p-1 rounded-xs border transition-colors cursor-pointer disabled:opacity-60 ${
                 isIhsgSynced
-                  ? 'text-[#0D5C46] border-[#059669]/40 bg-[#059669]/10'
-                  : 'text-[#D97706] border-[#F59E0B]/40 bg-[#F59E0B]/10'
+                  ? 'text-[#0D5C46] border-[#059669]/40 bg-[#059669]/10 hover:bg-[#059669]/20'
+                  : 'text-[#D97706] border-[#F59E0B]/40 bg-[#F59E0B]/10 hover:bg-[#F59E0B]/20'
               }`}
             >
-              <RefreshCw className="w-2.5 h-2.5" />
-            </span>
+              <RefreshCw className={`w-2.5 h-2.5 ${isRefreshingIhsg ? 'animate-spin' : ''}`} />
+            </button>
           </div>
           <div className="flex items-baseline justify-between gap-2 mt-1.5">
             <span className="text-2xl font-bold text-[#111315]">

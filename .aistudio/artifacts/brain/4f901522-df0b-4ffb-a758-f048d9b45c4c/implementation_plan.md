@@ -1,80 +1,126 @@
-# Rencana Implementasi (Revisi): Smart Live Sync Anti-Block, Perbaikan Login Gate Saat Refresh, Tata Letak Screener, & 3 Upgrade Kuantitatif Akademis
+# Rencana Implementasi: Perbaikan Sinkronisasi Live `IDX Composite (^JKSE)` & Pembaruan Matriks Ekspor PNG/PDF
 
-## 1. Arsitektur Smart Tiered Live Sync: Aktual Sesuai Yahoo Finance, Super Ringan, & Anti-Block
-
-### Akar Masalah Sebelumnya
-1. **Bias `chartPreviousClose` pada Perhitungan `%1D` (`server.ts`, `liveMarketFetcher.ts`, & `generate-static-market-bundle.mjs`)**:
-   - Pada endpoint Yahoo Finance `/v8/finance/spark?range=3mo&interval=1d`, properti `chartPreviousClose` adalah harga penutupan **3 bulan lalu** (awal periode chart), bukan harga penutupan kemarin (`closes[closes.length - 2]`). Selain itu, saat bursa sedang buka (*intraday*), perlu pengecekan tanggal/timestamp candle terakhir agar harga live hari ini dibandingkan secara presisi terhadap penutupan hari bursa sebelumnya.
-2. **Saham `.JK` Tidak Ikut Diperbarui Saat Klik "SYNC SEMUA LIVE"**:
-   - Sebelumnya, `refreshLiveGlobalMacroAndIhsg` memfilter keluar semua simbol `.JK` (`!sym.endsWith('.JK')`), sehingga harga saham di Portofolio, Keranjang 1 & 2, dan baris teratas Screener tidak berubah saat tombol **SYNC SEMUA LIVE** diklik.
-
-### Solusi: Arsitektur *3-Tier Smart Hybrid Sync* (Aman dari Rate-Limit / Blokir Yahoo & Cepat < 1,5 Detik)
-Agar sistem **tidak berat** dan **tidak pernah diblokir oleh Yahoo Finance** (tanpa mem-fetch 957 saham satu per satu dari browser), kita menerapkan mekanisme **Smart Tiered Batching**:
-- **Tier 1 — Priority Batch Sync Saat Klik "SYNC SEMUA LIVE" (Hanya 3 Request Batch Paralel)**:
-  - **Request 1 (Presisi Indeks & Makro)**: Menarik kuotasi live `^JKSE` (IHSG) via endpoint chart harian/intraday untuk mendapatkan `regularMarketPrice` dan `previousClose` yang 100% identik dengan halaman utama Yahoo Finance, bersama 8 indikator makro global (`IDR=X`, `^TNX`, `^VIX`, `GC=F`, `BZ=F`, dll.).
-  - **Request 2 & 3 (Priority Equity Batch — Maks 40–50 Saham Utama dalam 2 Chunk Spark)**: Menggabungkan seluruh saham yang ada di **Portofolio Aktif pengguna**, **Kandidat Keranjang 1 & Keranjang 2**, serta **Top 30–35 Saham Likuid Teratas di Screener** ke dalam 2 request batch `/v8/finance/spark` (20 simbol per request). Hanya butuh ~1 detik dan sangat aman dari batas *rate-limit*.
-  - **Sinkronisasi Snapshot Latar Belakang**: Menarik `static-market-snapshot.json` terbaru dari GitHub API/Server (yang diperbarui secara periodik oleh GitHub Actions di sisi server) untuk memperbarui ratusan saham JCI lainnya tanpa membebani jaringan browser pengguna.
-- **Tier 2 — On-Demand Micro-Sync pada Pencarian & Tombol Inspect**:
-  - Ketika pengguna mengetik kode saham di kolom pencarian Screener, mengklik ikon *refresh* pada baris saham, atau membuka modal **Inspect**, sistem otomatis menarik harga *real-time* terbaru untuk saham tersebut.
-- **Tier 3 — In-Memory TTL Cooldown Cache (60 Detik)**:
-  - Menyimpan hasil kuotasi live di memori selama 60 detik per ticker sehingga klik berulang atau perpindahan tab tidak memicu request ganda ke Yahoo Finance.
+## 1. Gambaran Umum & Tujuan Utama
+Rencana ini mencakup dua perbaikan krusial agar seluruh terminal dan dokumen ekspor bekerja secara akurat dan konsisten:
+1. **Perbaikan Kartu `IDX Composite (^JKSE)` & Volatilitas 30D yang Stagnan (`5.073,77` / `+0.46%`)**: Memperbaiki jalur sinkronisasi harga indeks `^JKSE`, imbal hasil 30 hari, serta perhitungan *Market Regime* agar tombol **SYNC SEMUA LIVE**, tombol *refresh* pada kartu `^JKSE`, dan sinkronisasi **GitHub Cloud (`feynmanwyckoff-cmyk/nostradamus`)** selalu memperbarui harga IHSG dan volatilitas realisasi ke data pasar terbaru tanpa tertimpa *snapshot* statis lama.
+2. **Sinkronisasi Matriks Kuantitatif Baru & Narasi Komite AI pada Ekspor PNG/PDF**: Memperbarui mesin perender kanvas ekspor (`PNG 2x Retina` & `PDF A4 Landscape`) serta generator narasi *Chain-of-Thought* Komite Investasi AI agar 100% selaras dengan 5 pilar kuantitatif akademik terbaru pada tampilan aplikasi.
 
 ---
 
-## 2. Perbaikan Bug Login Gate (`TerminalSecurityGate`) yang Kadang Terlewati Saat Refresh
+## 2. Diagnosis Akar Masalah & Solusi: Kartu `IDX Composite (^JKSE)` Stagnan
 
-### Akar Masalah
-1. **Auto-Submit oleh Password Manager / Browser Autofill**:
-   - Pada `TerminalSecurityGate.tsx`, penggunaan `<form>` standar dengan `<input type="password" autoComplete="current-password" autoFocus />` membuat ekstensi *password manager* atau fitur *auto-login* browser kadang langsung mengisi sandi (`12345` atau sandi tersimpan) dan men-trigger `submit` otomatis dalam hitungan milidetik saat halaman di-refresh.
-2. **Restorasi State dari Browser Back-Forward Cache (BFCache)**:
-   - Saat melakukan refresh cepat di beberapa browser modern, state memori halaman sebelumnya dapat dipulihkan dari BFCache jika tidak ada listener `pageshow` / `beforeunload`.
-3. **Konsistensi Path Bundle `index.html` vs `docs/index.html`**:
-   - Pada `githubCloudSync.ts`, sinkronisasi berkas `docs/index.html` ke root `index.html` berisiko menimpa path `./docs/assets/app.js` menjadi `./assets/app.js`.
+### Akar Masalah Mengapa `^JKSE` Tertahan di `5.073,77 (+0.46%)`
+Berdasarkan audit alur data dan tangkapan layar terminal:
+1. **Penimpaan oleh Snapshot Statis Lama saat Relay CORS Publik Timeout**:
+   - Berkas bundel statis bawaan menyimpan data `^JKSE` lama (`lastPrice: 5073.77`, `change1D: +0.46%`, `Daily σ: 2.812%`, `Realized 30D Volatility: 44.64%`).
+   - Saat dijalankan di GitHub Pages (tanpa server lokal), pemanggil batch Yahoo Spark mengisi nilai awal dengan *snapshot* statis (`5073.77`), lalu mencoba memanggil *proxy* CORS publik (`allorigins` / `codetabs`). Karena karakter *caret* (`^JKSE` / `%5EJKSE`) sering terkena *Cloudflare Timeout 522* pada *relay* publik, fungsi *fallback* mengembalikan objek kosong sehingga nilai lama `5073.77` dari *snapshot* statis justru dipakai untuk menimpa *state* `liveIhsgQuote` dan `regime`.
+2. **State `regime` Tidak Dihitung Ulang saat Pull dari GitHub Cloud**:
+   - Ketika menarik data terbaru dari repositori GitHub (`nostradamus_cloud_state.json` yang sebenarnya sudah memiliki kuotasi IHSG lebih baru), fungsi *pull* memperbarui `liveIhsgQuote`, tetapi **tidak memanggil pembaruan `regime`** (`computeMarketRegime(...)`) dan tidak menyinkronkan `liveIhsgReturns`. Karena kartu `IDX Composite (^JKSE)` dan `Realized 30D Volatility` merender nilai dari objek `regime`, angka di layar tetap membeku di `5.073,77 (+0.46%)`.
+3. **Closure State Lama saat Auto-Push ke GitHub Cloud**:
+   - Seusai `SYNC SEMUA LIVE`, fungsi pembuat bundel *cloud* membaca variabel `liveIhsgQuote` dan `liveIhsgReturns` dari *closure render* React sebelum *state* baru selesai di-*commit*, sehingga nilai lama `5073.77` ikut terdorong kembali ke repositori GitHub.
+4. **Tombol Ikon Refresh Hijau pada Kartu `IDX Composite (^JKSE)` Belum Terhubung ke Handler Refresh Indeks**:
+   - Ikon *refresh* di sudut kanan atas kartu `IDX Composite (^JKSE)` belum memicu pembaruan instan kuotasi indeks dan rezim volatilitas.
 
-### Solusi yang Akan Diterapkan
-- **Proteksi Interaksi Manusia Asli (`Human Interaction Guard`) di `TerminalSecurityGate.tsx`**:
-  - Memblokir eksekusi *unlock* otomatis jika belum ada interaksi ketikan keyboard (`onKeyDown`) atau klik mouse/sentuhan (`onPointerDown` dengan `event.isTrusted === true`) langsung dari pengguna setelah halaman selesai dimuat.
-  - Mengubah atribut input sandi (`autoComplete="off"` dan penanganan form non-autofill) agar ekstensi browser tidak dapat melakukan *silent auto-submit* saat refresh.
-- **Reset Paksa pada Event `pageshow` & `beforeunload` di `App.tsx`**:
-  - Menambahkan listener `window.addEventListener('pageshow', ...)` yang secara eksplisit mengunci kembali terminal (`setIsTerminalUnlocked(false)` dan `setVaultSession(null)`) setiap kali halaman dimuat ulang atau dipulihkan dari cache browser.
-- **Isolasi Path `index.html` Root vs `docs/index.html` & Meta No-Cache**:
-  - Memastikan `index.html` dan `docs/index.html` memiliki tag `<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />` serta menjaga path bundle masing-masing tetap konsisten.
-
----
-
-## 3. Tata Letak Baru Tabel Screener (`02. Multifactor Screener`)
-
-- **Bar Pencarian & Dropdown Filter Tepat di Atas Header Tabel**:
-  - Memindahkan kolom pencarian (`Cari saham atau sektor...`) dan ke-4 dropdown filter (`Semua Status`, `Semua 11 Sektor BEI`, `Semua Zona Buffer`, dan jumlah emiten per halaman) agar berada **tepat di atas header tabel (`<thead>`)**, yakni di bawah kotak *Filter & Label Saham HSC* serta *Perbandingan Multi-Saham*.
-- **Pagination Standar di Bawah Tabel (Footer Tabel)**:
-  - Memindahkan tombol navigasi halaman (`< Hal 1/10 >`, tombol *First/Prev/Next/Last*, informasi rentang baris `Menampilkan 1–100 dari 957 emiten`, dan pemilih ukuran halaman) ke **bagian bawah tabel** sebagai footer tabel standar.
+### Solusi Arsitektur Sinkronisasi `^JKSE` & Market Regime
+- **Perlindungan Anti-Downgrade Kuotasi Indeks**: Saat melakukan `SYNC SEMUA LIVE`, jika *relay* CORS browser gagal menjangkau `^JKSE`, sistem tidak boleh menimpa kuotasi `^JKSE` yang sudah lebih baru di memori atau di *cloud state* GitHub dengan angka *snapshot* statis lama (`5073.77`).
+- **Integrasi Fallback GitHub Cloud State & Relay Tambahan**: Menambahkan pembacaan langsung `nostradamus_cloud_state.json` dari repositori GitHub pengguna/upstream serta memperluas jalur *relay* untuk simbol berawalan `^` (`^JKSE`, `^VIX`, `^TNX`, `^GSPC`, `^HSI`) agar pengambilan kuotasi indeks di GitHub Pages tetap berhasil meskipun salah satu *proxy* publik mengalami gangguan.
+- **Re-komputasi Rezim Otomatis pada GitHub Pull & Master Sync**:
+  - Memastikan setiap proses *Pull from GitHub* langsung memperbarui `liveIhsgQuote`, `liveIhsgReturns`, `macroIndicators`, dan memanggil `setRegime(computeMarketRegime(...))` secara sinkron.
+  - Memperbarui fungsi pembuat bundel GitHub Cloud agar menerima parameter eksplisit (`activeQuote`, `activeRets`, `updatedMacro`) hasil *sync* terbaru, mencegah pengiriman *closure state* basi ke GitHub.
+- **Aktivasi Tombol Refresh Cepat pada Kartu `IDX Composite (^JKSE)`**: Menghubungkan tombol ikon *refresh* hijau di kartu `^JKSE` agar pengguna dapat menyegarkan kuotasi IHSG, volatilitas 30D, dan status sentimen pasar kapan saja dengan satu klik.
+- **Pembaruan Bundel Snapshot Pasar Terkini**: Menjalankan pembaruan *snapshot* pasar statis dan menyertakannya ke dalam sinkronisasi GitHub Pages agar data dasar `^JKSE` dan seluruh emiten BEI langsung memuat kuotasi live terbaru.
 
 ---
 
-## 4. Upgrade Mesin Kuantitatif Berbasis 3 Pilar Akademis
+## 3. Arsitektur Alur Data & Perenderan Ekspor Matriks Baru
 
-### Upgrade 1: Filter Kualitas — Gross Profitability (`GP/A`) & Penalti Akrual Anti-Junk
-*Landasan: Novy-Marx (2013) & Asness, Frazzini, Pedersen — AQR QMJ (2019)*
-- **Metrik Baru pada `StockMetrics`**:
-  - `grossProfitabilityToAssets` (**GP/A** = `Laba Kotor / Total Aset` dalam %) dan `accrualRatioToAssets` (**Akrual** = `(Laba Bersih - Arus Kas Operasi) / Total Aset` dalam %) serta indikator arus kas operasi (`ocfToNetIncomeRatio`).
-- **Formula Kualitas & Penalti Pengurang Skor (Tanpa Blokir Otomatis)**:
-  - Mengalihkan komponen kualitas utama dari Operating Margin/ROE mentah ke **Gross Profitability to Assets (GP/A)**.
-  - Sesuai pilihan Anda, emiten yang mencetak Laba Bersih positif namun Arus Kas Operasi (OCF) negatif atau memiliki akrual tinggi **tidak diblokir otomatis**, melainkan dikenakan **penalti pengurang skor kualitas & Value secara terukur** (mengurangi `dmuValueScore`, `qmjScore`, dan `businessQualityScore`) untuk mencegah *value trap*.
+```
++-----------------------------------------------------------------------------------+
+|                        TERMINAL & CLOUD SYNC PIPELINE                             |
+|                                                                                   |
+|  [Yahoo Live / Express API / Multi-Relay CORS / GitHub Cloud State JSON]          |
+|         │                                                                         |
+|         ▼                                                                         |
+|  [Anti-Downgrade Guard: Cegah Snapshot Lama 5.073,77 Menimpa Kuotasi Baru]        |
+|         │                                                                         |
+|         ├──► Update liveIhsgQuote + liveIhsgReturns + macroIndicators             |
+|         ├──► Recompute computeMarketRegime() ──► Kartu IDX Composite (^JKSE) Live |
+|         └──► Explicit Cloud Bundle Override  ──► Push Akurat ke GitHub Repo       |
++-----------------------------------------------------------------------------------+
+                                         │
+                                         ▼
++-----------------------------------------------------------------------------------+
+|                     ENGINE KUANTITATIF & KOMITE AI (5 PILAR)                      |
+|                                                                                   |
+|  • Novy-Marx Gross Profitability (GP/A) & DuPont Decomposition                    |
+|  • AQR Anti-Junk QMJ Accrual Ratio (OCF / Net Income)                             |
+|  • Kurva Spot SBN (1Y / 5Y / 10Y) & Dynamic Cost of Equity (Ke Fabozzi)           |
+|  • Damodaran Justified PBV = (ROE - g) / (Ke - g) & Fair PER                      |
+|  • Qian / Taleb 1/β Inverse-Beta Barbell Position Sizing & Max Cap (%)            |
++-----------------------------------------------------------------------------------+
+                                         │
+                                         ▼
++-----------------------------------------------------------------------------------+
+|                LAPORAN EKSPOR 1 HALAMAN RINGKAS (PNG 2x & PDF A4)                 |
+|                                                                                   |
+|  [Header]      Kicker Matriks Akademik Baru + Harga Live, Target, Upside, Skor    |
+|  [Baris 1]     4 Kartu Valuasi (Termasuk Justified PBV & PER Damodaran + Ke)      |
+|  [Baris 2]     4 Pilar Skor (GP/A & Anti-Junk, Neraca, Justified PBV, 1/β Sizing) |
+|  [Baris 3]     4 Strip Akademik (GP/A, Kurva SBN 1Y/5Y/10Y, OCF/NI, Sizing 1/β)   |
+|  [Panel Kiri]  Verdict AI + 4 Tahap Chain-of-Thought + 4 Kotak Eksekusi 1/β       |
+|  [Panel Kanan] Top 4 Berita & Sentimen Live Emiten                                |
++-----------------------------------------------------------------------------------+
+```
 
-### Upgrade 2: Valuasi Masa Depan — Justified PBV & Kurva Spot Rate SBN (1Y, 5Y, 10Y)
-*Landasan: Damodaran (2012) & Fabozzi (2012)*
-- **Bobot Kombinasi Spot Rate SBN 1Y, 5Y, dan 10Y (`computeDynamicSbnSpotCurveRate`)**:
-  - Menghitung tingkat bebas risiko spot efektif ($R_{f,\text{spot}}$) dari kurva imbal hasil obligasi pemerintah Indonesia tenor **SBN 1Y (jangka pendek), SBN 5Y (menengah), dan SBN 10Y (jangka panjang)** yang dikalibrasi dengan tekanan makro (`^TNX` & `IDR=X`) sesuai durasi arus kas ekuitas.
-  - Menghitung **Cost of Equity ($K_e$) Dinamis**: $K_e = R_{f,\text{spot}} + \beta \cdot \text{ERP}$.
-- **Nilai Intrinsik Berbasis Justified PBV**:
-  - Menggunakan rumus Damodaran:
-    $$\text{Justified PBV} = \frac{\text{ROE}_{\text{sustainable}} - g}{K_e - g}$$
-  - Menghitung `intrinsicValueIdr = roundToIdxTick(estimatedBvpsIdr * justifiedPbv)` dan memperbarui tampilan rincian kurva SBN 1Y/5Y/10Y, $K_e$, $g$, dan Justified PBV pada modal **Inspect Fundamental**.
+---
 
-### Upgrade 3: Eksekusi Keranjang — Beta-Weighted Position Sizing ($1/\beta$ Barbell)
-*Landasan: Qian (2005) & Taleb (2012)*
-- **Bobot Proporsional $1/\beta$ untuk Semua Saham Lolos Kualitas dengan Batas Maksimum**:
-  - Menghapus blokir kaku berbasis batas Beta/volatilitas pada saham yang lolos seleksi kualitas fundamental.
-  - Seluruh kandidat di Keranjang 1 dan Keranjang 2 diberi bobot posisi proporsional terhadap **Inverse Beta ($1/\beta_i$)** yang dikalibrasi dengan skor kualitasnya:
-    $$w_i \propto \frac{\text{QualityScore}_i}{\max(0.35, \beta_i)}$$
-  - Menerapkan **batas alokasi maksimum per saham (Max Position Cap)** dan batas likuiditas 5% ADTV 20D, sehingga saham ber-Beta tinggi otomatis mendapat porsi terukur yang lebih kecil (menangkap *asymmetric upside* ala Barbell Taleb tanpa risiko kehancuran portofolio), sementara saham ber-Beta rendah memegang bobot jangkar utama.
+## 4. Spesifikasi Pembaruan Matriks pada Ekspor PNG & PDF
+
+Tata letak kanvas ekspor tetap mempertahankan **format ringkas satu halaman beresolusi tinggi (1600px @ 2x Retina untuk PNG dan A4 Landscape untuk PDF)** dengan pembaruan penuh pada seluruh sel matriks:
+
+### A. Header Laporan & Baris 1 (4 Kartu Valuasi Inti)
+- **Sub-header Kicker**: Diperbarui menjadi `DEEP FUNDAMENTAL INSPECTOR · GP/A · SBN CURVE KE · ANTI-JUNK OCF/NI · JUSTIFIED PBV · 1/β BARBELL`.
+- **Kartu 1–3**: Tetap menampilkan **Nilai Intrinsik (Graham & DCF)**, **Batas Beli Aman (MoS 20%–30%)**, dan **Target Harga Wajar (12M)** beserta persentase *upside/downside*.
+- **Kartu 4 (`JUSTIFIED PBV & PER (DAMODARAN)`)**: Menggantikan kartu valuasi multipel lama dengan:
+  - Nilai utama: `PBV {impliedPbv}x (Justified {damodaranJustifiedPbv}x)`
+  - Sub-label: `PER {impliedPer}x (Wajar {joeliardiFairPer}x · Ke {dynamicCostOfEquityPct}%)`
+
+### B. Baris 2: 4 Kartu Pilar Skor Fundamental (Skor 0–100)
+1. **Pilar 1 — `1. Gross Profit & Anti-Junk`**:
+   - `GP/A (Novy-Marx): {gpa}% · ROE: {roe}%`
+   - `OCF/NI (Accrual): {ocfToNetIncome}x ({accrualLabel})`
+   - `Fwd Div Yield: {dividendYield}% (Payout {payoutRatio}%)`
+2. **Pilar 2 — `2. Kesehatan Neraca`**:
+   - `DER: {der}x (Net {netGear}x)` (atau `CASA & Likuiditas` untuk Perbankan)
+   - `Altman Z: {altmanZ} · Piotroski F: {piotroskiF}/9`
+   - `Beneish M-Score: {beneishM} ({status Manipulator / Non-Manipulator})`
+3. **Pilar 3 — `3. Justified PBV & Kurva SBN`**:
+   - `PBV: {impliedPbv}x vs Justified {damodaranJustifiedPbv}x`
+   - `Spot SBN Blended: {sbnSpotBlendedPct}% → Ke: {dynamicCostOfEquityPct}%`
+   - `Margin of Safety: {marginOfSafetyPct}%`
+4. **Pilar 4 — `4. 1/β Barbell Position Sizing`**:
+   - `Komposit: {compositeScore}/100 ({confidenceLabel})`
+   - `Propensitas 1/β: {inverseBetaWeight}x (Beta {beta})`
+   - `Batas Alokasi Maks: ≤{maxPortfolioWeightCapPct}% Portofolio`
+
+### C. Baris 3: 4 Strip Kuantitatif Akademik
+Menggantikan strip DuPont lama dengan 4 kotak metrik akademik baru:
+1. **`GP/A (NOVY-MARX) & DUPONT`**: Menampilkan `{gpa}%` dengan sub-baris `Margin {netMargin}% × Turnover {assetTurnover}x · ROE {roe}%`.
+2. **`KURVA SPOT SBN (1Y/5Y/10Y) & KE`**: Menampilkan `Ke {dynamicCostOfEquityPct}%` (hijau jika `EY >= Ke`, merah jika di bawah) dengan sub-baris `SBN 1Y {1Y}% · 5Y {5Y}% · 10Y {10Y}%`.
+3. **`ANTI-JUNK (QMJ ACCRUAL)`**: Menampilkan `OCF/NI {ocfToNetIncome}x` dengan lencana kualitas kas (`KAS SOLID (ANTI-JUNK)`, `AKRUAL WAJAR`, atau `RAWAN AKRUAL / JUNK`).
+4. **`JUSTIFIED PBV & SIZING 1/β`**: Menampilkan `Justified {damodaranJustifiedPbv}x` dengan sub-baris `Implied {impliedPbv}x · Propensitas 1/β: {inverseBetaWeight}x (Cap ≤{maxPortfolioWeightCapPct}%)`.
+
+### D. Panel Kiri Bawah: Sinkronisasi Narasi Komite AI & 4 Tahap Chain-of-Thought
+- **Pembaruan 4 Tahap Chain-of-Thought (Server, Fallback Deterministik, & Kanvas Ekspor)**:
+  1. `1. Audit Profitabilitas Kas (GP/A Novy-Marx & QMJ Accrual OCF/NI)`
+  2. `2. Audit Ketahanan Neraca, Likuiditas & Risiko Manipulasi Akuntansi`
+  3. `3. Audit Valuasi Intrinsik, Kurva Spot SBN (1Y/5Y/10Y) & Justified PBV`
+  4. `4. Sintesis Kuantitatif OOS, Rezim Volatilitas & 1/β Barbell Sizing`
+- **Sinkronisasi Angka Alokasi**: Kotak **Alokasi Portofolio** pada kartu strategi eksekusi dan narasi AI menggunakan plafon dinamis `1/β Barbell Sizing (Maks ≤{maxPortfolioWeightCapPct}% Portofolio, Beta {beta}x)` serta menyorot kata kunci metrik baru (`GP/A`, `OCF/NI`, `Justified PBV`, `Kurva Spot SBN`, `Ke`, `Propensitas 1/β`) pada perender teks kaya (*rich-text*) di kanvas ekspor.
+
+---
+
+## 5. Verifikasi & Kriteria Keberhasilan
+1. **Uji Sinkronisasi Live `^JKSE`**: Menjalankan pembaruan data pasar dan memverifikasi bahwa kartu `IDX Composite (^JKSE)` serta `Realized 30D Volatility` langsung berubah dari angka statis lama `5.073,77 (+0.46%)` ke kuotasi *live* terbaru, baik saat menekan **SYNC SEMUA LIVE**, tombol *refresh* pada kartu `^JKSE`, maupun saat *Pull/Push* GitHub Cloud.
+2. **Uji Konsistensi Ekspor PNG & PDF**: Memastikan gambar PNG dan dokumen PDF yang diunduh menampilkan 4 kartu valuasi, 4 pilar skor, 4 strip akademik, dan narasi Komite AI yang 100% identik dengan modal inspektor tanpa teks terpotong.
+3. **Verifikasi Build & Lint**: Memastikan kompilasi TypeScript, *linter*, dan bundel statis berjalan bersih tanpa *error*.

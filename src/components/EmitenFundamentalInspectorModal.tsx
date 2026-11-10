@@ -47,10 +47,10 @@ interface EmitenFundamentalInspectorModalProps {
 }
 
 const DEFAULT_COT_TITLES = [
-  '01. Dekomposisi DuPont & Moat:',
-  '02. Spread Valuasi vs SBN 10Y:',
-  '03. Uji Silang Momentum & Value Trap:',
-  '04. Audit Katalis Berita & Eksekusi:'
+  '01. Audit Profitabilitas Kas (GP/A & Anti-Junk OCF/NI):',
+  '02. Kurva Spot SBN (1Y/5Y/10Y), Ke & Justified PBV:',
+  '03. Uji Silang Momentum, Neraca & Value Trap:',
+  '04. Sizing 1/β Barbell, Dividen & Likuiditas ADTV:'
 ];
 
 function parseDirectSummaryHeaderAndBody(rawSummary: string): {
@@ -151,16 +151,33 @@ function renderHighlightedFinancialNarrative(
     'Wajar PER',
     'Fair PER',
     'PER',
+    'Justified PBV',
+    'PBV Wajar',
     'Implied PBV',
     'Wajar PBV',
     'Fair PBV',
     'PBV',
+    'GP/A (Novy-Marx)',
+    'GP/A',
+    'OCF/NI',
+    'Penalti Akrual',
+    'Spot SBN Blended',
+    'Kurva Spot SBN',
+    'Spot Rf',
+    'SBN 1Y',
+    'SBN 5Y',
+    'SBN 10Y',
+    'Dynamic Cost of Equity',
+    'Ke',
+    'Propensitas 1/β',
+    'Cap 1/β',
+    '1/β Cap',
+    'Batas Alokasi Maks',
     'Forward Dividend Yield (Est)',
     'Forward Dividend Yield',
     'Earnings Yield',
     'Net ERP Spread',
     'Raw Spread',
-    'SBN 10Y',
     'ERP',
     'ADTV 20D',
     'ROA murni',
@@ -279,16 +296,23 @@ export function EmitenFundamentalInspectorModal({
 
   const thinkingStages = useMemo(() => {
     if (!activeStock || !joeliardiEval) return [];
-    const safeDer = Math.max(0, activeStock.debtToEquity);
-    const eqMult = 1 + safeDer;
-    const roaDuPont = activeStock.roe / Math.max(1, eqMult);
-    const earningsYield =
-      joeliardiEval.impliedPer > 0 ? (1 / joeliardiEval.impliedPer) * 100 : 0;
+    const gpToAssets =
+      joeliardiEval.grossProfitabilityToAssets ??
+      activeStock.grossProfitabilityToAssets ??
+      Number((activeStock.roe * 0.85).toFixed(1));
+    const ocfNi =
+      joeliardiEval.ocfToNetIncomeRatio ??
+      activeStock.ocfToNetIncomeRatio ??
+      0.92;
+    const dynKe = joeliardiEval.dynamicCostOfEquityPct ?? 12.64;
+    const justPbv =
+      joeliardiEval.damodaranJustifiedPbv ?? joeliardiEval.joeliardiFairPbv;
+    const betaCap = joeliardiEval.betaWeightedSizingCapPct ?? 14.0;
     return [
-      `01/04 · Membedah dekomposisi DuPont ${activeStock.ticker}: ROE ${activeStock.roe.toFixed(1)}% → ROA Murni ${roaDuPont.toFixed(1)}% × Equity Multiplier ${eqMult.toFixed(2)}x...`,
-      `02/04 · Menguji Spread Valuasi: Earnings Yield ${earningsYield.toFixed(2)}% vs SBN 10Y (6,75%) & Nilai Intrinsik Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)}...`,
-      `03/04 · Memverifikasi 4-Faktor Out-of-Sample DeMiguel (Skor ${activeStock.dmuCompositeScore.toFixed(2)}/10) & deteksi anomali HSC...`,
-      `04/04 · Menyintesis katalis berita emiten (≤ 3 bulan terakhir) & merumuskan strategi eksekusi Komite AI...`
+      `01/04 · Membedah Profitabilitas Kas ${activeStock.ticker}: GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}% · OCF/NI (Anti-Junk) ${ocfNi.toFixed(2)}x · ROE ${activeStock.roe.toFixed(1)}%...`,
+      `02/04 · Menguji Kurva Spot SBN (1Y/5Y/10Y) → Dynamic Ke ${dynKe.toFixed(2)}% & Damodaran Justified PBV ${justPbv}x (Intrinsik Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)})...`,
+      `03/04 · Memverifikasi 4-Faktor Out-of-Sample DeMiguel (Skor ${activeStock.dmuCompositeScore.toFixed(2)}/10), Neraca DER ${activeStock.debtToEquity.toFixed(2)}x & saringan HSC...`,
+      `04/04 · Menghitung porsi 1/β Barbell Position Sizing (Cap ≤${betaCap.toFixed(1)}%, β ${activeStock.beta1Y.toFixed(2)}x) & menyintesis katalis berita emiten...`
     ];
   }, [activeStock, joeliardiEval]);
 

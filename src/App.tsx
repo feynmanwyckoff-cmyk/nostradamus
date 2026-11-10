@@ -273,7 +273,10 @@ export default function App() {
       overrideCash?: number,
       overrideStocks?: StockMetrics[],
       overrideBuffer?: number,
-      overrideVault?: EncryptedPortfolioVault | null
+      overrideVault?: EncryptedPortfolioVault | null,
+      overrideMacro?: MacroIndicator[],
+      overrideIhsgQuote?: { lastPrice: number; change1D: number },
+      overrideIhsgReturns?: number[]
     ): CloudStateBundle => ({
       schemaVersion: '3.0-DEMIGUEL-MF24',
       updatedAt: new Date().toISOString(),
@@ -284,9 +287,9 @@ export default function App() {
       cashReserveIdr: overrideCash ?? cashReserveIdr,
       holdings: overrideHoldings ?? holdings,
       stocks: overrideStocks ?? stocks,
-      macroIndicators,
-      liveIhsgQuote,
-      liveIhsgReturns,
+      macroIndicators: overrideMacro ?? macroIndicators,
+      liveIhsgQuote: overrideIhsgQuote ?? liveIhsgQuote,
+      liveIhsgReturns: overrideIhsgReturns ?? liveIhsgReturns,
       encryptedVault: (overrideVault ?? securityVault) || undefined
     }),
     [
@@ -397,9 +400,33 @@ export default function App() {
         if (typeof bundle.capitalIdr === 'number') {
           setCapitalIdr(bundle.capitalIdr);
         }
-        if (bundle.liveIhsgQuote?.lastPrice) {
-          setLiveIhsgQuote(bundle.liveIhsgQuote);
+
+        const nextQuote =
+          bundle.liveIhsgQuote && bundle.liveIhsgQuote.lastPrice > 0
+            ? bundle.liveIhsgQuote
+            : liveIhsgQuote;
+        const nextRets =
+          Array.isArray(bundle.liveIhsgReturns) && bundle.liveIhsgReturns.length >= 15
+            ? bundle.liveIhsgReturns
+            : liveIhsgReturns;
+        const nextMacro =
+          Array.isArray(bundle.macroIndicators) && bundle.macroIndicators.length > 0
+            ? bundle.macroIndicators
+            : macroIndicators;
+        const nextThreshold =
+          typeof bundle.thresholdAnnVol === 'number' && bundle.thresholdAnnVol >= 8
+            ? bundle.thresholdAnnVol
+            : thresholdAnnVol;
+
+        setLiveIhsgQuote(nextQuote);
+        setLiveIhsgReturns(nextRets);
+        setMacroIndicators(nextMacro);
+        if (typeof bundle.thresholdAnnVol === 'number' && bundle.thresholdAnnVol >= 8) {
+          setThresholdAnnVol(bundle.thresholdAnnVol);
         }
+        setRegime(
+          computeMarketRegime(nextRets, nextThreshold, nextMacro, nextQuote, 'LIVE')
+        );
         const cfgScope = getActiveRepoScope(cfg);
         if (isVaultMatchingRepoScope(bundle.encryptedVault, cfgScope)) {
           setSecurityVault(bundle.encryptedVault!);
@@ -865,7 +892,9 @@ export default function App() {
             setSyncStatusLabel(`Syncing ${tickerLabel}...`);
           },
           true,
-          priorityHoldingTickers
+          priorityHoldingTickers,
+          liveIhsgQuote,
+          liveIhsgReturns
         ),
         fetchLiveFinancialNewsRss(DEFAULT_NEWS_SENTIMENT)
       ]);
@@ -902,7 +931,16 @@ export default function App() {
       setLastFullSyncDateTime(fullTimestampStr);
 
       if (isGitHubCloudConfigured(githubConfig) && githubConfig.autoSyncOnEdit) {
-        const nextBundle = buildCloudBundle(undefined, undefined, rerankedStocks, undefined);
+        const nextBundle = buildCloudBundle(
+          undefined,
+          undefined,
+          rerankedStocks,
+          undefined,
+          undefined,
+          updatedMacro,
+          activeQuote,
+          activeRets
+        );
         handlePushToGitHub(githubConfig, nextBundle, true);
       }
 
@@ -1366,6 +1404,8 @@ export default function App() {
                   dataSourceLabel={dataSourceLabel}
                   rebalanceBufferPct={rebalanceBufferPct}
                   isIhsgSynced={liveSyncedStockCount > 0}
+                  isRefreshingIhsg={isMasterSyncing}
+                  onRefreshIhsg={() => handleMasterSyncAll(false)}
                   onUpdateRebalanceBuffer={handleUpdateRebalanceBuffer}
                   onSelectSimRegime={handleSelectSimulatedRegime}
                   onUpdateThreshold={handleUpdateThreshold}

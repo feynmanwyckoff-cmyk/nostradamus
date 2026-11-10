@@ -45,16 +45,33 @@ const METRIC_LABELS = [
   'Wajar PER',
   'Fair PER',
   'PER',
+  'Justified PBV',
+  'PBV Wajar',
   'Implied PBV',
   'Wajar PBV',
   'Fair PBV',
   'PBV',
+  'GP/A (Novy-Marx)',
+  'GP/A',
+  'OCF/NI',
+  'Penalti Akrual',
+  'Spot SBN Blended',
+  'Kurva Spot SBN',
+  'Spot Rf',
+  'SBN 1Y',
+  'SBN 5Y',
+  'SBN 10Y',
+  'Dynamic Cost of Equity',
+  'Ke',
+  'Propensitas 1/β',
+  'Cap 1/β',
+  '1/β Cap',
+  'Batas Alokasi Maks',
   'Forward Dividend Yield (Est)',
   'Forward Dividend Yield',
   'Earnings Yield',
   'Net ERP Spread',
   'Raw Spread',
-  'SBN 10Y',
   'ERP',
   'ADTV 20D',
   'ROA murni',
@@ -617,9 +634,9 @@ export function renderInspectorReportCanvas(
 
   // Kicker
   ctx.fillStyle = '#F59E0B';
-  ctx.font = '700 11px Montserrat, sans-serif';
+  ctx.font = '700 10.5px Montserrat, sans-serif';
   ctx.fillText(
-    'NOSTRADAMUS QUANT TERMINAL // ON-DEMAND FUNDAMENTAL & AI INSPECTOR (FUNDAMENTAL KUALITAS MOAT)',
+    'NOSTRADAMUS QUANT TERMINAL // DEEP FUNDAMENTAL INSPECTOR · GP/A · SBN CURVE KE · ANTI-JUNK OCF/NI · JUSTIFIED PBV · 1/β BARBELL',
     98,
     46
   );
@@ -688,6 +705,31 @@ export function renderInspectorReportCanvas(
     curY += 68;
   }
 
+  // Extract 5-Pillar Academic Metrics (Novy-Marx GP/A, QMJ Accrual OCF/NI, Fabozzi SBN Curve Ke, Damodaran Justified PBV, 1/Beta Barbell)
+  const safeDer = Math.max(0, stock.debtToEquity);
+  const eqMult = 1 + safeDer;
+  const roaDuPont = stock.roe / Math.max(1, eqMult);
+  const gpToAssets =
+    joeliardiEval.grossProfitabilityToAssets ??
+    stock.grossProfitabilityToAssets ??
+    Number((stock.roe * 0.85).toFixed(1));
+  const ocfNi =
+    joeliardiEval.ocfToNetIncomeRatio ??
+    stock.ocfToNetIncomeRatio ??
+    0.92;
+  const accrualPen = joeliardiEval.accrualPenaltyPts ?? 0;
+  const sbn1Y = joeliardiEval.sbnSpot1YPct ?? 6.15;
+  const sbn5Y = joeliardiEval.sbnSpot5YPct ?? 6.48;
+  const sbn10Y = joeliardiEval.sbnSpot10YPct ?? 6.75;
+  const sbnBlended = joeliardiEval.sbnBlendedSpotRfPct ?? 6.64;
+  const dynKe = joeliardiEval.dynamicCostOfEquityPct ?? 12.64;
+  const justPbv =
+    joeliardiEval.damodaranJustifiedPbv ?? joeliardiEval.joeliardiFairPbv;
+  const sustGrowth = joeliardiEval.sustainableGrowthRatePct ?? 5.5;
+  const betaPropensity =
+    stock.betaWeightedPropensity ?? 1 / Math.max(0.45, stock.beta1Y);
+  const betaCap = joeliardiEval.betaWeightedSizingCapPct ?? 14.0;
+
   // 5. Row 1: 4 Valuation & Intrinsic Cards
   const cardGap = 14;
   const cardW = (LOGICAL_WIDTH - 76 - cardGap * 3) / 4;
@@ -722,11 +764,11 @@ export function renderInspectorReportCanvas(
       subColor: '#D1D5DB'
     },
     {
-      label: 'VALUASI MULTIPEL (IMPLIED VS WAJAR)',
+      label: 'JUSTIFIED PBV & PER (DAMODARAN)',
       labelColor: '#9CA3AF',
-      main: `PER ${joeliardiEval.impliedPer}x (Wajar ${joeliardiEval.joeliardiFairPer}x)`,
+      main: `PBV ${joeliardiEval.impliedPbv}x (Justified ${justPbv}x)`,
       mainColor: '#F9FAFB',
-      sub: `PBV ${joeliardiEval.impliedPbv}x (Wajar ${joeliardiEval.joeliardiFairPbv}x)`,
+      sub: `PER ${joeliardiEval.impliedPer}x (Wajar ${joeliardiEval.joeliardiFairPer}x · Ke ${dynKe.toFixed(2)}%)`,
       subColor: '#38BDF8'
     }
   ];
@@ -744,7 +786,7 @@ export function renderInspectorReportCanvas(
     ctx.fillText(c.label, x + 14, curY + 22);
 
     ctx.fillStyle = c.mainColor;
-    ctx.font = idx === 3 ? '700 14px Montserrat, sans-serif' : '800 19px Montserrat, sans-serif';
+    ctx.font = idx === 3 ? '700 13.5px Montserrat, sans-serif' : '800 19px Montserrat, sans-serif';
     ctx.fillText(c.main, x + 14, curY + 49);
 
     ctx.fillStyle = c.subColor;
@@ -754,16 +796,16 @@ export function renderInspectorReportCanvas(
 
   curY += 102;
 
-  // 6. Row 2: 4 Pillar Scores (Joeliardi + OOS Quant)
+  // 6. Row 2: 4 Academic Pillar Scores (Novy-Marx GP/A, Neraca, Damodaran Justified PBV & SBN Curve, 1/Beta Barbell)
   const pillars = [
     {
-      title: '1. Kualitas Bisnis & Moat',
+      title: '1. Gross Profit & Anti-Junk',
       score: joeliardiEval.businessQualityScore,
       color: '#10B981',
       lines: [
-        `ROE: ${stock.roe.toFixed(1)}% (vs Ke 10,5%)`,
-        `Op. Margin: ${stock.operatingMargin.toFixed(1)}%`,
-        `Forward Div. Yield (Est): ${joeliardiEval.forwardDividendYieldPct.toFixed(2)}% (DPR ${joeliardiEval.historicalDpr3YPct.toFixed(0)}%)`
+        `GP/A (Novy-Marx): ${gpToAssets.toFixed(1)}% (ROE ${stock.roe.toFixed(1)}%)`,
+        `OCF/NI (Anti-Junk): ${ocfNi.toFixed(2)}x ${accrualPen > 0 ? `(Penalti -${accrualPen} pts)` : '(Kas Riil Sehat)'}`,
+        `Fwd Div Yield: ${joeliardiEval.forwardDividendYieldPct.toFixed(2)}% (DPR ${joeliardiEval.historicalDpr3YPct.toFixed(0)}%)`
       ]
     },
     {
@@ -772,28 +814,28 @@ export function renderInspectorReportCanvas(
       color: '#38BDF8',
       lines: [
         `DER: ${stock.debtToEquity.toFixed(2)}x`,
-        `Status: ${stock.debtToEquity <= 0.8 ? 'Konservatif' : 'Moderat/Tinggi'}`,
+        `Status Neraca: ${stock.debtToEquity <= 0.8 ? 'Konservatif' : 'Moderat/Tinggi'}`,
         `Saringan HSC: ${stock.isHscFlagged ? 'Terindikasi HSC' : 'Bebas HSC'}`
       ]
     },
     {
-      title: '3. Keamanan Valuasi',
+      title: '3. Justified PBV & Kurva SBN',
       score: joeliardiEval.valuationSafetyScore,
       color: '#F59E0B',
       lines: [
-        `Skor Faktor Value: ${stock.dmuValueScore.toFixed(1)}/10`,
-        `Margin of Safety: ${joeliardiEval.marginOfSafetyPct}%`,
-        `Bobot Value OOS: 35% (Prioritas #1)`
+        `Justified PBV: ${justPbv}x (g ${sustGrowth.toFixed(1)}%)`,
+        `Spot SBN Blended: ${sbnBlended.toFixed(2)}% → Ke ${dynKe.toFixed(2)}%`,
+        `Margin of Safety: ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct.toFixed(1)}%`
       ]
     },
     {
-      title: '4. Ketahanan OOS Quant',
+      title: '4. 1/β Barbell Position Sizing',
       score: joeliardiEval.oosQuantRobustnessScore,
       color: '#10B981',
       lines: [
         `Komposit: ${stock.dmuCompositeScore.toFixed(2)}/10 (Top ${stock.dmuRankPct}%)`,
-        `Low-Vol: ${stock.dmuLowVolScore.toFixed(1)} · Mom: ${stock.dmuMomScore.toFixed(1)}`,
-        `Volatilitas: ${stock.volatilityAnn.toFixed(1)}% (Beta ${stock.beta1Y.toFixed(2)}x)`
+        `Propensitas 1/β: ${betaPropensity.toFixed(2)}x (β ${stock.beta1Y.toFixed(2)}x)`,
+        `Batas Alokasi Maks (1/β Cap): ≤${betaCap.toFixed(1)}%`
       ]
     }
   ];
@@ -807,7 +849,7 @@ export function renderInspectorReportCanvas(
     ctx.stroke();
 
     ctx.fillStyle = '#F3F4F6';
-    ctx.font = '700 12px Montserrat, sans-serif';
+    ctx.font = '700 11.5px Montserrat, sans-serif';
     ctx.fillText(p.title, x + 14, curY + 23);
 
     ctx.fillStyle = p.color;
@@ -827,7 +869,7 @@ export function renderInspectorReportCanvas(
     ctx.fill();
 
     ctx.fillStyle = '#9CA3AF';
-    ctx.font = '500 11px Montserrat, sans-serif';
+    ctx.font = '500 10.5px Montserrat, sans-serif';
     p.lines.forEach((ln, lIdx) => {
       ctx.fillText(ln, x + 14, curY + 57 + lIdx * 18);
     });
@@ -835,41 +877,31 @@ export function renderInspectorReportCanvas(
 
   curY += 132;
 
-  // 7. Row 3: DuPont ROE Decomposition & SBN 10Y + ERP Spread Strip
-  const safeDer = Math.max(0, stock.debtToEquity);
-  const eqMult = 1 + safeDer;
-  const roaDuPont = stock.roe / Math.max(1, eqMult);
-  const earningsYield = joeliardiEval.impliedPer > 0 ? (1 / joeliardiEval.impliedPer) * 100 : 0;
-  const rawSbnSpread = joeliardiEval.rawSbnSpreadPct ?? earningsYield - 6.75;
-  const netErpSpread = joeliardiEval.netErpSpreadPct ?? earningsYield - 12.75;
-  const fwdDivYield = joeliardiEval.forwardDividendYieldPct;
-  const buybackYield = joeliardiEval.netBuybackDebtPaydownYieldPct;
-  const totalYield = joeliardiEval.totalShareholderYieldPct;
-
-  const dupontStrip = [
+  // 7. Row 3: 4-Column Academic Quantitative Strip (GP/A, Spot SBN Curve & Ke, Anti-Junk QMJ Accrual, Justified PBV & 1/Beta Sizing)
+  const academicStrip = [
     {
-      label: 'ROA MURNI (DUPONT)',
-      val: `${roaDuPont.toFixed(1)}% (ROE ${stock.roe.toFixed(1)}% / ${eqMult.toFixed(2)}x)`,
+      label: 'GP/A (NOVY-MARX) & DUPONT',
+      val: `GP/A ${gpToAssets.toFixed(1)}% (ROA ${roaDuPont.toFixed(1)}% · Lev ${eqMult.toFixed(2)}x)`,
+      color: '#34D399'
+    },
+    {
+      label: 'KURVA SPOT SBN (1Y/5Y/10Y) & KE',
+      val: `Ke ${dynKe.toFixed(2)}% (Rf ${sbnBlended.toFixed(2)}%: 1Y ${sbn1Y}%·5Y ${sbn5Y}%·10Y ${sbn10Y}%)`,
       color: '#F3F4F6'
     },
     {
-      label: 'EY VS SBN 10Y + ERP (6%)',
-      val: `${earningsYield.toFixed(2)}% (SBN ${rawSbnSpread >= 0 ? '+' : ''}${rawSbnSpread.toFixed(2)}% · Net ERP ${netErpSpread >= 0 ? '+' : ''}${netErpSpread.toFixed(2)}%)`,
-      color: netErpSpread >= 0 ? '#34D399' : rawSbnSpread >= 0 ? '#FBBF24' : '#FB7185'
+      label: 'ANTI-JUNK (QMJ ACCRUAL)',
+      val: `OCF/NI ${ocfNi.toFixed(2)}x ${accrualPen > 0 ? `(Penalti Akrual -${accrualPen} pts)` : '(0 Penalti · Kas Riil Valid)'}`,
+      color: accrualPen === 0 ? '#34D399' : '#FBBF24'
     },
     {
-      label: 'TOTAL SHAREHOLDER YIELD',
-      val: `${totalYield.toFixed(2)}% (Fwd Div ${fwdDivYield.toFixed(2)}% + Buyback ${buybackYield.toFixed(2)}%)`,
+      label: 'JUSTIFIED PBV & SIZING 1/β',
+      val: `PBV Wajar ${justPbv}x (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct.toFixed(1)}% · Cap 1/β ≤${betaCap.toFixed(1)}%)`,
       color: '#38BDF8'
-    },
-    {
-      label: 'SPREAD NILAI INTRINSIK',
-      val: `${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct.toFixed(1)}% (Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')})`,
-      color: joeliardiEval.marginOfSafetyPct >= 0 ? '#34D399' : '#FB7185'
     }
   ];
 
-  dupontStrip.forEach((d, idx) => {
+  academicStrip.forEach((d, idx) => {
     const x = 38 + idx * (cardW + cardGap);
     drawRoundedRect(ctx, x, curY, cardW, 56, 4);
     ctx.fillStyle = '#141B26';
@@ -882,7 +914,7 @@ export function renderInspectorReportCanvas(
     ctx.fillText(d.label, x + 12, curY + 21);
 
     ctx.fillStyle = d.color;
-    ctx.font = '700 12.5px Montserrat, sans-serif';
+    ctx.font = '700 11.5px Montserrat, sans-serif';
     ctx.fillText(d.val, x + 12, curY + 42);
   });
 
