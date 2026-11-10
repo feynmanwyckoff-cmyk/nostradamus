@@ -1,6 +1,6 @@
 {
   "schemaVersion": "3.0-DEMIGUEL-MF24",
-  "updatedAt": "2026-11-10T05:12:25.445Z",
+  "updatedAt": "2026-11-10T05:13:23.095Z",
   "strategyName": "Vol-Managed Multifactor + 40% Buffer",
   "rebalanceBufferPct": 40,
   "thresholdAnnVol": 18,
@@ -68,6 +68,13 @@
       "lots": 34,
       "avgBuyPrice": 166.96,
       "addedAt": "2026-11-09",
+      "notes": "Active Multifactor Position"
+    },
+    {
+      "ticker": "BTPS",
+      "lots": 15,
+      "avgBuyPrice": 1031.54,
+      "addedAt": "2026-11-10",
       "notes": "Active Multifactor Position"
     }
   ],
@@ -31481,9 +31488,9 @@
       "symbol": "IDR=X",
       "label": "USD / IDR Spot",
       "category": "FX_RATES",
-      "value": 18039,
+      "value": 18050,
       "unit": "Rp",
-      "change1D": 0,
+      "change1D": 0.06,
       "ihsgImpact": "BEARISH",
       "transmissionNote": "Tekanan depresiasi Rupiah memicu penyesuaian eksposur ekuitas ke cadangan kas.",
       "isLiveFetched": true
@@ -31493,9 +31500,9 @@
       "symbol": "DX-Y.NYB",
       "label": "US Dollar Index (DXY)",
       "category": "FX_RATES",
-      "value": 101.68,
+      "value": 101.67,
       "unit": "pts",
-      "change1D": 0.03,
+      "change1D": 0.02,
       "ihsgImpact": "BULLISH",
       "transmissionNote": "Pelemahan indeks DXY memberi ruang stabilisasi bagi mata uang Asia.",
       "isLiveFetched": true
@@ -31541,9 +31548,9 @@
       "symbol": "^HSI",
       "label": "Hang Seng Index",
       "category": "GLOBAL_RISK",
-      "value": 24533.08,
+      "value": 24507.11,
       "unit": "pts",
-      "change1D": 0.34,
+      "change1D": 0.24,
       "ihsgImpact": "BULLISH",
       "transmissionNote": "Penguatan bursa Asia Timur menopang permintaan komoditas ekspor Indonesia.",
       "isLiveFetched": true
@@ -31565,9 +31572,9 @@
       "symbol": "GC=F",
       "label": "Gold Spot (XAU)",
       "category": "COMMODITIES",
-      "value": 4132.6,
+      "value": 4120.1,
       "unit": "USD/oz",
-      "change1D": 0.44,
+      "change1D": 0.14,
       "ihsgImpact": "BULLISH",
       "transmissionNote": "Rekor harga emas menjadi lindung nilai & katalis emiten tambang emas/tembaga (AMMN, ANTM).",
       "isLiveFetched": true
@@ -31577,9 +31584,9 @@
       "symbol": "BZ=F",
       "label": "Brent Crude Oil",
       "category": "COMMODITIES",
-      "value": 92.17,
+      "value": 91.38,
       "unit": "USD/bbl",
-      "change1D": -0.43,
+      "change1D": -1.28,
       "ihsgImpact": "NEUTRAL",
       "transmissionNote": "Harga minyak tinggi menguntungkan MEDC/AKRA namun perlu dipantau terhadap inflasi.",
       "isLiveFetched": true
@@ -31610,11 +31617,10 @@
     }
   ],
   "liveIhsgQuote": {
-    "lastPrice": 5137.9,
-    "change1D": 1.26
+    "lastPrice": 5145.047,
+    "change1D": 1.41
   },
   "liveIhsgReturns": [
-    -0.43,
     -0.83,
     -1.02,
     0.46,
@@ -31643,7 +31649,8 @@
     0.32,
     2.25,
     0.4,
-    1.73
+    0.46,
+    1.4
   ],
   "encryptedVault": {
     "version": 1,
