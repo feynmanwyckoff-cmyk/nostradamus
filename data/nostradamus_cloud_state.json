@@ -1,6 +1,6 @@
 {
   "schemaVersion": "3.0-DEMIGUEL-MF24",
-  "updatedAt": "2026-11-11T07:22:43.258Z",
+  "updatedAt": "2026-11-11T07:28:44.231Z",
   "strategyName": "Vol-Managed Multifactor + 40% Buffer",
   "rebalanceBufferPct": 40,
   "thresholdAnnVol": 18,
@@ -58,6 +58,44 @@
     }
   ],
   "stocks": [
+    {
+      "ticker": "FAST",
+      "idxTicker": "IDX:FAST",
+      "yfTicker": "FAST.JK",
+      "name": "Graha FAST Indonesia Tbk",
+      "sector": "Consumer Cyclicals",
+      "lastPrice": 306,
+      "change1D": 3.38,
+      "return30D": -23.12,
+      "beta1Y": 0.32,
+      "volatilityAnn": 65,
+      "roe": 8.3,
+      "debtToEquity": 0.73,
+      "operatingMargin": 11.2,
+      "isLiveFetched": true,
+      "isLiquid": true,
+      "dividendYieldPct": 0,
+      "lastSyncedAt": "14.27.51",
+      "dmuMomScore": 1,
+      "dmuLowVolScore": 4.3,
+      "dmuValueScore": 5.2,
+      "dmuSizeScore": 5.7,
+      "dmuCompositeScore": 2.13,
+      "grossProfitabilityToAssets": 12.5,
+      "ocfToNetIncomeRatio": 0.92,
+      "accrualRatioToAssets": 0.41,
+      "accrualPenaltyScore": 0,
+      "isHscFlagged": true,
+      "hscSource": "AUTO_QUANT",
+      "hscReason": "Auto HSC: Volatilitas ekstrem (>40%) non-institusional ber-Value rendah",
+      "betaWeightedPropensity": 0.1,
+      "dmuRankPct": 88,
+      "dmuZone": "ROTATE_OUT",
+      "qmjScore": 2.1,
+      "babScore": 4.3,
+      "hrpPropensity": 0.1,
+      "role": "AVOID_JUNK"
+    },
     {
       "ticker": "DRMA",
       "idxTicker": "IDX:DRMA",
@@ -20139,44 +20177,6 @@
       "role": "AVOID_JUNK"
     },
     {
-      "ticker": "FAST",
-      "idxTicker": "IDX:FAST",
-      "yfTicker": "FAST.JK",
-      "name": "Graha FAST Indonesia Tbk",
-      "sector": "Consumer Cyclicals",
-      "lastPrice": 306,
-      "change1D": 3.38,
-      "return30D": -23.12,
-      "beta1Y": 0.32,
-      "volatilityAnn": 65,
-      "roe": 8.3,
-      "debtToEquity": 0.73,
-      "operatingMargin": 11.2,
-      "isLiveFetched": true,
-      "isLiquid": true,
-      "dividendYieldPct": 0,
-      "lastSyncedAt": "14.22.23",
-      "dmuMomScore": 1,
-      "dmuLowVolScore": 4.3,
-      "dmuValueScore": 5.2,
-      "dmuSizeScore": 5.7,
-      "dmuCompositeScore": 2.13,
-      "grossProfitabilityToAssets": 12.5,
-      "ocfToNetIncomeRatio": 0.92,
-      "accrualRatioToAssets": 0.41,
-      "accrualPenaltyScore": 0,
-      "isHscFlagged": true,
-      "hscSource": "AUTO_QUANT",
-      "hscReason": "Auto HSC: Volatilitas ekstrem (>40%) non-institusional ber-Value rendah",
-      "betaWeightedPropensity": 0.1,
-      "dmuRankPct": 88,
-      "dmuZone": "ROTATE_OUT",
-      "qmjScore": 2.1,
-      "babScore": 4.3,
-      "hrpPropensity": 0.1,
-      "role": "AVOID_JUNK"
-    },
-    {
       "ticker": "FILM",
       "idxTicker": "IDX:FILM",
       "yfTicker": "FILM.JK",
@@ -36249,72 +36249,66 @@
       "symbol": "IDR=X",
       "label": "USD / IDR Spot",
       "category": "FX_RATES",
-      "value": 18039,
+      "value": 18080,
       "unit": "Rp",
-      "change1D": 0,
+      "change1D": 3.1,
       "ihsgImpact": "BEARISH",
-      "transmissionNote": "Tekanan depresiasi Rupiah memicu penyesuaian eksposur ekuitas ke cadangan kas.",
-      "isLiveFetched": true
+      "transmissionNote": "Tekanan depresiasi Rupiah memicu penyesuaian eksposur ekuitas ke cadangan kas."
     },
     {
       "id": "dxy",
       "symbol": "DX-Y.NYB",
       "label": "US Dollar Index (DXY)",
       "category": "FX_RATES",
-      "value": 101.66,
+      "value": 101.22,
       "unit": "pts",
-      "change1D": 0.01,
+      "change1D": -0.29,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Pelemahan indeks DXY memberi ruang stabilisasi bagi mata uang Asia.",
-      "isLiveFetched": true
+      "transmissionNote": "Pelemahan indeks DXY memberi ruang stabilisasi bagi mata uang Asia."
     },
     {
       "id": "us10y",
       "symbol": "^TNX",
       "label": "US 10Y Treasury Yield",
       "category": "FX_RATES",
-      "value": 4.86,
+      "value": 4.89,
       "unit": "%",
-      "change1D": 0.1,
+      "change1D": -1.17,
       "ihsgImpact": "BEARISH",
-      "transmissionNote": "Yield US 10Y di atas 4.5% menjaga cost of equity pasar berkembang tetap ketat.",
-      "isLiveFetched": true
+      "transmissionNote": "Yield US 10Y di atas 4.5% menjaga cost of equity pasar berkembang tetap ketat."
     },
     {
       "id": "vix",
       "symbol": "^VIX",
       "label": "CBOE VIX Volatility",
       "category": "GLOBAL_RISK",
-      "value": 20.18,
+      "value": 16.61,
       "unit": "pts",
-      "change1D": 1.3,
+      "change1D": -20.26,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Penurunan tajam VIX meredakan kepanikan ekor (tail-risk) di bursa global.",
-      "isLiveFetched": true
+      "transmissionNote": "Penurunan tajam VIX meredakan kepanikan ekor (tail-risk) di bursa global."
     },
     {
       "id": "sp500",
       "symbol": "^GSPC",
       "label": "S&P 500 Index",
       "category": "GLOBAL_RISK",
-      "value": 7549.94,
+      "value": 7688.62,
       "unit": "pts",
-      "change1D": 2.35,
+      "change1D": 1.58,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Reli ekuitas AS memberikan dukungan sentimen jangka pendek ke bursa regional.",
-      "isLiveFetched": true
+      "transmissionNote": "Reli ekuitas AS memberikan dukungan sentimen jangka pendek ke bursa regional."
     },
     {
       "id": "hsi",
       "symbol": "^HSI",
       "label": "Hang Seng Index",
       "category": "GLOBAL_RISK",
-      "value": 24557.04,
+      "value": 24779.33,
       "unit": "pts",
-      "change1D": 0.44,
+      "change1D": 3.59,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Penguatan bursa Asia Timur menopang permintaan komoditas ekspor Indonesia.",
-      "isLiveFetched": true
+      "transmissionNote": "Penguatan bursa Asia Timur menopang permintaan komoditas ekspor Indonesia."
     },
     {
       "id": "coal",
@@ -36325,32 +36319,29 @@
       "unit": "USD/t",
       "change1D": 1.25,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Menopang faktor Value & arus kas bebas emiten batubara (ITMG, PTBA, ADRO).",
-      "isLiveFetched": true
+      "transmissionNote": "Menopang faktor Value & arus kas bebas emiten batubara (ITMG, PTBA, ADRO)."
     },
     {
       "id": "gold",
       "symbol": "GC=F",
       "label": "Gold Spot (XAU)",
       "category": "COMMODITIES",
-      "value": 4103.1,
+      "value": 4136.5,
       "unit": "USD/oz",
-      "change1D": -0.28,
+      "change1D": 1.56,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Rekor harga emas menjadi lindung nilai & katalis emiten tambang emas/tembaga (AMMN, ANTM).",
-      "isLiveFetched": true
+      "transmissionNote": "Rekor harga emas menjadi lindung nilai & katalis emiten tambang emas/tembaga (AMMN, ANTM)."
     },
     {
       "id": "brent",
       "symbol": "BZ=F",
       "label": "Brent Crude Oil",
       "category": "COMMODITIES",
-      "value": 90.35,
+      "value": 94.19,
       "unit": "USD/bbl",
-      "change1D": -2.4,
+      "change1D": -0.45,
       "ihsgImpact": "NEUTRAL",
-      "transmissionNote": "Harga minyak tinggi menguntungkan MEDC/AKRA namun perlu dipantau terhadap inflasi.",
-      "isLiveFetched": true
+      "transmissionNote": "Harga minyak tinggi menguntungkan MEDC/AKRA namun perlu dipantau terhadap inflasi."
     },
     {
       "id": "nickel",
@@ -36361,8 +36352,7 @@
       "unit": "USD/t",
       "change1D": 0.95,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Mendukung margin emiten hilirisasi nikel (INCO, NCKL, ANTM).",
-      "isLiveFetched": true
+      "transmissionNote": "Mendukung margin emiten hilirisasi nikel (INCO, NCKL, ANTM)."
     },
     {
       "id": "cpo",
@@ -36373,8 +36363,7 @@
       "unit": "MYR/t",
       "change1D": 1.4,
       "ihsgImpact": "BULLISH",
-      "transmissionNote": "Mandatori biodiesel B40 menopang harga jual rata-rata (ASP) emiten sawit (TAPG).",
-      "isLiveFetched": true
+      "transmissionNote": "Mandatori biodiesel B40 menopang harga jual rata-rata (ASP) emiten sawit (TAPG)."
     }
   ],
   "liveIhsgQuote": {
@@ -36417,9 +36406,9 @@
     "version": 1,
     "saltBase64": "VnsorMcDCpdVWdhPJy1n1A==",
     "verifierHashBase64": "4n2Mmvj0WYbqgIZRTAlg7solExkFmaKEMwbBRhc0KNM=",
-    "ivBase64": "Lvwldwp5jFXZvcva",
-    "cipherTextBase64": "/M+7kLvor/0WYit296mtiUVejpukDqRuz8D2srbbXKO52qesY4mhCw6kf5SJ7pi4LVx0tsqxBY/TLCjS8DNrQX+h3gG7Rk7Eh15Lsb2JGfkrD4fV0rtY1JSvGXurfzIAo3HPI8CH8oVkq1inquVWT1s0aAMK+Jg5CreS/Sz8jAXjJn8B/URNy7fetlfAoQsi+xlAvm+4Fk6KPW7Xb1VWlh8M5b8FxxI0oJ2lYfR1qqxMpTnqCJoVQJ4IXeeCgFzzojcfTbqjSQhr0s2a1zYYZGvA+WKVVNLP9iWcaZMm25YsJqsbstD24pU+9nBd2SY8wbY7B7W1x9BwQ+fcQzk4xiWSOkbmh1IjN7kRGzEeinZnxbBGla1cADbFQhqrSu3HIrp6+MxcFvQ3CBoFF09qVFNOVzYgBgom7Tq0g9ng6PSUzBfo71zKqNSYwtjSgu33RtCKcOycyV6TzpWlMTK79xzf2yf3sjevVovmx8IgZqGnTfBReZjhGvQdVT5Z2umEF7LLNTDS8ipPLNjO7MbgQFFIYsTbA/61fYX70vyDKfgfzhF1IDFIcyAQUaZ+G14X3RzQYcj5MA+dgkN2lpRKyQu1u1/r/4YkDhI//AwVQ9aXkFGAhC5p5LChA0DBfBkbXhn+Bc8hAjo5SRoB5QtmBYu7POItfG+WdkZL6IGO61n34RNG3eaYj4Ve5268Ef+4QjArnW/zQmj2CheRAQQEEr2yBhmOnd87xl2Flz7B5XfONDU+tVuAawstLVaupmHx4a5gXAgWzLEbB9Oe0nTHbEQbSMe9ydlzzfRKxpqfMCTay/cOi5BFdbNOCG/jBQVvaJ43SuJrB0VhrrqwpaOhuKyQTePpjWDcDzHeqgVHrChoFW/NV38rn9TS5VAgrs05Iq1Od3Pof52z/8oam/qnEzjWVa6x/L+4n1suDMuSO//c6aX/LYs47y1u5G+PmobAFHcbEWM9YCfSGet5z68mxflTb0oW+ww1pMarKz0k0KU/I/M5oatg17qXEJABpEbB71CnoLlZKsOd3JinjVro4fcLttlSZR4P564WV09cuqO4/C/aW251ZBROMk59i4ZS7SZicuqaozjZ28+lUfyn3ValTitv2FDZjjKBaWdesWHSJA==",
-    "updatedAt": "2026-11-11T04:37:55.507Z",
+    "ivBase64": "ts5n4mImhW6dSo83",
+    "cipherTextBase64": "Uzg95nzE4DEpkb9YQGKoAU++NZYJhVWXrTSeiH5S35ztzfDFNv0/k3Ff8jmr74WCkm+7++nGlX7CAhQ1noWv7GW9e9h3OklFhV2KJxAIka2+Sv8S832gBwFpO2YCHr3Biph9DKiTN9teDSWSxPBNcT3x2t21RiJlt7yHwPHSYUWbaF9yyI1M2oSO/GPULva5EHy8TJvpREAokP+h6JBCbvWKb4G1bUkOO+zI1tJTDyWO7TlvIr0fAcRmpUGmoOyeXECNMOLU9OZSLzdcdTFcpB2/C4qo01FECZSkh0NuOVJltJVi3RxExvL+2r0zanUQmAErd+t50mlEkXAf6z/0EdnXYT+riHk5dQ1VD26ApEuuJdEU0X4JENo/JZYc+Qgr79CD9akhaZl+/ETWusAdhfUPBmNOzK4HZH/sn9pEgH1OKnJeREUxYKDPTfbyJWpCIFdeelf7+wfo++Cdw1UMozllmLjfwftcCy3uQvqbLFlNYAX9daTdC3m2PzAw3u4dXNmdEscioCM3ib6+NtqLYh7ujESYxT8dpiYFZkHzN0cwB/dNN0CUMybA0xuB7hhGGg6RnvErEy3P1v3pq1xjTBi6h5eWnP/q4ini1ZLsEAuiJV7ly+vRTvIhgHs09+QI56cGnUAE0t9FutWqijafwZUay2uUEWv/U9nEe/vlC3F2GcRMjYUdmvUuvOWzEA4eIJbELgxgnLwrbNP/Sv2GcRSJYolYsUnnT9X9jhxEhP/0VahQKzz1e1kd1baEquWo2HmQszcQIS7d/DiVtCYBEfNa/nd7HobNswRVXcRVMsRAX9qh+Rn4fzq++FaFTRUXLCp1hOt7rxTRMj1sYX/ofaaNSesl+BMdBAU2i7A+CecUH7Olb3Gks6i8oCAfo6XY66phOoxwPspQZsVGiQgQL87TFEZ+9BpApzho+e5HdV7ModKkHLv7TTCHN1hVN+3AtYy3i4oCfJkS7dN1hhlgYyjFzs8FiP94e8Rpvb9RlNvOXLuIzTN0oamcD4T5KXyOdx2hyMx4OSAcv8ZnKzdET/HtJM89YLEFLI8cleNHWddb/OjUodKwq7rc/mBF6wlFrZa3/s6PLWAQ4hYF5JwUVDc6tbw4FSzwo5aUNMRIELCiZQ==",
+    "updatedAt": "2026-11-11T07:22:28.071Z",
     "scopeHash": "16183f276edb0072818f889699df444fbc598e280371cccb5181968464c88546",
     "originHash": "f3a7d76bbb9d13f907952d46bed14f67d329db4e664ede97c181f9d289e94aa3",
     "repoScope": "feynmanwyckoff-cmyk/nostradamus",
