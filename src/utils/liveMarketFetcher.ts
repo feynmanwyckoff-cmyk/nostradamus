@@ -1,5 +1,6 @@
 import {
   EmitenNewsCategory,
+  IdxMarketSessionInfo,
   JoeliardiOosEvaluation,
   MacroIndicator,
   NewsSentimentItem,
@@ -42,11 +43,148 @@ export interface IdxDirectoryEntry {
 export interface SparkSeriesItem {
   symbol: string;
   lastPrice: number;
+  previousClose?: number;
   change1D: number;
   closes: number[];
   timestamp?: number[];
   shortName?: string;
   adtv20dIdr?: number;
+  marketState?: string;
+}
+
+/**
+ * Resolves the official Previous Trading Day Close Price (IDR) for an IDX stock.
+ * Uses explicit `previousClose` from Yahoo Finance when available, or extracts the prior session close
+ * from the historical `closes` array, or derives from `lastPrice / (1 + change1D / 100)`.
+ */
+export function resolveStockPreviousClose(
+  lastPrice: number,
+  change1D: number,
+  explicitPrevClose?: number,
+  closes?: number[]
+): number {
+  if (!Number.isFinite(lastPrice) || lastPrice <= 0) return 0;
+
+  if (
+    typeof explicitPrevClose === 'number' &&
+    Number.isFinite(explicitPrevClose) &&
+    explicitPrevClose > 0 &&
+    Math.round(explicitPrevClose) !== Math.round(lastPrice)
+  ) {
+    return Math.round(explicitPrevClose);
+  }
+
+  if (Array.isArray(closes) && closes.length >= 2) {
+    const secondLast = closes[closes.length - 2];
+    const thirdLast = closes.length >= 3 ? closes[closes.length - 3] : secondLast;
+    const candidate =
+      Math.round(secondLast) !== Math.round(lastPrice) ? secondLast : thirdLast;
+    if (typeof candidate === 'number' && Number.isFinite(candidate) && candidate > 0) {
+      return Math.round(candidate);
+    }
+  }
+
+  if (typeof change1D === 'number' && Number.isFinite(change1D) && change1D !== 0 && change1D > -99) {
+    return roundToIdxTick(lastPrice / (1 + change1D / 100));
+  }
+
+  return Math.round(lastPrice);
+}
+
+/**
+ * Evaluates current Bursa Efek Indonesia (BEI / IDX) trading session in Asia/Jakarta (WIB) time:
+ * - Senin–Kamis: Pra-Pembukaan (08:45–09:00), Sesi I (09:00–12:00), Istirahat (12:00–13:30), Sesi II (13:30–16:15)
+ * - Jumat: Pra-Pembukaan (08:45–09:00), Sesi I (09:00–11:30), Istirahat (11:30–13:30), Sesi II (13:30–16:15)
+ * - Di luar jam tersebut / Sabtu–Minggu: Pasar Tutup (Harga Last Close & Previous Close)
+ */
+export function getIdxMarketSessionStatus(date: Date = new Date()): IdxMarketSessionInfo {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Jakarta',
+      weekday: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    }).formatToParts(date);
+
+    const weekday = parts.find((p) => p.type === 'weekday')?.value || 'Mon';
+    const hour = parseInt(parts.find((p) => p.type === 'hour')?.value || '0', 10);
+    const minute = parseInt(parts.find((p) => p.type === 'minute')?.value || '0', 10);
+    const wibTimeStr = `${String(hour % 24).padStart(2, '0')}:${String(minute).padStart(2, '0')} WIB`;
+    const totalMinutes = (hour % 24) * 60 + minute;
+
+    const isWeekend = weekday === 'Sat' || weekday === 'Sun';
+    const isFriday = weekday === 'Fri';
+
+    if (!isWeekend) {
+      // Pre-Opening: 08:45 - 08:59 WIB (525 - 539 mins)
+      if (totalMinutes >= 8 * 60 + 45 && totalMinutes < 9 * 60) {
+        return {
+          state: 'PRE_OPENING',
+          isIntradayOpen: true,
+          shortBadge: 'PRA-PEMBUKAAN BEI',
+          detailLabel: `Sesi Pra-Pembukaan BEI (${wibTimeStr})`,
+          priceBasisLabel: 'Harga Pembukaan & Previous Close',
+          wibTimeStr
+        };
+      }
+
+      const sesi1EndMins = isFriday ? 11 * 60 + 30 : 12 * 60;
+      // Sesi I: 09:00 - 12:00 WIB (Mon-Thu) or 09:00 - 11:30 WIB (Fri)
+      if (totalMinutes >= 9 * 60 && totalMinutes < sesi1EndMins) {
+        return {
+          state: 'SESI_1_LIVE',
+          isIntradayOpen: true,
+          shortBadge: 'LIVE · SESI I BEI',
+          detailLabel: `Perdagangan Sesi I Berjalan (${wibTimeStr})`,
+          priceBasisLabel: 'Harga Berjalan Intraday vs Prev Close',
+          wibTimeStr
+        };
+      }
+
+      // Istirahat Sesi I-II: 12:00/11:30 - 13:30 WIB
+      if (totalMinutes >= sesi1EndMins && totalMinutes < 13 * 60 + 30) {
+        return {
+          state: 'ISTIRAHAT_SESI',
+          isIntradayOpen: false,
+          shortBadge: 'ISTIRAHAT SESI I–II',
+          detailLabel: `Jedah Istirahat Sesi I–II (${wibTimeStr})`,
+          priceBasisLabel: 'Harga Penutupan Sesi I vs Prev Close',
+          wibTimeStr
+        };
+      }
+
+      // Sesi II & Post-Closing: 13:30 - 16:15 WIB
+      if (totalMinutes >= 13 * 60 + 30 && totalMinutes <= 16 * 60 + 15) {
+        return {
+          state: 'SESI_2_LIVE',
+          isIntradayOpen: true,
+          shortBadge: 'LIVE · SESI II BEI',
+          detailLabel: `Perdagangan Sesi II Berjalan (${wibTimeStr})`,
+          priceBasisLabel: 'Harga Berjalan Intraday vs Prev Close',
+          wibTimeStr
+        };
+      }
+    }
+
+    return {
+      state: 'PASAR_TUTUP',
+      isIntradayOpen: false,
+      shortBadge: 'PASAR TUTUP · LAST CLOSE',
+      detailLabel: `Bursa Tutup (${wibTimeStr}) — Mengacu Penutupan Resmi`,
+      priceBasisLabel: 'Harga Penutupan Terakhir (Last Close) & Prev Close',
+      wibTimeStr
+    };
+  } catch {
+    return {
+      state: 'PASAR_TUTUP',
+      isIntradayOpen: false,
+      shortBadge: 'PASAR TUTUP · LAST CLOSE',
+      detailLabel: 'Mengacu Harga Penutupan Terakhir BEI',
+      priceBasisLabel: 'Harga Penutupan Terakhir (Last Close) & Prev Close',
+      wibTimeStr: 'WIB'
+    };
+  }
 }
 
 /**
@@ -282,6 +420,13 @@ export function buildIdx100StockUniverse(
         volatilityAnn = bv.volatilityAnn;
       }
 
+      const previousClose = resolveStockPreviousClose(
+        lastPrice,
+        change1D,
+        snapItem.previousClose,
+        snapItem.closes
+      );
+
       return enrichStockMetrics({
         ticker: entry.ticker,
         idxTicker: `IDX:${entry.ticker}`,
@@ -289,6 +434,8 @@ export function buildIdx100StockUniverse(
         name: entry.name,
         sector: entry.sector,
         lastPrice,
+        previousClose,
+        marketState: snapItem.marketState,
         change1D,
         return30D,
         beta1Y,
@@ -727,51 +874,78 @@ export async function fetchYahooSparkBatch(
     }
   }
 
-  // Cap live network batch to max 36 symbols
-  const liveTargets = uncachedTargets.slice(0, 36);
+  // Sync ALL uncached symbols across the entire 956+ JCI universe in staged parallel batches (no 36-stock cap)
+  const liveTargets = uncachedTargets;
 
   if (liveTargets.length > 0) {
     if (isLocalBackend) {
-      onChunkProgress?.(
-        1,
-        liveTargets.length,
-        `Express Yahoo API (${liveTargets.length} Simbol Utama)`
-      );
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 8500);
-        const res = await fetch(
-          `/api/yahoo/spark?symbols=${encodeURIComponent(
-            liveTargets.join(',')
-          )}&range=${encodeURIComponent(range)}`,
-          { signal: controller.signal, cache: 'no-store' }
-        );
-        clearTimeout(timer);
-        if (res.ok) {
-          const json = await res.json();
-          if (json?.data && typeof json.data === 'object') {
-            const keys = Object.keys(json.data);
-            if (keys.length > 0) {
-              cachedLocalServerAvailable = true;
-              liveNetworkHits += keys.length;
-              relaysUsedSet.add('Express Server API');
-              setCachedLiveQuotes(json.data);
-              Object.assign(resultMap, json.data);
-              if (embeddedSnapshot.data) {
-                Object.assign(embeddedSnapshot.data, json.data);
+      const BATCH_SIZE = 160;
+      const CONCURRENT_WAVES = 2;
+      const batches: string[][] = [];
+      for (let i = 0; i < liveTargets.length; i += BATCH_SIZE) {
+        batches.push(liveTargets.slice(i, i + BATCH_SIZE));
+      }
+
+      let processedSymbols = memoryCacheHits;
+
+      for (let w = 0; w < batches.length; w += CONCURRENT_WAVES) {
+        const wave = batches.slice(w, w + CONCURRENT_WAVES);
+        await Promise.all(
+          wave.map(async (batchSymbols, waveIdx) => {
+            const batchNumber = w + waveIdx + 1;
+            onChunkProgress?.(
+              Math.min(uniqueSymbols.length, Math.max(1, processedSymbols)),
+              uniqueSymbols.length,
+              `Batch ${batchNumber}/${batches.length} (${processedSymbols}/${uniqueSymbols.length} Emiten BEI)`
+            );
+            try {
+              const controller = new AbortController();
+              const timer = setTimeout(() => controller.abort(), 14000);
+              const res = await fetch(
+                `/api/yahoo/spark?symbols=${encodeURIComponent(
+                  batchSymbols.join(',')
+                )}&range=${encodeURIComponent(range)}`,
+                { signal: controller.signal, cache: 'no-store' }
+              );
+              clearTimeout(timer);
+              if (res.ok) {
+                const json = await res.json();
+                if (json?.data && typeof json.data === 'object') {
+                  const keys = Object.keys(json.data);
+                  if (keys.length > 0) {
+                    cachedLocalServerAvailable = true;
+                    liveNetworkHits += keys.length;
+                    relaysUsedSet.add('Express Server API (Staged Parallel Batch)');
+                    setCachedLiveQuotes(json.data);
+                    Object.assign(resultMap, json.data);
+                    if (embeddedSnapshot.data) {
+                      Object.assign(embeddedSnapshot.data, json.data);
+                    }
+                  }
+                }
               }
+            } catch {
+              // Fallback to GitHub Cloud / embedded snapshot already hydrated in resultMap
+            } finally {
+              processedSymbols += batchSymbols.length;
+              onChunkProgress?.(
+                Math.min(uniqueSymbols.length, processedSymbols),
+                uniqueSymbols.length,
+                `Batch ${batchNumber}/${batches.length} (${Math.min(
+                  uniqueSymbols.length,
+                  processedSymbols
+                )}/${uniqueSymbols.length} Emiten BEI)`
+              );
             }
-          }
-        }
-      } catch {
-        // Fallback to GitHub Cloud / embedded snapshot already hydrated in resultMap
+          })
+        );
       }
     } else {
-      // Static Host (GitHub Pages): Hydrate directly from freshly pulled GitHub Cloud API Snapshot (Zero public CORS proxies)
+      // Static Host (GitHub Pages): Hydrate all 956+ symbols directly from freshly pulled GitHub Cloud API Snapshot
       onChunkProgress?.(
         1,
         liveTargets.length,
-        `GitHub Cloud Snapshot (${liveTargets.length} Simbol Utama)`
+        `GitHub Cloud Snapshot (${liveTargets.length} Emiten BEI)`
       );
       const cloudSyncedMap: Record<string, SparkSeriesItem> = {};
       for (const sym of liveTargets) {
@@ -782,7 +956,7 @@ export async function fetchYahooSparkBatch(
         }
       }
       if (Object.keys(cloudSyncedMap).length > 0) {
-        relaysUsedSet.add('GitHub Cloud API & Snapshot (Zero-CORS)');
+        relaysUsedSet.add('GitHub Cloud API & Snapshot (Full 956+ JCI)');
         setCachedLiveQuotes(cloudSyncedMap);
       }
     }
@@ -795,14 +969,14 @@ export async function fetchYahooSparkBatch(
   );
   const syncDurationMs = Math.max(45, Date.now() - startedAt);
   const status: SyncTelemetryReport['status'] =
-    totalLiveOrRecent >= Math.max(1, Math.floor(liveTargets.length * 0.6))
+    totalLiveOrRecent >= Math.max(1, Math.floor(liveTargets.length * 0.5))
       ? 'FULL_LIVE'
       : totalLiveOrRecent > 0
       ? 'PARTIAL_LIVE'
       : 'FALLBACK_ONLY';
 
   lastBatchSyncTelemetry = {
-    totalRequested: liveTargets.length || uniqueSymbols.length,
+    totalRequested: uniqueSymbols.length,
     liveNetworkHits,
     memoryCacheHits,
     snapshotFallbacks,
@@ -820,7 +994,7 @@ export async function fetchYahooSparkBatch(
   onChunkProgress?.(
     uniqueSymbols.length,
     uniqueSymbols.length,
-    'Sinkronisasi Live Selesai'
+    'Sinkronisasi Penuh 956+ Emiten Selesai'
   );
 
   return resultMap;
@@ -932,6 +1106,13 @@ export async function fetchLiveIdxTicker(rawTicker: string): Promise<StockMetric
     stockSeries.timestamp
   );
 
+  const previousClose = resolveStockPreviousClose(
+    lastPrice,
+    stockSeries.change1D,
+    (stockSeries as SparkSeriesItem).previousClose,
+    stockSeries.closes
+  );
+
   return enrichStockMetrics({
     ticker: cleanTicker,
     idxTicker: `IDX:${cleanTicker}`,
@@ -939,6 +1120,8 @@ export async function fetchLiveIdxTicker(rawTicker: string): Promise<StockMetric
     name: catalogMatch?.name || stockSeries.shortName || `${cleanTicker} Tbk`,
     sector: catalogMatch?.sector || 'IDX Listed Equity',
     lastPrice,
+    previousClose,
+    marketState: (stockSeries as SparkSeriesItem).marketState,
     change1D: stockSeries.change1D,
     return30D,
     beta1Y,
@@ -1102,31 +1285,37 @@ export async function refreshLiveGlobalMacroAndIhsg(
     }
   }
 
-  // Build Tier-1 Priority Live Batch:
-  // 1) ^JKSE + 8 Global Macro symbols
-  // 2) User's priority tickers (active portfolio holdings + Keranjang 1 & 2 picks)
-  // 3) Top Screener Composite Leaders & Default Priority IDX Leaders (capped at 36 .JK symbols -> max 3 Spark chunks total)
+  // Build Full-Universe Staged Parallel Sync Queue (All 956+ IDX Stocks + ^JKSE + 8 Global Macro):
+  // User's active portfolio holdings & top liquid leaders are placed at the front of the queue so Wave 1
+  // updates them first, followed immediately by every remaining stock in the 956+ BEI universe.
   const macroSymbols = ['IDR=X', 'DX-Y.NYB', '^TNX', '^VIX', '^GSPC', '^HSI', 'GC=F', 'BZ=F'];
   const topScreenerLeaders = [...expandedStocks]
     .filter((s) => s.isLiquid !== false && !s.isHscFlagged && s.lastPrice >= 68)
     .sort((a, b) => b.dmuCompositeScore - a.dmuCompositeScore)
-    .slice(0, 16)
+    .slice(0, 30)
     .map((s) => s.ticker);
 
-  const combinedPriorityJk = Array.from(
-    new Set([...priorityTickers, ...topScreenerLeaders, ...DEFAULT_PRIORITY_IDX_LEADERS])
+  const allUniverseJk = Array.from(
+    new Set([
+      ...priorityTickers.map((t) => t.trim().toUpperCase().replace(/\.JK$/i, '')),
+      ...topScreenerLeaders,
+      ...DEFAULT_PRIORITY_IDX_LEADERS,
+      ...expandedStocks.map((s) => s.ticker.trim().toUpperCase().replace(/\.JK$/i, ''))
+    ])
   )
-    .map((t) => t.trim().toUpperCase().replace(/\.JK$/i, ''))
     .filter((t) => t.length === 4)
-    .slice(0, 36)
     .map((t) => `${t}.JK`);
 
-  const tier1LiveTargets = ['^JKSE', ...macroSymbols, ...combinedPriorityJk];
+  const fullSyncTargets = ['^JKSE', ...macroSymbols, ...allUniverseJk];
 
-  onProgress?.(1, tier1LiveTargets.length, 'IHSG (^JKSE), Makro & Saham Utama');
+  onProgress?.(
+    1,
+    fullSyncTargets.length,
+    `IHSG (^JKSE), Makro & ${allUniverseJk.length} Emiten BEI`
+  );
 
   const livePriorityBatchMap = await fetchYahooSparkBatch(
-    tier1LiveTargets,
+    fullSyncTargets,
     '1mo',
     onProgress,
     forceLiveNetwork,
@@ -1173,7 +1362,7 @@ export async function refreshLiveGlobalMacroAndIhsg(
     }
   }
 
-  // 3. Hydrate JCI Screener Universe from Snapshot (Individual emiten live quotes are fetched lazily on Inspect click)
+  // 3. Hydrate Full 956+ JCI Screener Universe from Staged Parallel Batch + Verified Snapshot
   let liveSyncedCount = 0;
   let liquidStockCount = 0;
 
@@ -1182,6 +1371,12 @@ export async function refreshLiveGlobalMacroAndIhsg(
 
     if (res && res.lastPrice > 0 && Array.isArray(res.closes) && res.closes.length >= 2) {
       const lastPrice = Math.round(res.lastPrice);
+      const previousClose = resolveStockPreviousClose(
+        lastPrice,
+        res.change1D,
+        res.previousClose,
+        res.closes
+      );
       const isLiquid = evaluateSeriesLiquidity(res.closes, lastPrice);
       const dividendYieldPct = getEmitenDividendYield(stock.ticker, lastPrice);
       const return30D = computeAccurate30DReturn(
@@ -1209,6 +1404,8 @@ export async function refreshLiveGlobalMacroAndIhsg(
         name: stock.name,
         sector: stock.sector,
         lastPrice,
+        previousClose,
+        marketState: res.marketState,
         change1D: res.change1D,
         return30D,
         beta1Y,

@@ -5,7 +5,12 @@ import {
   rankUniverseWithBuffer,
   toggleManualHscTicker
 } from '../utils/quantEngine';
-import { IDX_SECTOR_CATALOG, fetchLiveIdxTicker } from '../utils/liveMarketFetcher';
+import {
+  IDX_SECTOR_CATALOG,
+  fetchLiveIdxTicker,
+  getIdxMarketSessionStatus,
+  resolveStockPreviousClose
+} from '../utils/liveMarketFetcher';
 import {
   formatKseiFootnoteFullDescription,
   formatKseiFootnoteShortLabel
@@ -152,6 +157,8 @@ export function ScreeningTable({
     () => rankedStocks.filter((s) => s.isLiveFetched).length,
     [rankedStocks]
   );
+
+  const sessionInfo = useMemo(() => getIdxMarketSessionStatus(), [stocks]);
 
   const liquidStockCount = useMemo(
     () => rankedStocks.filter((s) => s.isLiquid !== false && s.lastPrice >= 68).length,
@@ -731,12 +738,36 @@ export function ScreeningTable({
                   {liveFetchedCount}/{rankedStocks.length} Live Yahoo · {liquidStockCount} Likuid
                 </span>
               </span>
+              <span>·</span>
+              <span
+                title={`${sessionInfo.detailLabel} — ${sessionInfo.priceBasisLabel}`}
+                className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded-xs border ${
+                  sessionInfo.isIntradayOpen
+                    ? 'bg-[#059669]/10 text-[#0D5C46] border-[#059669]/40'
+                    : sessionInfo.state === 'ISTIRAHAT_SESI'
+                    ? 'bg-[#F59E0B]/10 text-[#D97706] border-[#F59E0B]/40'
+                    : 'bg-[#FAF9F6] text-neutral-600 border-[#E4E2DD]'
+                }`}
+              >
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    sessionInfo.isIntradayOpen
+                      ? 'bg-[#059669] animate-pulse'
+                      : sessionInfo.state === 'ISTIRAHAT_SESI'
+                      ? 'bg-[#D97706]'
+                      : 'bg-neutral-400'
+                  }`}
+                />
+                <span>
+                  {sessionInfo.shortBadge} ({sessionInfo.priceBasisLabel})
+                </span>
+              </span>
             </div>
             <h2 className="text-lg sm:text-xl font-bold tracking-tight text-[#111315] mt-0.5">
               Matriks Peringkat Multifaktor &amp; Zona Buffer {rebalanceBufferPct}%
             </h2>
             <p className="text-[11px] text-neutral-500 mt-0.5">
-              Centang beberapa saham pada kolom kiri tabel untuk membandingkan metrik secara berdampingan (Multi-Select Stock Comparison).
+              Menampilkan harga berjalan (Intraday) selama jam perdagangan BEI atau harga penutupan terakhir (Last Close) beserta acuan <strong>Previous Close (Prev)</strong> untuk seluruh {rankedStocks.length} emiten.
             </p>
           </div>
 
@@ -1065,12 +1096,28 @@ export function ScreeningTable({
               </thead>
               <tbody className="divide-y divide-[#E4E2DD]">
                 <tr>
-                  <td className="py-2 px-3 font-semibold text-neutral-600">Harga Terakhir (IDR)</td>
+                  <td className="py-2 px-3 font-semibold text-neutral-600">
+                    Harga Terakhir ({sessionInfo.isIntradayOpen ? 'Intraday IDR' : 'Last Close IDR'})
+                  </td>
                   {comparedStocksList.map((s) => (
                     <td key={s.ticker} className="py-2 px-3 font-bold text-[#111315]">
                       {s.lastPrice > 0 ? `Rp ${s.lastPrice.toLocaleString('id-ID')}` : 'N/A'}
                     </td>
                   ))}
+                </tr>
+                <tr>
+                  <td className="py-2 px-3 font-semibold text-neutral-600">Previous Close (IDR)</td>
+                  {comparedStocksList.map((s) => {
+                    const prevPx =
+                      s.lastPrice > 0
+                        ? resolveStockPreviousClose(s.lastPrice, s.change1D, s.previousClose)
+                        : 0;
+                    return (
+                      <td key={s.ticker} className="py-2 px-3 font-semibold text-neutral-500">
+                        {prevPx > 0 ? `Rp ${prevPx.toLocaleString('id-ID')}` : 'N/A'}
+                      </td>
+                    );
+                  })}
                 </tr>
                 <tr>
                   <td className="py-2 px-3 font-semibold text-neutral-600">Perubahan Harian (1D %)</td>
@@ -1767,11 +1814,23 @@ export function ScreeningTable({
                         </div>
                       </td>
 
-                      {/* Last Px, Clickable On-Demand Sync Icon & Independent 1D vs 30D Colors (2 Decimals) */}
+                      {/* Last Px, Previous Close, Clickable On-Demand Sync Icon & Independent 1D vs 30D Colors (2 Decimals) */}
                       <td className="py-2.5 px-2.5 text-right whitespace-nowrap">
                         {stock.lastPrice > 0 ? (
                           <>
                             <div className="flex items-center justify-end gap-1.5">
+                              <span
+                                title={
+                                  sessionInfo.isIntradayOpen
+                                    ? `Harga Intraday Berjalan (${sessionInfo.shortBadge})`
+                                    : `Harga Penutupan Terakhir (${sessionInfo.shortBadge})`
+                                }
+                                className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                  sessionInfo.isIntradayOpen
+                                    ? 'bg-[#059669] animate-pulse'
+                                    : 'bg-neutral-400'
+                                }`}
+                              />
                               <span className="text-[#111315] font-bold">
                                 Rp {formatIdrPriceDisplay(stock.lastPrice)}
                               </span>
@@ -1796,6 +1855,16 @@ export function ScreeningTable({
                                   }`}
                                 />
                               </button>
+                            </div>
+                            <div className="text-[10px] font-mono text-neutral-500 mt-0.5">
+                              Prev: Rp{' '}
+                              {formatIdrPriceDisplay(
+                                resolveStockPreviousClose(
+                                  stock.lastPrice,
+                                  stock.change1D,
+                                  stock.previousClose
+                                )
+                              )}
                             </div>
                             <div className="text-[11px] font-bold mt-0.5">
                               <span className={is1DPos ? 'text-[#0D5C46]' : 'text-[#9E2A2B]'}>

@@ -270,9 +270,11 @@ async function fetchSingleChart(symbol, range = '3mo', hostIdx = 0) {
       return {
         symbol,
         lastPrice,
+        previousClose: Number(prevClose.toFixed(2)),
         change1D,
         closes: closes.length >= 2 ? closes.slice(-35) : [prevClose, lastPrice],
-        shortName: result?.meta?.longName || result?.meta?.shortName
+        shortName: result?.meta?.longName || result?.meta?.shortName,
+        marketState: result?.meta?.marketState
       };
     } catch {
       // try next host
@@ -339,8 +341,10 @@ async function fetchSparkChunk(chunk, range = '3mo', chunkIdx = 0) {
           resultMap[sym] = {
             symbol: sym,
             lastPrice,
+            previousClose: Number(prevClose.toFixed(2)),
             change1D,
-            closes: closes.length >= 2 ? closes.slice(-35) : [prevClose, lastPrice]
+            closes: closes.length >= 2 ? closes.slice(-35) : [prevClose, lastPrice],
+            marketState: entry?.marketState
           };
         }
       }
@@ -532,6 +536,10 @@ async function main() {
             return {
               ...st,
               lastPrice: Math.round(liveItem.lastPrice),
+              previousClose: liveItem.previousClose
+                ? Math.round(liveItem.previousClose)
+                : st.previousClose,
+              marketState: liveItem.marketState,
               change1D: liveItem.change1D,
               dataSource: 'LIVE_API',
               lastSyncedAt: nowTimeWib

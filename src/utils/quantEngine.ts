@@ -1167,8 +1167,20 @@ export function enrichStockMetrics(item: RawStockInput): StockMetrics {
       ? item.isLiquid
       : item.lastPrice >= 68 && item.isLiveFetched !== false;
 
+  const resolvedPrevClose =
+    typeof item.previousClose === 'number' &&
+    Number.isFinite(item.previousClose) &&
+    item.previousClose > 0
+      ? Math.round(item.previousClose)
+      : item.lastPrice > 0 && item.change1D !== 0 && item.change1D > -99
+      ? roundToIdxTick(item.lastPrice / (1 + item.change1D / 100))
+      : item.lastPrice > 0
+      ? Math.round(item.lastPrice)
+      : undefined;
+
   const normalizedInput: RawStockInput = {
     ...item,
+    previousClose: resolvedPrevClose,
     isLiquid,
     dividendYieldPct
   };

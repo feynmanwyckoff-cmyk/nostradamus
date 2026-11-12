@@ -1,4 +1,5 @@
 import { WorkspaceTabId } from '../types/quant';
+import { getIdxMarketSessionStatus } from '../utils/liveMarketFetcher';
 import { NostradamusLogo } from './NostradamusLogo';
 import { RefreshCw, Clock, Cloud, Compass } from 'lucide-react';
 
@@ -28,6 +29,7 @@ export function Header({
   onMasterSyncAll
 }: HeaderProps) {
   const allSynced = totalStockCount > 0 && syncedCount >= totalStockCount;
+  const sessionInfo = getIdxMarketSessionStatus();
 
   const workspaceTabs: { id: WorkspaceTabId; label: string; shortDesc: string }[] = [
     { id: 'command', label: '01. Command & Allocator', shortDesc: 'Sentimen & Keranjang 1–2' },
@@ -64,6 +66,27 @@ export function Header({
                   <Compass className="w-3 h-3" />
                   <span>FAYADH IDX TERMINAL</span>
                 </span>
+                <span
+                  title={`${sessionInfo.detailLabel} — ${sessionInfo.priceBasisLabel}`}
+                  className={`inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 border rounded-xs ${
+                    sessionInfo.isIntradayOpen
+                      ? 'bg-[#059669]/10 border-[#059669]/40 text-[#0D5C46]'
+                      : sessionInfo.state === 'ISTIRAHAT_SESI'
+                      ? 'bg-[#F59E0B]/10 border-[#F59E0B]/40 text-[#D97706]'
+                      : 'bg-[#FAF9F6] border-[#E4E2DD] text-neutral-600'
+                  }`}
+                >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      sessionInfo.isIntradayOpen
+                        ? 'bg-[#059669] animate-pulse'
+                        : sessionInfo.state === 'ISTIRAHAT_SESI'
+                        ? 'bg-[#D97706]'
+                        : 'bg-neutral-400'
+                    }`}
+                  />
+                  <span>{sessionInfo.shortBadge}</span>
+                </span>
               </div>
 
               {/* System Price Last Updated Notification Directly Below App Title */}
@@ -77,7 +100,7 @@ export function Header({
                 </span>
                 <span className="text-neutral-400">·</span>
                 <span
-                  title="Seluruh emiten JCI telah tersinkronisasi"
+                  title="Seluruh 956+ emiten JCI disinkronkan secara paralel bertahap"
                   className={`inline-flex items-center gap-1 font-bold ${
                     allSynced ? 'text-[#0D5C46]' : 'text-[#D97706] bb-amber'
                   }`}
@@ -100,14 +123,16 @@ export function Header({
             type="button"
             onClick={onMasterSyncAll}
             disabled={isMasterSyncing}
-            title="Sinkronkan seluruh harga saham JCI/BEI, IHSG, Global Macro, dan Berita RSS Live dalam 1 klik"
+            title={`Sinkronkan seluruh ${totalStockCount} harga saham BEI/JCI, Previous Close, IHSG, Global Macro, dan Berita RSS Live secara paralel`}
             className="bb-btn-primary inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold text-white bg-[#D97706] hover:bg-[#B45309] rounded-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-60"
           >
             <RefreshCw
               className={`w-3.5 h-3.5 ${isMasterSyncing ? 'animate-spin' : ''}`}
             />
             <span>
-              {isMasterSyncing ? 'SYNCING LIVE...' : 'SYNC SEMUA LIVE'}
+              {isMasterSyncing
+                ? 'SYNCING 956+ EMITEN...'
+                : `SYNC ${totalStockCount} EMITEN LIVE`}
             </span>
           </button>
 

@@ -34,6 +34,7 @@ import {
   fetchLiveFinancialNewsRss,
   formatFullIndonesianDateTime,
   getEmbeddedIhsgBaseline,
+  getIdxMarketSessionStatus,
   ingestCloudStateIntoEmbeddedSnapshot,
   refreshLiveGlobalMacroAndIhsg
 } from './utils/liveMarketFetcher';
@@ -72,8 +73,9 @@ import {
 import { EmitenFundamentalInspectorModal } from './components/EmitenFundamentalInspectorModal';
 import { Sun, Moon, Cloud, RefreshCw, Lock, KeyRound } from 'lucide-react';
 
-const SCREENER_CACHE_KEY = 'nostradamus_dmu24_screener_v15_real_ihsg';
+const SCREENER_CACHE_KEY = 'nostradamus_dmu24_screener_v16_full956_prevclose';
 const LEGACY_SCREENER_KEYS = [
+  'nostradamus_dmu24_screener_v15_real_ihsg',
   'nostradamus_dmu24_screener_v14_ksei_hsc383',
   'nostradamus_dmu24_screener_v12_hsc_value',
   'nostradamus_screener_cache_v3_mf40'
@@ -941,7 +943,7 @@ export default function App() {
     const priorityHoldingTickers = holdings.map((h) => h.ticker);
     setIsMasterSyncing(true);
     setIsLoadingNews(true);
-    setSyncStatusLabel('Syncing IHSG (^JKSE), Makro & Saham Utama...');
+    setSyncStatusLabel(`Syncing IHSG, Makro & ${targetStocks.length} Emiten BEI...`);
 
     try {
       const [marketResult, liveNews] = await Promise.all([
@@ -949,7 +951,7 @@ export default function App() {
           macroIndicators,
           targetStocks,
           (_syncedCount, _totalCount, tickerLabel) => {
-            setSyncStatusLabel(`Syncing ${tickerLabel}...`);
+            setSyncStatusLabel(`Syncing ${tickerLabel}`);
           },
           true,
           priorityHoldingTickers,
@@ -1045,16 +1047,17 @@ export default function App() {
           : '<span style="color:#D97706;font-weight:700;">● Snapshot Terverifikasi BEI</span>';
 
         const macroLiveHits = updatedMacro.filter((m) => m.isLiveFetched).length;
-        const priorityTotal = Math.max(1, telemetry.totalRequested - 1 - updatedMacro.length);
-        const priorityLiveHits = Math.max(
-          0,
-          telemetry.liveNetworkHits + telemetry.memoryCacheHits - (ihsgFailed ? 0 : 1) - macroLiveHits
-        );
+        const sessionInfo = getIdxMarketSessionStatus();
+        const sessionBadgeHtml = sessionInfo.isIntradayOpen
+          ? `<span style="color:#0D5C46;font-weight:700;">● ${sessionInfo.shortBadge} — ${sessionInfo.priceBasisLabel}</span>`
+          : sessionInfo.state === 'ISTIRAHAT_SESI'
+          ? `<span style="color:#D97706;font-weight:700;">● ${sessionInfo.shortBadge} — ${sessionInfo.priceBasisLabel}</span>`
+          : `<span style="color:#4B5563;font-weight:700;">● ${sessionInfo.shortBadge} — ${sessionInfo.priceBasisLabel}</span>`;
 
         const result = await Swal.fire({
           icon: modalIcon,
           title: modalTitle,
-          width: 620,
+          width: 640,
           showDenyButton: !isFullLive,
           confirmButtonText: 'Tutup Laporan',
           denyButtonText: '↻ Ulangi Paksa (Bypass Cache)',
@@ -1065,6 +1068,7 @@ export default function App() {
               <div><strong>Waktu Update Sistem:</strong> ${fullTimestampStr} (${(
             telemetry.syncDurationMs / 1000
           ).toFixed(2)} dtk)</div>
+              <div><strong>Status Sesi Bursa BEI:</strong> ${sessionBadgeHtml}</div>
               <div><strong>IHSG (^JKSE):</strong> <strong>${activeQuote.lastPrice.toLocaleString(
                 'id-ID',
                 { minimumFractionDigits: 2 }
@@ -1072,22 +1076,24 @@ export default function App() {
             2
           )}%) · ${ihsgSourceBadge}</div>
               <div style="margin-top:6px;padding:8px 10px;background:#FAF9F6;border:1px solid #E4E2DD;border-radius:2px;font-family:'Fira Code',monospace;font-size:11.5px;">
-                <div style="font-weight:700;color:#111315;margin-bottom:3px;">TELEMETRI JARINGAN YAHOO FINANCE (ANTI-BLOCK MULTI-RELAY):</div>
-                <div>• Total Hit Live vs Target: <strong style="color:${
+                <div style="font-weight:700;color:#111315;margin-bottom:3px;">TELEMETRI SINKRONISASI PARALEL SELURUH EMITEN BEI (${rerankedStocks.length} SAHAM):</div>
+                <div>• Total Hit Live vs Universe: <strong style="color:${
                   telemetry.liveNetworkHits > 0 ? '#0D5C46' : '#D97706'
-                };">${telemetry.liveNetworkHits} Live</strong> · ${
+                };">${telemetry.liveNetworkHits} Live Network</strong> · ${
             telemetry.memoryCacheHits
-          } Cache · ${telemetry.snapshotFallbacks} Fallback (dari ${
+          } Cache · ${telemetry.snapshotFallbacks} Snapshot/Suspensi (dari ${
             telemetry.totalRequested
           } simbol)</div>
-                <div>• Indikator Makro Global: <strong>${macroLiveHits}/${
+                <div>• Cakupan Sinkronisasi Penuh: <strong>${rerankedStocks.length}/${
+            rerankedStocks.length
+          } Emiten BEI (${activeQuotedCount} Aktif Diperdagangkan)</strong> · Indikator Makro: <strong>${macroLiveHits}/${
             updatedMacro.length
-          } Live</strong> · Saham Prioritas: <strong>${priorityLiveHits}/${priorityTotal} Live</strong></div>
-                <div>• Relay CORS Aktif: <span style="color:#0284C7;font-weight:700;">${relayBadgeText}</span></div>
+          } Live</strong></div>
+                <div>• Jalur Sinkronisasi Aktif: <span style="color:#0284C7;font-weight:700;">${relayBadgeText}</span></div>
               </div>
               <div style="margin-top:6px;"><strong>Status Radar HSC &amp; Likuiditas (${activeQuotedCount} Emiten):</strong> <strong>${liquidCount} Saham Likuid</strong> · <span style="color:#9E2A2B;font-weight:700;">${kseiHscTotalCount} Saham Resmi HSC BEI-KSEI</span> (<span style="color:#D97706;font-weight:700;">${kseiDividendPenCount} Dividen Kuat Lolos Penalti Skor</span>) · <span style="color:#E11D48;font-weight:700;">${earlyWarningSuspectCount} Suspect HSC Early Warning</span></div>
               <div style="margin-top:6px;padding:6px 8px;background:#EFF6FF;border:1px solid #BAE6FD;border-radius:2px;font-size:11px;color:#0284C7;">
-                💡 <strong>Arsitektur Zero-CORS GitHub Cloud &amp; Express API:</strong> Sinkronisasi menarik kuotasi terbaru dari GitHub REST API Snapshot &amp; Server Backend tanpa proxy CORS pihak ketiga (bebas error <em>canceled</em> di Network).
+                💡 <strong>Sinkronisasi Penuh 956+ Saham &amp; Previous Close:</strong> Seluruh saham BEI disinkronkan secara paralel bertahap. Saat jam bursa (09:00–16:15 WIB) menampilkan <strong>Harga Intraday Berjalan</strong>, dan saat bursa tutup menampilkan <strong>Harga Penutupan Terakhir (Last Close)</strong> beserta acuan <strong>Previous Close (Prev)</strong>.
               </div>
             </div>
           `

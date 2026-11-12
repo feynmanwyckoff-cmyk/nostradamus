@@ -13,11 +13,13 @@ const USER_AGENT =
 interface SparkSeriesItem {
   symbol: string;
   lastPrice: number;
+  previousClose?: number;
   change1D: number;
   closes: number[];
   timestamp?: number[];
   shortName?: string;
   adtv20dIdr?: number;
+  marketState?: string;
 }
 
 async function fetchYahooJsonDirect(url: string, timeoutMs = 8000): Promise<any> {
@@ -154,11 +156,13 @@ async function fetchSingleChartDirect(
       return {
         symbol,
         lastPrice,
+        previousClose: Number(prevClose.toFixed(2)),
         change1D,
         closes: closes.length >= 2 ? closes : [prevClose, lastPrice],
         timestamp: timestamps.length === closes.length ? timestamps : undefined,
         shortName: meta.longName || meta.shortName,
-        adtv20dIdr
+        adtv20dIdr,
+        marketState: typeof meta.marketState === 'string' ? meta.marketState : undefined
       };
     } catch {
       // try alternate host
@@ -170,7 +174,8 @@ async function fetchSingleChartDirect(
 async function fetchSparkBatchChunk(
   symbolsChunk: string[],
   range: string = '3mo',
-  chunkIdx: number = 0
+  chunkIdx: number = 0,
+  skipIndividualFallbackIfSparkAnswered: boolean = false
 ): Promise<Record<string, SparkSeriesItem>> {
   const resultMap: Record<string, SparkSeriesItem> = {};
   if (symbolsChunk.length === 0) return resultMap;
@@ -182,9 +187,12 @@ async function fetchSparkBatchChunk(
     range
   )}&interval=1d`;
 
+  let sparkRespondedOk = false;
+
   try {
     const sparkData = await fetchYahooJsonDirect(sparkUrl, 8500);
     if (sparkData && typeof sparkData === 'object') {
+      sparkRespondedOk = true;
       for (const sym of symbolsChunk) {
         const entry = sparkData[sym];
         if (!entry || typeof entry !== 'object') continue;
@@ -271,9 +279,11 @@ async function fetchSparkBatchChunk(
           resultMap[sym] = {
             symbol: sym,
             lastPrice,
+            previousClose: Number(prevClose.toFixed(2)),
             change1D,
             closes,
-            timestamp: timestamps.length === closes.length ? timestamps : undefined
+            timestamp: timestamps.length === closes.length ? timestamps : undefined,
+            marketState: typeof entry.marketState === 'string' ? entry.marketState : undefined
           };
         }
       }
@@ -283,7 +293,16 @@ async function fetchSparkBatchChunk(
   }
 
   // Fallback for any symbol in the chunk not returned by spark
-  const missingSymbols = symbolsChunk.filter((s) => !resultMap[s]);
+  // For massive universe sweeps, if spark responded HTTP 200 and returned valid symbols, only retry non-.JK macro symbols
+  // so suspended/delisted .JK stocks do not stall the 956-stock batch.
+  const missingSymbols = symbolsChunk.filter((s) => {
+    if (resultMap[s]) return false;
+    if (skipIndividualFallbackIfSparkAnswered && sparkRespondedOk && Object.keys(resultMap).length > 0) {
+      return !s.endsWith('.JK');
+    }
+    return true;
+  });
+
   if (missingSymbols.length > 0) {
     await Promise.all(
       missingSymbols.map(async (sym, idx) => {
@@ -554,14 +573,20 @@ async function startServer() {
         )
       );
 
-      const CHUNK_SIZE = 15;
+      const CHUNK_SIZE = 20;
       const chunks: string[][] = [];
       for (let i = 0; i < symbols.length; i += CHUNK_SIZE) {
         chunks.push(symbols.slice(i, i + CHUNK_SIZE));
       }
 
+      const skipIndividualFallback = symbols.length > 20;
+
       const [chunkResults, jkseExactQuote] = await Promise.all([
-        Promise.all(chunks.map((chunk, idx) => fetchSparkBatchChunk(chunk, range, idx))),
+        Promise.all(
+          chunks.map((chunk, idx) =>
+            fetchSparkBatchChunk(chunk, range, idx, skipIndividualFallback)
+          )
+        ),
         symbols.includes('^JKSE') ? fetchSingleChartDirect('^JKSE', '5d', 0) : Promise.resolve(null)
       ]);
 
@@ -578,8 +603,10 @@ async function startServer() {
           combined['^JKSE'] = {
             ...existingJkse,
             lastPrice: jkseExactQuote.lastPrice,
+            previousClose: jkseExactQuote.previousClose,
             change1D: jkseExactQuote.change1D,
-            closes: updatedCloses
+            closes: updatedCloses,
+            marketState: jkseExactQuote.marketState
           };
         } else {
           combined['^JKSE'] = jkseExactQuote;

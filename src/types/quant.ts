@@ -42,14 +42,32 @@ export interface NewsSentimentItem {
   emitenCategory?: EmitenNewsCategory;
 }
 
+export type IdxMarketSessionState =
+  | 'PRE_OPENING'
+  | 'SESI_1_LIVE'
+  | 'ISTIRAHAT_SESI'
+  | 'SESI_2_LIVE'
+  | 'PASAR_TUTUP';
+
+export interface IdxMarketSessionInfo {
+  state: IdxMarketSessionState;
+  isIntradayOpen: boolean;
+  shortBadge: string;
+  detailLabel: string;
+  priceBasisLabel: string;
+  wibTimeStr: string;
+}
+
 export interface StockMetrics {
   ticker: string;          // e.g., "BBCA"
   idxTicker: string;       // e.g., "IDX:BBCA"
   yfTicker: string;        // e.g., "BBCA.JK"
   name: string;            // e.g., "Bank Central Asia Tbk"
   sector: string;          // 11 IDX-IC Sectors
-  lastPrice: number;       // IDR Price
-  change1D: number;        // 1-day return percentage
+  lastPrice: number;       // IDR Price (Intraday Live during market hours, Last Close when market closed)
+  previousClose?: number;  // Official Previous Trading Day Close Price (IDR)
+  marketState?: string;    // Yahoo Finance marketState ('REGULAR' | 'PRE' | 'POST' | 'CLOSED')
+  change1D: number;        // 1-day return percentage vs previousClose
   return30D: number;       // 30-day cumulative return %
   beta1Y: number;          // 1-year rolling historical Beta vs ^JKSE
   volatilityAnn: number;   // Annualized individual volatility %
