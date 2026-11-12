@@ -499,6 +499,82 @@ export async function pullLiveMarketSnapshotFromGitHubApi(
     }
   }
 
+  // Merge fresher stock quotes and macro indicators from cloudStatePayload if available
+  const cloudTimeMs =
+    cloudStatePayload?.updatedAt
+      ? new Date(cloudStatePayload.updatedAt).getTime()
+      : (cloudStatePayload as any)?.savedAt
+      ? new Date((cloudStatePayload as any).savedAt).getTime()
+      : 0;
+  const snapTimeMs = mergedSnapshot.generatedAt
+    ? new Date(mergedSnapshot.generatedAt).getTime()
+    : 0;
+  const isCloudNewerOrEqual = !snapTimeMs || (cloudTimeMs > 0 && cloudTimeMs >= snapTimeMs);
+
+  if (Array.isArray(cloudStatePayload?.stocks)) {
+    for (const st of cloudStatePayload.stocks) {
+      if (!st || !st.ticker || typeof st.lastPrice !== 'number' || st.lastPrice <= 0) {
+        continue;
+      }
+      const cleanTicker = String(st.ticker).trim().toUpperCase().replace(/\.JK$/i, '');
+      const yfSym = `${cleanTicker}.JK`;
+      const existingItem = mergedSnapshot.data[yfSym];
+      if (!existingItem || isCloudNewerOrEqual) {
+        const lastPrice = Number(st.lastPrice);
+        const change1D = typeof st.change1D === 'number' ? Number(st.change1D) : 0;
+        const prevClose =
+          change1D !== 0 && change1D > -99
+            ? Number((lastPrice / (1 + change1D / 100)).toFixed(2))
+            : lastPrice;
+        const baseCloses: number[] =
+          existingItem && Array.isArray(existingItem.closes) && existingItem.closes.length >= 2
+            ? [...existingItem.closes]
+            : Array(21).fill(prevClose).concat([lastPrice]);
+        baseCloses[baseCloses.length - 1] = lastPrice;
+        if (baseCloses.length >= 2 && change1D !== 0) {
+          baseCloses[baseCloses.length - 2] = prevClose;
+        }
+        mergedSnapshot.data[yfSym] = {
+          ...(existingItem || {}),
+          symbol: yfSym,
+          lastPrice,
+          change1D,
+          closes: baseCloses,
+          shortName: st.name || existingItem?.shortName || cleanTicker
+        };
+      }
+    }
+  }
+
+  if (Array.isArray(cloudStatePayload?.macroIndicators)) {
+    for (const m of cloudStatePayload.macroIndicators) {
+      if (!m || !m.symbol || typeof m.value !== 'number' || m.value <= 0) {
+        continue;
+      }
+      const existingMacro = mergedSnapshot.data[m.symbol];
+      if (!existingMacro || isCloudNewerOrEqual) {
+        const lastPrice = Number(m.value);
+        const change1D = typeof m.change1D === 'number' ? Number(m.change1D) : 0;
+        const prevClose =
+          change1D !== 0 && change1D > -99
+            ? Number((lastPrice / (1 + change1D / 100)).toFixed(2))
+            : lastPrice;
+        const baseCloses: number[] =
+          existingMacro && Array.isArray(existingMacro.closes) && existingMacro.closes.length >= 2
+            ? [...existingMacro.closes]
+            : [prevClose, lastPrice];
+        baseCloses[baseCloses.length - 1] = lastPrice;
+        mergedSnapshot.data[m.symbol] = {
+          ...(existingMacro || {}),
+          symbol: m.symbol,
+          lastPrice,
+          change1D,
+          closes: baseCloses
+        };
+      }
+    }
+  }
+
   return mergedSnapshot;
 }
 

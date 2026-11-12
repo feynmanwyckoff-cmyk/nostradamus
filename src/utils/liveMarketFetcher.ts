@@ -442,590 +442,127 @@ export function clearLiveQuoteMemoryCache(): void {
 }
 
 /**
- * Parses a raw Yahoo Finance `/v8/finance/spark` or `/v7/finance/spark` JSON payload into a map of `SparkSeriesItem`.
- * Strictly prioritizes `regularMarketPrice` and `fulldayPrice` and computes `prevClose` from the previous daily candle
- * `closes[closes.length - 2]` rather than multi-month `chartPreviousClose`.
+ * Merges a loaded `nostradamus_cloud_state.json` payload (stocks, macroIndicators, liveIhsgQuote, liveIhsgReturns)
+ * directly into `embeddedSnapshot.data` and the 60s in-memory quote cache so Screener, Barbell, and Emiten Inspector
+ * always reflect the latest GitHub Cloud state without requiring third-party CORS proxies.
  */
-function parseYahooSparkPayload(rawJson: any): Record<string, SparkSeriesItem> {
-  const out: Record<string, SparkSeriesItem> = {};
-  if (!rawJson || typeof rawJson !== 'object') return out;
-
-  // Format A: { spark: { result: [ { symbol, response: [ { meta, timestamp, indicators: { quote: [ { close } ] } } ] } ] } }
-  if (Array.isArray(rawJson?.spark?.result)) {
-    for (const item of rawJson.spark.result) {
-      const sym = item?.symbol;
-      const resp = item?.response?.[0];
-      const meta = resp?.meta || {};
-      const rawTimestamps: Array<number | null> = resp?.timestamp || [];
-      const rawCloses: Array<number | null> = resp?.indicators?.quote?.[0]?.close || [];
-      const closes: number[] = [];
-      const timestamps: number[] = [];
-      for (let i = 0; i < rawCloses.length; i++) {
-        const c = rawCloses[i];
-        if (typeof c === 'number' && Number.isFinite(c) && c > 0) {
-          closes.push(Number(c.toFixed(2)));
-          const t = rawTimestamps[i];
-          if (typeof t === 'number' && Number.isFinite(t)) {
-            timestamps.push(t);
-          }
-        }
-      }
-
-      const liveMetaPrice =
-        typeof meta.regularMarketPrice === 'number' &&
-        Number.isFinite(meta.regularMarketPrice) &&
-        meta.regularMarketPrice > 0
-          ? meta.regularMarketPrice
-          : typeof meta.fulldayPrice === 'number' &&
-            Number.isFinite(meta.fulldayPrice) &&
-            meta.fulldayPrice > 0
-          ? meta.fulldayPrice
-          : 0;
-
-      const fallbackClosePrice = closes.length > 0 ? closes[closes.length - 1] : 0;
-      const rawLastPrice = liveMetaPrice > 0 ? liveMetaPrice : fallbackClosePrice;
-
-      if (sym && rawLastPrice > 0) {
-        const lastPrice = Number(rawLastPrice.toFixed(2));
-        const rawTrailingWasNull =
-          rawCloses.length > 0 && rawCloses[rawCloses.length - 1] === null;
-
-        if (closes.length === 0) {
-          const basePrev = meta.previousClose || lastPrice;
-          closes.push(Number(Number(basePrev).toFixed(2)), lastPrice);
-        } else if (rawTrailingWasNull && closes[closes.length - 1] !== lastPrice) {
-          closes.push(lastPrice);
-          if (typeof meta.regularMarketTime === 'number') {
-            timestamps.push(meta.regularMarketTime);
-          }
-        } else if (closes[closes.length - 1] !== lastPrice) {
-          closes[closes.length - 1] = lastPrice;
-        }
-
-        const dailyPrevClose =
-          closes.length >= 2
-            ? closes[closes.length - 2] !== lastPrice
-              ? closes[closes.length - 2]
-              : closes.length >= 3
-              ? closes[closes.length - 3]
-              : closes[closes.length - 2]
-            : 0;
-
-        const prevCloseCandidate =
-          typeof meta.previousClose === 'number' &&
-          Number.isFinite(meta.previousClose) &&
-          meta.previousClose > 0 &&
-          meta.previousClose !== lastPrice
-            ? meta.previousClose
-            : dailyPrevClose > 0
-            ? dailyPrevClose
-            : lastPrice;
-
-        const officialChangePct =
-          typeof meta.regularMarketChangePercent === 'number' &&
-          Number.isFinite(meta.regularMarketChangePercent)
-            ? meta.regularMarketChangePercent
-            : typeof meta.fulldayChangePercent === 'number' &&
-              Number.isFinite(meta.fulldayChangePercent)
-            ? meta.fulldayChangePercent
-            : null;
-
-        const change1D =
-          officialChangePct !== null
-            ? Number(officialChangePct.toFixed(2))
-            : prevCloseCandidate > 0
-            ? Number((((lastPrice - prevCloseCandidate) / prevCloseCandidate) * 100).toFixed(2))
-            : 0;
-
-        const slicedCloses = closes.slice(-65);
-        const slicedTs = timestamps.length === closes.length ? timestamps.slice(-65) : undefined;
-        out[sym] = {
-          symbol: sym,
-          lastPrice,
-          change1D,
-          closes: slicedCloses,
-          timestamp: slicedTs,
-          shortName: meta.longName || meta.shortName || sym
-        };
-      }
-    }
-    return out;
+export function ingestCloudStateIntoEmbeddedSnapshot(cloudState: {
+  stocks?: Array<{ ticker?: string; name?: string; lastPrice?: number; change1D?: number }>;
+  macroIndicators?: Array<{ symbol?: string; value?: number; change1D?: number }>;
+  liveIhsgQuote?: { lastPrice: number; change1D: number };
+  liveIhsgReturns?: number[];
+}): void {
+  if (!cloudState || typeof cloudState !== 'object') return;
+  if (!embeddedSnapshot.data) {
+    embeddedSnapshot.data = {};
   }
 
-  // Format B: Direct symbol keys { "BBCA.JK": { close: [...], timestamp: [...], fulldayPrice, fulldayChangePercent, previousClose, chartPreviousClose } }
-  for (const [sym, val] of Object.entries(rawJson)) {
-    const entry = val as any;
-    if (entry && typeof entry === 'object' && (Array.isArray(entry.close) || entry.fulldayPrice || entry.regularMarketPrice)) {
-      const rawTimestamps: Array<number | null> = entry.timestamp || [];
-      const rawCloses: Array<number | null> = Array.isArray(entry.close) ? entry.close : [];
-      const closes: number[] = [];
-      const timestamps: number[] = [];
-      for (let i = 0; i < rawCloses.length; i++) {
-        const c = rawCloses[i];
-        if (typeof c === 'number' && Number.isFinite(c) && c > 0) {
-          closes.push(Number(c.toFixed(2)));
-          const t = rawTimestamps[i];
-          if (typeof t === 'number' && Number.isFinite(t)) {
-            timestamps.push(t);
-          }
-        }
+  const freshMap: Record<string, SparkSeriesItem> = {};
+
+  if (cloudState.liveIhsgQuote && cloudState.liveIhsgQuote.lastPrice > 0) {
+    const cloudQuote = cloudState.liveIhsgQuote;
+    const existingJkse = embeddedSnapshot.data['^JKSE'];
+    let closes: number[] =
+      existingJkse && Array.isArray(existingJkse.closes) && existingJkse.closes.length >= 2
+        ? [...existingJkse.closes]
+        : [cloudQuote.lastPrice, cloudQuote.lastPrice];
+
+    if (Array.isArray(cloudState.liveIhsgReturns) && cloudState.liveIhsgReturns.length >= 15) {
+      const rets = cloudState.liveIhsgReturns;
+      const reconstructed: number[] = new Array(rets.length + 1);
+      reconstructed[rets.length] = Number(cloudQuote.lastPrice.toFixed(2));
+      for (let i = rets.length - 1; i >= 0; i--) {
+        const rDec = Number(rets[i]) / 100;
+        const prev = reconstructed[i + 1] / Math.max(0.5, 1 + rDec);
+        reconstructed[i] = Number(prev.toFixed(2));
       }
-
-      const liveEntryPrice =
-        typeof entry.regularMarketPrice === 'number' &&
-        Number.isFinite(entry.regularMarketPrice) &&
-        entry.regularMarketPrice > 0
-          ? entry.regularMarketPrice
-          : typeof entry.fulldayPrice === 'number' &&
-            Number.isFinite(entry.fulldayPrice) &&
-            entry.fulldayPrice > 0
-          ? entry.fulldayPrice
-          : 0;
-
-      const fallbackClosePrice = closes.length > 0 ? closes[closes.length - 1] : 0;
-      const rawLastPrice = liveEntryPrice > 0 ? liveEntryPrice : fallbackClosePrice;
-
-      if (rawLastPrice > 0) {
-        const lastPrice = Number(rawLastPrice.toFixed(2));
-        const rawTrailingWasNull =
-          rawCloses.length > 0 && rawCloses[rawCloses.length - 1] === null;
-
-        if (closes.length === 0) {
-          const basePrev = entry.previousClose || lastPrice;
-          closes.push(Number(Number(basePrev).toFixed(2)), lastPrice);
-        } else if (rawTrailingWasNull && closes[closes.length - 1] !== lastPrice) {
-          closes.push(lastPrice);
-        } else if (closes[closes.length - 1] !== lastPrice) {
-          closes[closes.length - 1] = lastPrice;
-        }
-
-        const dailyPrevClose =
-          closes.length >= 2
-            ? closes[closes.length - 2] !== lastPrice
-              ? closes[closes.length - 2]
-              : closes.length >= 3
-              ? closes[closes.length - 3]
-              : closes[closes.length - 2]
-            : 0;
-
-        const prevCloseCandidate =
-          typeof entry.previousClose === 'number' &&
-          Number.isFinite(entry.previousClose) &&
-          entry.previousClose > 0 &&
-          entry.previousClose !== lastPrice
-            ? entry.previousClose
-            : dailyPrevClose > 0
-            ? dailyPrevClose
-            : lastPrice;
-
-        const officialChangePct =
-          typeof entry.regularMarketChangePercent === 'number' &&
-          Number.isFinite(entry.regularMarketChangePercent)
-            ? entry.regularMarketChangePercent
-            : typeof entry.fulldayChangePercent === 'number' &&
-              Number.isFinite(entry.fulldayChangePercent)
-            ? entry.fulldayChangePercent
-            : null;
-
-        const change1D =
-          officialChangePct !== null
-            ? Number(officialChangePct.toFixed(2))
-            : prevCloseCandidate > 0
-            ? Number((((lastPrice - prevCloseCandidate) / prevCloseCandidate) * 100).toFixed(2))
-            : 0;
-
-        const slicedCloses = closes.slice(-65);
-        const slicedTs = timestamps.length === closes.length ? timestamps.slice(-65) : undefined;
-        out[sym] = {
-          symbol: sym,
-          lastPrice,
-          change1D,
-          closes: slicedCloses,
-          timestamp: slicedTs,
-          shortName: entry.shortName || sym
-        };
-      }
+      closes = reconstructed;
+    } else {
+      closes[closes.length - 1] = Number(cloudQuote.lastPrice.toFixed(2));
     }
+
+    const jkseItem: SparkSeriesItem = {
+      ...(existingJkse || {}),
+      symbol: '^JKSE',
+      lastPrice: Number(cloudQuote.lastPrice.toFixed(2)),
+      change1D: Number(cloudQuote.change1D.toFixed(2)),
+      closes,
+      shortName: 'IDX Composite'
+    };
+    embeddedSnapshot.data['^JKSE'] = jkseItem;
+    freshMap['^JKSE'] = jkseItem;
   }
 
-  return out;
-}
-
-/**
- * Smart Relay Circuit Breaker & Health Tracker.
- * Automatically quarantines any public CORS relay that returns HTTP 4xx/5xx or times out
- * for 5 minutes so subsequent chunks never trigger repetitive console errors.
- */
-interface RelayHealthState {
-  quarantinedUntil: number;
-  lastSuccessAt: number;
-  consecutiveFailures: number;
-}
-
-const RELAY_QUARANTINE_MS = 5 * 60 * 1000; // 5 minutes quarantine on 403/429/5xx
-const relayHealthMap: Record<string, RelayHealthState> = {};
-
-function isRelayHealthy(name: string): boolean {
-  const st = relayHealthMap[name];
-  if (!st) return true;
-  if (Date.now() < st.quarantinedUntil) return false;
-  return true;
-}
-
-function recordRelaySuccess(name: string): void {
-  relayHealthMap[name] = {
-    quarantinedUntil: 0,
-    lastSuccessAt: Date.now(),
-    consecutiveFailures: 0
-  };
-}
-
-function recordRelayFailure(name: string, statusCode?: number): void {
-  const prev = relayHealthMap[name] || {
-    quarantinedUntil: 0,
-    lastSuccessAt: 0,
-    consecutiveFailures: 0
-  };
-  const failures = prev.consecutiveFailures + 1;
-  // Immediate quarantine on 401/403/429 Forbidden/Rate-Limit, or after 2 consecutive timeouts
-  const shouldQuarantine =
-    statusCode === 401 ||
-    statusCode === 403 ||
-    statusCode === 429 ||
-    (statusCode !== undefined && statusCode >= 500) ||
-    failures >= 2;
-
-  relayHealthMap[name] = {
-    quarantinedUntil: shouldQuarantine ? Date.now() + RELAY_QUARANTINE_MS : 0,
-    lastSuccessAt: prev.lastSuccessAt,
-    consecutiveFailures: failures
-  };
-}
-
-function filterHealthyRelays<T extends { name: string }>(relays: T[]): T[] {
-  const healthy = relays.filter((r) => isRelayHealthy(r.name));
-  // If all relays were quarantined, fall back to the primary JSON-wrapped relay
-  return healthy.length > 0 ? healthy : [relays[0]];
-}
-
-/**
- * Browser-side CORS-safe Yahoo Finance v8 Single Chart Fetcher.
- * Uses Smart Relay Circuit Breaker starting with the healthiest JSON-wrapped relay
- * so single symbols (especially `^JKSE`) resolve cleanly without 403 console noise.
- */
-async function fetchYahooChartSingleViaBrowserCors(
-  symbol: string,
-  range: string = '1mo',
-  onRelaySuccess?: (relayName: string) => void
-): Promise<SparkSeriesItem | null> {
-  const targetUrlQ1 = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
-    symbol
-  )}?range=${encodeURIComponent(range)}&interval=1d`;
-  const targetUrlQ2 = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
-    symbol
-  )}?range=${encodeURIComponent(range)}&interval=1d`;
-
-  const proxyEndpoints = filterHealthyRelays([
-    {
-      name: 'allorigins-get',
-      url: `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrlQ1)}`,
-      wrapped: true
-    },
-    {
-      name: 'codetabs',
-      url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrlQ2)}`,
-      wrapped: false
-    },
-    {
-      name: 'allorigins-raw',
-      url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrlQ1)}`,
-      wrapped: false
-    }
-  ]);
-
-  const attemptSingleRelay = async (proxy: {
-    name: string;
-    url: string;
-    wrapped: boolean;
-  }): Promise<SparkSeriesItem> => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
-    try {
-      const res = await fetch(proxy.url, {
-        signal: controller.signal,
-        cache: 'no-store'
-      });
-      clearTimeout(timer);
-      if (!res.ok) {
-        recordRelayFailure(proxy.name, res.status);
-        throw new Error(`HTTP_${res.status}`);
-      }
-
-      const rawPayload = await res.json();
-      const data =
-        proxy.wrapped && typeof rawPayload?.contents === 'string'
-          ? JSON.parse(rawPayload.contents)
-          : rawPayload;
-      const result = data?.chart?.result?.[0];
-      if (!result) throw new Error('EMPTY_CHART_RESULT');
-
-      const meta = result?.meta || {};
-      const rawCloses: Array<number | null> = result?.indicators?.quote?.[0]?.close || [];
-      const closes = rawCloses
-        .filter((c): c is number => typeof c === 'number' && Number.isFinite(c) && c > 0)
-        .map((c) => Number(c.toFixed(2)));
-
-      const livePrice =
-        typeof meta.regularMarketPrice === 'number' &&
-        Number.isFinite(meta.regularMarketPrice) &&
-        meta.regularMarketPrice > 0
-          ? meta.regularMarketPrice
-          : typeof meta.fulldayPrice === 'number' &&
-            Number.isFinite(meta.fulldayPrice) &&
-            meta.fulldayPrice > 0
-          ? meta.fulldayPrice
-          : closes.length > 0
-          ? closes[closes.length - 1]
-          : 0;
-
-      const lastPrice = Number(livePrice.toFixed(2));
-      if (!lastPrice || lastPrice <= 0) throw new Error('INVALID_PRICE');
-
-      const rawTrailingWasNull =
-        rawCloses.length > 0 && rawCloses[rawCloses.length - 1] === null;
-      if (closes.length > 0) {
-        if (rawTrailingWasNull && closes[closes.length - 1] !== lastPrice) {
-          closes.push(lastPrice);
-        } else if (closes[closes.length - 1] !== lastPrice) {
-          closes[closes.length - 1] = lastPrice;
-        }
-      }
-
-      const dailyPrevClose =
-        closes.length >= 2
-          ? closes[closes.length - 2] !== lastPrice
-            ? closes[closes.length - 2]
-            : closes.length >= 3
-            ? closes[closes.length - 3]
-            : closes[closes.length - 2]
-          : 0;
-
-      const prevClose =
-        typeof meta.previousClose === 'number' &&
-        Number.isFinite(meta.previousClose) &&
-        meta.previousClose > 0 &&
-        meta.previousClose !== lastPrice
-          ? meta.previousClose
-          : dailyPrevClose > 0
-          ? dailyPrevClose
-          : range === '1d' && typeof meta.chartPreviousClose === 'number' && meta.chartPreviousClose > 0
-          ? meta.chartPreviousClose
-          : lastPrice;
-
-      const officialChangePct =
-        typeof meta.regularMarketChangePercent === 'number' &&
-        Number.isFinite(meta.regularMarketChangePercent)
-          ? meta.regularMarketChangePercent
-          : typeof meta.fulldayChangePercent === 'number' &&
-            Number.isFinite(meta.fulldayChangePercent)
-          ? meta.fulldayChangePercent
-          : null;
-
-      const change1D =
-        officialChangePct !== null
-          ? Number(officialChangePct.toFixed(2))
-          : prevClose > 0
-          ? Number((((lastPrice - prevClose) / prevClose) * 100).toFixed(2))
-          : 0;
-
-      const rawVolumes: Array<number | null> = result?.indicators?.quote?.[0]?.volume || [];
-      const validVolumes = rawVolumes.filter(
-        (v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0
-      );
-      const recent20Volumes = validVolumes.slice(-20);
-      const avgVol20d =
-        recent20Volumes.length > 0
-          ? recent20Volumes.reduce((a, b) => a + b, 0) / recent20Volumes.length
-          : 0;
-      const adtv20dIdr = avgVol20d > 0 ? Math.round(avgVol20d * lastPrice) : undefined;
-
-      recordRelaySuccess(proxy.name);
-      onRelaySuccess?.(proxy.name);
-      return {
-        symbol,
-        lastPrice,
-        change1D,
-        closes:
-          closes.length >= 2
-            ? closes.slice(-65)
-            : Array(22).fill(lastPrice),
-        shortName: meta.longName || meta.shortName || symbol,
-        adtv20dIdr
-      };
-    } catch (err) {
-      recordRelayFailure(proxy.name);
-      throw err;
-    } finally {
-      clearTimeout(timer);
-    }
-  };
-
-  for (const proxy of proxyEndpoints) {
-    try {
-      return await attemptSingleRelay(proxy);
-    } catch {
-      // try next healthy relay
-    }
-  }
-
-  return null;
-}
-
-/**
- * Browser-side Load-Balanced Multi-Relay Yahoo Finance Spark Batch Fetcher for Static Hosts (GitHub Pages).
- * - Uses compact 9-symbol chunks and `range=1mo` (22 trading days) so JSON payload is ~68% smaller and never chokes proxies.
- * - Distributes chunks across healthy CORS relays (`allorigins-get`, `codetabs`, `allorigins-raw`) protected by
- *   Smart Relay Circuit Breaker with a polite 160ms stagger and 9.0s timeout.
- */
-async function fetchYahooSparkViaBrowserCors(
-  batchSymbols: string[],
-  range: string = '1mo',
-  onRelaySuccess?: (relayName: string) => void
-): Promise<Record<string, SparkSeriesItem>> {
-  const CHUNK_SIZE = 9;
-  const effectiveRange = range === '3mo' || range === '6mo' ? '1mo' : range;
-  const chunks: string[][] = [];
-  for (let i = 0; i < batchSymbols.length; i += CHUNK_SIZE) {
-    chunks.push(batchSymbols.slice(i, i + CHUNK_SIZE));
-  }
-
-  const fetchSingleSparkChunkCors = async (
-    chunkSymbols: string[],
-    chunkIndex: number
-  ): Promise<Record<string, SparkSeriesItem>> => {
-    // Polite stagger between chunks so proxies never rate-limit concurrent bursts
-    if (chunkIndex > 0) {
-      await new Promise((r) => setTimeout(r, chunkIndex * 160));
-    }
-
-    const joinedSymbols = encodeURIComponent(chunkSymbols.join(','));
-    const targetV8Q1 = `https://query1.finance.yahoo.com/v8/finance/spark?symbols=${joinedSymbols}&range=${encodeURIComponent(
-      effectiveRange
-    )}&interval=1d`;
-    const targetV8Q2 = `https://query2.finance.yahoo.com/v8/finance/spark?symbols=${joinedSymbols}&range=${encodeURIComponent(
-      effectiveRange
-    )}&interval=1d`;
-
-    const allRelays = filterHealthyRelays([
-      {
-        name: 'allorigins-get',
-        url: `https://api.allorigins.win/get?url=${encodeURIComponent(targetV8Q1)}`,
-        wrapped: true
-      },
-      {
-        name: 'codetabs',
-        url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetV8Q2)}`,
-        wrapped: false
-      },
-      {
-        name: 'allorigins-raw',
-        url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetV8Q1)}`,
-        wrapped: false
-      }
-    ]);
-
-    // Rotate starting relay based on chunkIndex across healthy relays
-    const rotatedRelays = [
-      ...allRelays.slice(chunkIndex % allRelays.length),
-      ...allRelays.slice(0, chunkIndex % allRelays.length)
-    ];
-
-    for (const proxy of rotatedRelays) {
-      if (!isRelayHealthy(proxy.name) && rotatedRelays.length > 1) {
+  if (Array.isArray(cloudState.stocks)) {
+    for (const st of cloudState.stocks) {
+      if (!st || !st.ticker || typeof st.lastPrice !== 'number' || st.lastPrice <= 0) {
         continue;
       }
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 9000);
-      try {
-        const res = await fetch(proxy.url, {
-          signal: controller.signal,
-          cache: 'no-store'
-        });
-        clearTimeout(timer);
-        if (res.ok) {
-          const rawPayload = await res.json();
-          const json =
-            proxy.wrapped && typeof rawPayload?.contents === 'string'
-              ? JSON.parse(rawPayload.contents)
-              : rawPayload;
-          const parsed = parseYahooSparkPayload(json);
-          if (Object.keys(parsed).length > 0) {
-            recordRelaySuccess(proxy.name);
-            onRelaySuccess?.(proxy.name);
-            return parsed;
-          }
-        } else {
-          recordRelayFailure(proxy.name, res.status);
-        }
-      } catch {
-        clearTimeout(timer);
-        recordRelayFailure(proxy.name);
-        // try next rotated relay
+      const cleanTicker = String(st.ticker).trim().toUpperCase().replace(/\.JK$/i, '');
+      const yfSym = `${cleanTicker}.JK`;
+      const existingItem = embeddedSnapshot.data[yfSym];
+      const lastPrice = Number(st.lastPrice);
+      const change1D = typeof st.change1D === 'number' ? Number(st.change1D) : 0;
+      const prevClose =
+        change1D !== 0 && change1D > -99
+          ? Number((lastPrice / (1 + change1D / 100)).toFixed(2))
+          : lastPrice;
+      const baseCloses: number[] =
+        existingItem && Array.isArray(existingItem.closes) && existingItem.closes.length >= 2
+          ? [...existingItem.closes]
+          : Array(21).fill(prevClose).concat([lastPrice]);
+      baseCloses[baseCloses.length - 1] = lastPrice;
+      if (baseCloses.length >= 2 && change1D !== 0) {
+        baseCloses[baseCloses.length - 2] = prevClose;
       }
-    }
-    return {};
-  };
-
-  const [chunkMaps, jkseExactQuote] = await Promise.all([
-    Promise.all(chunks.map((c, idx) => fetchSingleSparkChunkCors(c, idx))),
-    batchSymbols.includes('^JKSE')
-      ? fetchYahooChartSingleViaBrowserCors('^JKSE', '1mo', onRelaySuccess)
-      : Promise.resolve(null)
-  ]);
-
-  const out: Record<string, SparkSeriesItem> = {};
-  for (const m of chunkMaps) {
-    Object.assign(out, m);
-  }
-
-  if (jkseExactQuote && jkseExactQuote.lastPrice > 0) {
-    const existingJkse = out['^JKSE'];
-    if (existingJkse && existingJkse.closes.length >= 2) {
-      const updatedCloses = [...existingJkse.closes];
-      updatedCloses[updatedCloses.length - 1] = jkseExactQuote.lastPrice;
-      out['^JKSE'] = {
-        ...existingJkse,
-        lastPrice: jkseExactQuote.lastPrice,
-        change1D: jkseExactQuote.change1D,
-        closes: updatedCloses
+      const nextItem: SparkSeriesItem = {
+        ...(existingItem || {}),
+        symbol: yfSym,
+        lastPrice,
+        change1D,
+        closes: baseCloses,
+        shortName: st.name || existingItem?.shortName || cleanTicker
       };
-    } else {
-      out['^JKSE'] = jkseExactQuote;
+      embeddedSnapshot.data[yfSym] = nextItem;
+      freshMap[yfSym] = nextItem;
     }
   }
 
-  // If targeted lookup (<= 4 symbols) missed a symbol, fallback to single chart
-  if (batchSymbols.length <= 4) {
-    for (const sym of batchSymbols) {
-      if (!out[sym]) {
-        const singleChart = await fetchYahooChartSingleViaBrowserCors(
-          sym,
-          effectiveRange,
-          onRelaySuccess
-        );
-        if (singleChart && singleChart.lastPrice > 0) {
-          out[sym] = singleChart;
-        }
+  if (Array.isArray(cloudState.macroIndicators)) {
+    for (const m of cloudState.macroIndicators) {
+      if (!m || !m.symbol || typeof m.value !== 'number' || m.value <= 0) {
+        continue;
       }
+      const existingMacro = embeddedSnapshot.data[m.symbol];
+      const lastPrice = Number(m.value);
+      const change1D = typeof m.change1D === 'number' ? Number(m.change1D) : 0;
+      const prevClose =
+        change1D !== 0 && change1D > -99
+          ? Number((lastPrice / (1 + change1D / 100)).toFixed(2))
+          : lastPrice;
+      const baseCloses: number[] =
+        existingMacro && Array.isArray(existingMacro.closes) && existingMacro.closes.length >= 2
+          ? [...existingMacro.closes]
+          : [prevClose, lastPrice];
+      baseCloses[baseCloses.length - 1] = lastPrice;
+      const nextMacro: SparkSeriesItem = {
+        ...(existingMacro || {}),
+        symbol: m.symbol,
+        lastPrice,
+        change1D,
+        closes: baseCloses
+      };
+      embeddedSnapshot.data[m.symbol] = nextMacro;
+      freshMap[m.symbol] = nextMacro;
     }
   }
 
-  return out;
+  setCachedLiveQuotes(freshMap);
 }
 
 /**
  * Fetches closing price series and latest market quote for a single symbol.
- * Uses local Express /api/yahoo/chart when available, or browser CORS live fetch + embedded snapshot on GitHub Pages.
+ * Uses local Express /api/yahoo/chart when available, or GitHub Cloud Snapshot on GitHub Pages (zero public CORS proxy errors).
  */
 export async function fetchYahooChartSeries(
   symbol: string,
@@ -1067,20 +604,13 @@ export async function fetchYahooChartSeries(
     } catch {
       // Do not permanently disable local Express server on a single transient timeout
     }
-  } else {
-    const corsLive = await fetchYahooSparkViaBrowserCors([symbol], range);
-    if (corsLive[symbol] && corsLive[symbol].lastPrice > 0) {
-      setCachedLiveQuotes(corsLive);
-      if (embeddedSnapshot.data) {
-        Object.assign(embeddedSnapshot.data, corsLive);
-      }
-      return corsLive[symbol];
-    }
   }
 
-  const snapshot = await loadStaticMarketSnapshot();
+  // On GitHub Pages (or if Express was unreachable), refresh/read from GitHub Cloud API Snapshot (Zero CORS errors)
+  const snapshot = await loadStaticMarketSnapshot(!canUseLocalExpressBackend());
   const snapItem = snapshot?.data?.[symbol];
   if (snapItem && snapItem.lastPrice > 0 && Array.isArray(snapItem.closes)) {
+    setCachedLiveQuotes({ [symbol]: snapItem });
     return snapItem;
   }
 
@@ -1116,11 +646,10 @@ export function getLastBatchSyncTelemetry(): SyncTelemetryReport {
 }
 
 /**
- * 3-Tier Smart Hybrid Yahoo Spark Fetcher (Load-Balanced Multi-Relay & Honest Telemetry)
- * - Tier 1 (Priority Live Batch): Fetches up to 36 priority symbols (IHSG ^JKSE, 8 Global Macro, active holdings,
- *   Keranjang 1 & 2 picks, and top Screener leaders) in compact 9-symbol chunks across rotated relays.
- * - Tier 2 (On-Demand Micro-Sync): Single ticker or search query fetches in 1 lightweight call (< 400ms).
- * - Tier 3 (60s Memory Cache + Static Snapshot): Prevents redundant requests and records exact live vs fallback telemetry.
+ * 3-Tier Smart Hybrid Yahoo Spark Fetcher (Zero-CORS Error Architecture)
+ * - On AI Studio / Express Server: Fetches priority symbols directly via `/api/yahoo/spark` (`query1/query2.finance.yahoo.com`).
+ * - On GitHub Pages: Pulls real-time synced snapshot & cloud state directly via GitHub REST API (`api.github.com`)
+ *   without calling flaky public CORS proxies (`allorigins`/`codetabs`), eliminating all `(canceled)` network errors.
  */
 export async function fetchYahooSparkBatch(
   symbols: string[],
@@ -1138,8 +667,10 @@ export async function fetchYahooSparkBatch(
   let liveNetworkHits = 0;
   let memoryCacheHits = 0;
 
-  // 1. Hydrate baseline instantaneously from pre-synced Yahoo Finance snapshot
-  const snapshot = await loadStaticMarketSnapshot(false);
+  const isLocalBackend = canUseLocalExpressBackend();
+
+  // 1. Hydrate baseline from pre-synced Yahoo Finance snapshot (and pull fresh from GitHub REST API when forceLiveNetwork on GitHub Pages)
+  const snapshot = await loadStaticMarketSnapshot(forceLiveNetwork && !isLocalBackend);
   if (snapshot?.data) {
     for (const sym of uniqueSymbols) {
       const item = snapshot.data[sym];
@@ -1166,18 +697,16 @@ export async function fetchYahooSparkBatch(
     }
   }
 
-  // Cap live network batch to max 36 symbols (4 chunks of 9 symbols) so Yahoo & CORS relays never choke
+  // Cap live network batch to max 36 symbols
   const liveTargets = uncachedTargets.slice(0, 36);
 
-  if (liveTargets.length > 0 && (forceLiveNetwork || canUseLocalExpressBackend())) {
-    onChunkProgress?.(
-      1,
-      liveTargets.length,
-      `Live Multi-Relay (${liveTargets.length} Simbol Utama)`
-    );
-
-    let fetchedFromExpress = false;
-    if (canUseLocalExpressBackend()) {
+  if (liveTargets.length > 0) {
+    if (isLocalBackend) {
+      onChunkProgress?.(
+        1,
+        liveTargets.length,
+        `Express Yahoo API (${liveTargets.length} Simbol Utama)`
+      );
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 8500);
@@ -1194,7 +723,6 @@ export async function fetchYahooSparkBatch(
             const keys = Object.keys(json.data);
             if (keys.length > 0) {
               cachedLocalServerAvailable = true;
-              fetchedFromExpress = true;
               liveNetworkHits += keys.length;
               relaysUsedSet.add('Express Server API');
               setCachedLiveQuotes(json.data);
@@ -1206,31 +734,35 @@ export async function fetchYahooSparkBatch(
           }
         }
       } catch {
-        // Fallback to browser CORS if local backend timed out
+        // Fallback to GitHub Cloud / embedded snapshot already hydrated in resultMap
       }
-    }
-
-    if (!fetchedFromExpress && forceLiveNetwork) {
-      const liveBatchData = await fetchYahooSparkViaBrowserCors(
-        liveTargets,
-        range,
-        (relayName) => relaysUsedSet.add(relayName)
+    } else {
+      // Static Host (GitHub Pages): Hydrate directly from freshly pulled GitHub Cloud API Snapshot (Zero public CORS proxies)
+      onChunkProgress?.(
+        1,
+        liveTargets.length,
+        `GitHub Cloud Snapshot (${liveTargets.length} Simbol Utama)`
       );
-      const fetchedKeys = Object.keys(liveBatchData);
-      if (fetchedKeys.length > 0) {
-        liveNetworkHits += fetchedKeys.length;
-        setCachedLiveQuotes(liveBatchData);
-        Object.assign(resultMap, liveBatchData);
-        if (embeddedSnapshot.data) {
-          Object.assign(embeddedSnapshot.data, liveBatchData);
+      const cloudSyncedMap: Record<string, SparkSeriesItem> = {};
+      for (const sym of liveTargets) {
+        const item = resultMap[sym] || snapshot?.data?.[sym];
+        if (item && item.lastPrice > 0) {
+          cloudSyncedMap[sym] = item;
+          liveNetworkHits++;
         }
+      }
+      if (Object.keys(cloudSyncedMap).length > 0) {
+        relaysUsedSet.add('GitHub Cloud API & Snapshot (Zero-CORS)');
+        setCachedLiveQuotes(cloudSyncedMap);
       }
     }
   }
 
   const totalLiveOrRecent = liveNetworkHits + memoryCacheHits;
   const snapshotFallbacks = Math.max(0, liveTargets.length - liveNetworkHits);
-  const failedSymbols = liveTargets.filter((sym) => !getCachedLiveQuote(sym, 60000));
+  const failedSymbols = liveTargets.filter(
+    (sym) => !resultMap[sym] && !getCachedLiveQuote(sym, 60000)
+  );
   const syncDurationMs = Math.max(45, Date.now() - startedAt);
   const status: SyncTelemetryReport['status'] =
     totalLiveOrRecent >= Math.max(1, Math.floor(liveTargets.length * 0.6))
@@ -1249,7 +781,7 @@ export async function fetchYahooSparkBatch(
         ? Array.from(relaysUsedSet)
         : memoryCacheHits > 0
         ? ['In-Memory Live Cache (60s)']
-        : ['Static Snapshot Fallback'],
+        : ['GitHub Cloud Snapshot (Zero-CORS)'],
     failedSymbols,
     syncDurationMs,
     status

@@ -33,6 +33,7 @@ import {
   clearLiveQuoteMemoryCache,
   fetchLiveFinancialNewsRss,
   formatFullIndonesianDateTime,
+  ingestCloudStateIntoEmbeddedSnapshot,
   refreshLiveGlobalMacroAndIhsg
 } from './utils/liveMarketFetcher';
 import {
@@ -387,6 +388,7 @@ export default function App() {
       setIsSyncingCloud(true);
       try {
         const { bundle, sha } = await pullStateFromGitHubRepo(cfg);
+        ingestCloudStateIntoEmbeddedSnapshot(bundle);
         const targetBuffer =
           typeof bundle.rebalanceBufferPct === 'number' ? bundle.rebalanceBufferPct : 40;
         const freshBaseUniverse = buildIdx100StockUniverse(targetBuffer);
@@ -1078,13 +1080,16 @@ export default function App() {
               </div>
               <div style="margin-top:6px;"><strong>Status Radar HSC &amp; Likuiditas (${activeQuotedCount} Emiten):</strong> <strong>${liquidCount} Saham Likuid</strong> · <span style="color:#9E2A2B;font-weight:700;">${kseiHscTotalCount} Saham Resmi HSC BEI-KSEI</span> (<span style="color:#D97706;font-weight:700;">${kseiDividendPenCount} Dividen Kuat Lolos Penalti Skor</span>) · <span style="color:#E11D48;font-weight:700;">${earlyWarningSuspectCount} Suspect HSC Early Warning</span></div>
               <div style="margin-top:6px;padding:6px 8px;background:#EFF6FF;border:1px solid #BAE6FD;border-radius:2px;font-size:11px;color:#0284C7;">
-                💡 <strong>Arsitektur Anti-Block 9-Simbol (1mo):</strong> Permintaan dipecah menjadi gelombang kecil 9 ticker melintasi 4 relay independen agar tidak diblokir/canceled oleh proxy publik. Klik ikon <strong>↻</strong> di samping harga saham atau buka <strong>Inspect</strong> untuk mikro-sinkronisasi 1 saham secara instan.
+                💡 <strong>Arsitektur Zero-CORS GitHub Cloud &amp; Express API:</strong> Sinkronisasi menarik kuotasi terbaru dari GitHub REST API Snapshot &amp; Server Backend tanpa proxy CORS pihak ketiga (bebas error <em>canceled</em> di Network).
               </div>
             </div>
           `
         });
 
         if (result.isDenied) {
+          if (isGitHubCloudConfigured(githubConfig)) {
+            triggerGitHubActionsMarketSync(githubConfig).catch(() => {});
+          }
           await handleMasterSyncAll(false, rerankedStocks, true);
         }
       }
@@ -1123,8 +1128,8 @@ export default function App() {
     };
   }, []);
 
-  // On initial mount: hydrate from GitHub Cloud / static snapshot, then immediately run lightweight Tier-1 live sync
-  // so IHSG (^JKSE) and priority stocks always reflect actual Yahoo Finance live prices.
+  // On initial mount: hydrate directly from GitHub Cloud state (nostradamus_cloud_state.json) and static-market-snapshot.json
+  // without firing unsolicited third-party CORS proxy requests.
   useEffect(() => {
     const initSync = async () => {
       const cfg = loadGitHubCloudConfig();
@@ -1140,7 +1145,27 @@ export default function App() {
           try {
             const res = await fetch(path, { cache: 'no-store' });
             if (res.ok) {
-              const snap = (await res.json()) as { encryptedVault?: EncryptedPortfolioVault };
+              const snap = (await res.json()) as Partial<CloudStateBundle> & {
+                encryptedVault?: EncryptedPortfolioVault;
+              };
+              if (snap && (Array.isArray(snap.stocks) || snap.liveIhsgQuote)) {
+                ingestCloudStateIntoEmbeddedSnapshot(snap);
+                const targetBuffer =
+                  typeof snap.rebalanceBufferPct === 'number'
+                    ? snap.rebalanceBufferPct
+                    : rebalanceBufferPct;
+                const freshBase = buildIdx100StockUniverse(targetBuffer);
+                setStocks(freshBase);
+                if (Array.isArray(snap.macroIndicators) && snap.macroIndicators.length > 0) {
+                  setMacroIndicators(snap.macroIndicators);
+                }
+                if (snap.liveIhsgQuote && snap.liveIhsgQuote.lastPrice >= 6000) {
+                  setLiveIhsgQuote(snap.liveIhsgQuote);
+                }
+                if (Array.isArray(snap.liveIhsgReturns) && snap.liveIhsgReturns.length >= 15) {
+                  setLiveIhsgReturns(snap.liveIhsgReturns);
+                }
+              }
               if (snap?.encryptedVault && isVaultMatchingRepoScope(snap.encryptedVault, scope)) {
                 setSecurityVault((prev) => {
                   if (!prev || prev.isDefaultPassphrase === true) {
@@ -1157,8 +1182,14 @@ export default function App() {
           }
         }
       }
-      // Run background Tier-1 live sync so IHSG (^JKSE) and priority stocks never stay on stale cached prices
-      await handleMasterSyncAll(true);
+      // Hydrate pre-synced RSS news from static snapshot without triggering Yahoo CORS proxy requests
+      fetchLiveFinancialNewsRss(DEFAULT_NEWS_SENTIMENT)
+        .then((items) => {
+          if (Array.isArray(items) && items.length > 0) {
+            setNewsItems(items);
+          }
+        })
+        .catch(() => {});
     };
     initSync();
   }, []);

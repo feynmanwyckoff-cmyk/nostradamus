@@ -568,17 +568,21 @@ async function main() {
 
   const jsonString = JSON.stringify(payload);
 
-  // Write to 3 locations so it is embedded in app.js, served from /public, AND served from repo root /
+  // Write to 4 locations so it is embedded in app.js, served from /public, /docs, AND repo root /
   const srcDataOut = path.resolve(__dirname, '../src/data/staticMarketSnapshot.json');
   const publicOut = path.resolve(__dirname, '../public/static-market-snapshot.json');
+  const docsOut = path.resolve(__dirname, '../docs/static-market-snapshot.json');
   const rootOut = path.resolve(__dirname, '../static-market-snapshot.json');
 
   fs.writeFileSync(srcDataOut, jsonString);
   fs.writeFileSync(publicOut, jsonString);
+  if (fs.existsSync(path.dirname(docsOut))) {
+    fs.writeFileSync(docsOut, jsonString);
+  }
   fs.writeFileSync(rootOut, jsonString);
 
   console.log(
-    `Saved ${liveFetchedCount} live Yahoo Finance symbols (${Object.keys(sparkData).length} total hydrated JCI + Macro symbols) and ${newsItems.length} news items to src/data, public/, and root.`
+    `Saved ${liveFetchedCount} live Yahoo Finance symbols (${Object.keys(sparkData).length} total hydrated JCI + Macro symbols) and ${newsItems.length} news items to src/data, public/, docs/, and root.`
   );
 }
 
