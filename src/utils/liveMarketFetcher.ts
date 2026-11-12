@@ -539,40 +539,45 @@ function canUseExpressOnDemandApi(): boolean {
   return host === 'localhost' || host === '127.0.0.1' || host.endsWith('.run.app');
 }
 
+let browserRelayCircuitBrokenUntil = 0;
+
 /**
- * Fast Browser CORS Relay Fetcher for Static Hosts (GitHub Pages):
- * Races lightweight CORS relays (`corsproxy.io`, `allorigins.win/raw`, `codetabs`) so single-ticker
- * On-Demand Inspector (`ARNA.JK`, `^JKSE`) and Priority Wave 1 symbols always get real-time Yahoo Finance
- * quotes even when running on static GitHub Pages without a Node/Express backend.
+ * Clean Single-Endpoint Browser Relay Fetcher for Static Hosts (GitHub Pages):
+ * - Eliminates deprecated/blocked legacy proxies (`corsproxy.io` 403, `api.allorigins.win` timeout, `codetabs` timeout)
+ *   that caused red 403 and `(canceled)` entries in the browser Network tab.
+ * - Uses `allorigins.hexlet.app/raw` with an automatic 90-second Circuit Breaker (`browserRelayCircuitBrokenUntil`)
+ *   so if the relay is unreachable or throttled, it trips immediately on the first probe without cascading failures.
  */
 async function fetchYahooJsonViaBrowserRelay(
   yahooUrl: string,
-  timeoutMs: number = 5500
+  timeoutMs: number = 8500
 ): Promise<any | null> {
-  const relayBuilders = [
-    (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-    (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-    (u: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`
-  ];
+  if (Date.now() < browserRelayCircuitBrokenUntil) {
+    return null;
+  }
 
-  for (const buildUrl of relayBuilders) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const res = await fetch(buildUrl(yahooUrl), {
-        signal: controller.signal,
-        cache: 'no-store'
-      });
-      clearTimeout(timer);
-      if (res.ok) {
-        const data = await res.json();
-        if (data && typeof data === 'object') {
-          return data;
-        }
+  const relayUrl = `https://allorigins.hexlet.app/raw?disableCache=true&url=${encodeURIComponent(
+    yahooUrl
+  )}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(relayUrl, {
+      signal: controller.signal,
+      cache: 'no-store'
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && typeof data === 'object') {
+        browserRelayCircuitBrokenUntil = 0;
+        return data;
       }
-    } catch {
-      clearTimeout(timer);
     }
+    browserRelayCircuitBrokenUntil = Date.now() + 90_000;
+  } catch {
+    clearTimeout(timer);
+    browserRelayCircuitBrokenUntil = Date.now() + 90_000;
   }
   return null;
 }
@@ -599,7 +604,7 @@ async function fetchSingleChartViaBrowserRelay(
   const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
     symbol
   )}?range=${encodeURIComponent(range)}&interval=1d&events=div`;
-  const data = await fetchYahooJsonViaBrowserRelay(yahooUrl, 5500);
+  const data = await fetchYahooJsonViaBrowserRelay(yahooUrl, 8500);
   const result = data?.chart?.result?.[0];
   if (!result) return null;
 
@@ -694,15 +699,16 @@ async function fetchSparkChunkViaBrowserRelay(
   range: string = '1mo'
 ): Promise<Record<string, SparkSeriesItem>> {
   const resultMap: Record<string, SparkSeriesItem> = {};
-  const healTargets: string[] = [];
-  if (symbolsChunk.length === 0) return resultMap;
+  if (symbolsChunk.length === 0 || Date.now() < browserRelayCircuitBrokenUntil) {
+    return resultMap;
+  }
 
   const joined = symbolsChunk.map((s) => encodeURIComponent(s)).join(',');
   const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/spark?symbols=${joined}&range=${encodeURIComponent(
     range
   )}&interval=1d`;
 
-  const sparkData = await fetchYahooJsonViaBrowserRelay(yahooUrl, 5500);
+  const sparkData = await fetchYahooJsonViaBrowserRelay(yahooUrl, 8500);
   if (sparkData && typeof sparkData === 'object') {
     for (const sym of symbolsChunk) {
       const entry = sparkData[sym];
@@ -759,16 +765,21 @@ async function fetchSparkChunkViaBrowserRelay(
           closes[closes.length - 1] = lastPrice;
         }
 
-        if (
+        const hasSparkWeekdayGap =
           lastPrice >= 68 &&
           timestamps.length >= 2 &&
           timestamps[timestamps.length - 1] - timestamps[timestamps.length - 2] > 120000 &&
-          new Date(timestamps[timestamps.length - 1] * 1000).getUTCDay() !== 1
-        ) {
-          healTargets.push(sym);
-        }
+          new Date(timestamps[timestamps.length - 1] * 1000).getUTCDay() !== 1;
 
-        const dailyPrevClose = resolveDailyPrevCloseClient(closes, timestamps);
+        const snapBaseline = embeddedSnapshot?.data?.[sym];
+        const dailyPrevClose =
+          hasSparkWeekdayGap &&
+          snapBaseline &&
+          typeof snapBaseline.previousClose === 'number' &&
+          snapBaseline.previousClose > 0
+            ? snapBaseline.previousClose
+            : resolveDailyPrevCloseClient(closes, timestamps);
+
         const prevClose =
           typeof entry.previousClose === 'number' &&
           Number.isFinite(entry.previousClose) &&
@@ -807,70 +818,82 @@ async function fetchSparkChunkViaBrowserRelay(
     }
   }
 
-  if (healTargets.length > 0) {
-    await Promise.all(
-      healTargets.map(async (sym) => {
-        const single = await fetchSingleChartViaBrowserRelay(sym, range);
-        if (single) {
-          resultMap[sym] = single;
-        }
-      })
-    );
-  }
-
   return resultMap;
 }
 
+let inFlightSnapshotPromise: Promise<StaticMarketSnapshotPayload | null> | null = null;
+let lastStaticSnapshotPullAt = 0;
+
 /**
  * Loads the static market snapshot, and when `forceRefresh` is true on GitHub Pages,
- * first pulls directly from GitHub REST API (`api.github.com/repos/{owner}/{repo}/contents/public/static-market-snapshot.json`)
- * to bypass GitHub Pages CDN lag, then falls back to `./static-market-snapshot.json?t=...`.
+ * deduplicates concurrent calls so at most 1 network request is made per 25 seconds.
  */
 async function loadStaticMarketSnapshot(
   forceRefresh = false
 ): Promise<StaticMarketSnapshotPayload | null> {
-  if (forceRefresh && typeof window !== 'undefined' && !canUseLocalExpressBackend()) {
-    // 1. Try direct real-time GitHub Contents API (bypasses CDN cache completely)
-    try {
-      const ghApiSnapshot = (await pullLiveMarketSnapshotFromGitHubApi()) as StaticMarketSnapshotPayload | null;
-      if (ghApiSnapshot && ghApiSnapshot.data && typeof ghApiSnapshot.data === 'object') {
-        if (embeddedSnapshot.data) {
-          Object.assign(embeddedSnapshot.data, ghApiSnapshot.data);
-        } else {
-          embeddedSnapshot.data = ghApiSnapshot.data;
-        }
-        if (Array.isArray(ghApiSnapshot.newsItems) && ghApiSnapshot.newsItems.length > 0) {
-          embeddedSnapshot.newsItems = ghApiSnapshot.newsItems;
-        }
-        return embeddedSnapshot;
-      }
-    } catch {
-      // Fall back to relative fetch
+  if (
+    forceRefresh &&
+    typeof window !== 'undefined' &&
+    !canUseLocalExpressBackend() &&
+    Date.now() - lastStaticSnapshotPullAt > 25_000
+  ) {
+    if (inFlightSnapshotPromise) {
+      return inFlightSnapshotPromise;
     }
 
-    // 2. Fallback: relative fetch with cache-busting timestamp
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 5000);
-      const res = await fetch(`./static-market-snapshot.json?t=${Date.now()}`, {
-        signal: controller.signal,
-        cache: 'no-store'
-      });
-      clearTimeout(timer);
-      if (res.ok) {
-        const freshJson = (await res.json()) as StaticMarketSnapshotPayload;
-        if (freshJson && freshJson.data && typeof freshJson.data === 'object') {
-          if (embeddedSnapshot.data) {
-            Object.assign(embeddedSnapshot.data, freshJson.data);
-          } else {
-            embeddedSnapshot.data = freshJson.data;
+    inFlightSnapshotPromise = (async () => {
+      try {
+        // 1. Try direct real-time GitHub Contents API (bypasses CDN cache completely)
+        try {
+          const ghApiSnapshot = (await pullLiveMarketSnapshotFromGitHubApi()) as StaticMarketSnapshotPayload | null;
+          if (ghApiSnapshot && ghApiSnapshot.data && typeof ghApiSnapshot.data === 'object') {
+            lastStaticSnapshotPullAt = Date.now();
+            if (embeddedSnapshot.data) {
+              Object.assign(embeddedSnapshot.data, ghApiSnapshot.data);
+            } else {
+              embeddedSnapshot.data = ghApiSnapshot.data;
+            }
+            if (Array.isArray(ghApiSnapshot.newsItems) && ghApiSnapshot.newsItems.length > 0) {
+              embeddedSnapshot.newsItems = ghApiSnapshot.newsItems;
+            }
+            return embeddedSnapshot;
           }
-          return embeddedSnapshot;
+        } catch {
+          // Fall back to relative fetch
         }
+
+        // 2. Fallback: relative fetch with cache-busting timestamp
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 6000);
+          const res = await fetch(`./static-market-snapshot.json?t=${Date.now()}`, {
+            signal: controller.signal,
+            cache: 'no-store'
+          });
+          clearTimeout(timer);
+          if (res.ok) {
+            const freshJson = (await res.json()) as StaticMarketSnapshotPayload;
+            if (freshJson && freshJson.data && typeof freshJson.data === 'object') {
+              lastStaticSnapshotPullAt = Date.now();
+              if (embeddedSnapshot.data) {
+                Object.assign(embeddedSnapshot.data, freshJson.data);
+              } else {
+                embeddedSnapshot.data = freshJson.data;
+              }
+              return embeddedSnapshot;
+            }
+          }
+        } catch {
+          // Fall back to embeddedSnapshot
+        }
+      } finally {
+        inFlightSnapshotPromise = null;
       }
-    } catch {
-      // Fall back to embeddedSnapshot
-    }
+
+      return embeddedSnapshot && embeddedSnapshot.data ? embeddedSnapshot : null;
+    })();
+
+    return inFlightSnapshotPromise;
   }
 
   if (embeddedSnapshot && embeddedSnapshot.data && typeof embeddedSnapshot.data === 'object') {
@@ -907,6 +930,7 @@ function setCachedLiveQuotes(map: Record<string, SparkSeriesItem>): void {
 
 export function clearLiveQuoteMemoryCache(): void {
   liveQuoteMemoryCache.clear();
+  browserRelayCircuitBrokenUntil = 0;
 }
 
 /**
@@ -1097,7 +1121,8 @@ export async function fetchYahooSparkBatch(
   range: string = '1mo',
   onChunkProgress?: (syncedCount: number, totalCount: number, latestSymbol: string) => void,
   forceLiveNetwork: boolean = false,
-  bypassMemoryCache: boolean = false
+  bypassMemoryCache: boolean = false,
+  allowBrowserRelay: boolean = true
 ): Promise<Record<string, SparkSeriesItem>> {
   const startedAt = Date.now();
   const uniqueSymbols = Array.from(new Set(symbols.filter(Boolean)));
@@ -1206,8 +1231,11 @@ export async function fetchYahooSparkBatch(
       }
     } else {
       // Static Host (GitHub Pages):
-      // 1) Directly query live Yahoo Finance via browser relay for priority symbols (up to 60 symbols in chunks of 20)
-      const directRelayTargets = liveTargets.slice(0, 60);
+      // 1) Directly query live Yahoo Finance via clean browser relay ONLY for Wave 1 priority symbols (max 2 sequential chunks of 20)
+      const directRelayTargets =
+        allowBrowserRelay && Date.now() >= browserRelayCircuitBrokenUntil
+          ? liveTargets.slice(0, 40)
+          : [];
       const relayChunks: string[][] = [];
       for (let i = 0; i < directRelayTargets.length; i += 20) {
         relayChunks.push(directRelayTargets.slice(i, i + 20));
@@ -1219,37 +1247,22 @@ export async function fetchYahooSparkBatch(
           liveTargets.length,
           `Live Yahoo Relay (${directRelayTargets.length} Prioritas) + Snapshot`
         );
-        await Promise.all(
-          relayChunks.map(async (chunk) => {
-            try {
-              const chunkMap = await fetchSparkChunkViaBrowserRelay(chunk, range);
-              const keys = Object.keys(chunkMap);
-              if (keys.length > 0) {
-                liveNetworkHits += keys.length;
-                relaysUsedSet.add('Direct Yahoo Browser Relay (Live Real-Time)');
-                setCachedLiveQuotes(chunkMap);
-                Object.assign(resultMap, chunkMap);
-                if (embeddedSnapshot.data) {
-                  Object.assign(embeddedSnapshot.data, chunkMap);
-                }
+        for (const chunk of relayChunks) {
+          if (Date.now() < browserRelayCircuitBrokenUntil) break;
+          try {
+            const chunkMap = await fetchSparkChunkViaBrowserRelay(chunk, range);
+            const keys = Object.keys(chunkMap);
+            if (keys.length > 0) {
+              liveNetworkHits += keys.length;
+              relaysUsedSet.add('Direct Yahoo Browser Relay (Live Real-Time)');
+              setCachedLiveQuotes(chunkMap);
+              Object.assign(resultMap, chunkMap);
+              if (embeddedSnapshot.data) {
+                Object.assign(embeddedSnapshot.data, chunkMap);
               }
-            } catch {
-              // continue with snapshot fallback
             }
-          })
-        );
-
-        // Also ensure ^JKSE is exact if requested
-        if (directRelayTargets.includes('^JKSE') && !relaysUsedSet.has('Direct Yahoo Browser Relay (Live Real-Time)')) {
-          const jkseLive = await fetchSingleChartViaBrowserRelay('^JKSE', '5d');
-          if (jkseLive && jkseLive.lastPrice > 1000) {
-            resultMap['^JKSE'] = jkseLive;
-            setCachedLiveQuotes({ '^JKSE': jkseLive });
-            if (embeddedSnapshot.data) {
-              embeddedSnapshot.data['^JKSE'] = jkseLive;
-            }
-            liveNetworkHits++;
-            relaysUsedSet.add('Direct Yahoo Browser Relay (Live Real-Time)');
+          } catch {
+            break;
           }
         }
       }
@@ -1648,7 +1661,8 @@ export async function refreshLiveGlobalMacroAndIhsg(
     '1mo',
     undefined,
     forceLiveNetwork,
-    bypassMemoryCache
+    bypassMemoryCache,
+    true
   );
   const wave1Telemetry = getLastBatchSyncTelemetry();
 
@@ -1790,7 +1804,7 @@ export async function refreshLiveGlobalMacroAndIhsg(
     });
   }
 
-  // STAGE 2: Full Universe Sweep (~925 remaining IDX stocks in parallel chunks)
+  // STAGE 2: Full Universe Sweep (~925 remaining IDX stocks in parallel chunks; on static hosts uses snapshot directly without extra CORS relay calls)
   let wave2Map: Record<string, SparkSeriesItem> = {};
   if (wave2RemainingTargets.length > 0) {
     wave2Map = await fetchYahooSparkBatch(
@@ -1804,7 +1818,8 @@ export async function refreshLiveGlobalMacroAndIhsg(
         );
       },
       forceLiveNetwork,
-      bypassMemoryCache
+      bypassMemoryCache,
+      false
     );
   }
   const wave2Telemetry = getLastBatchSyncTelemetry();

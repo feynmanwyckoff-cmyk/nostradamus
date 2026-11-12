@@ -1023,20 +1023,6 @@ export default function App() {
       setLastCacheSavedAt(fullTimestampStr);
       setLastFullSyncDateTime(fullTimestampStr);
 
-      if (isGitHubCloudConfigured(githubConfig) && githubConfig.autoSyncOnEdit) {
-        const nextBundle = buildCloudBundle(
-          undefined,
-          undefined,
-          rerankedStocks,
-          undefined,
-          undefined,
-          updatedMacro,
-          activeQuote,
-          activeRets
-        );
-        handlePushToGitHub(githubConfig, nextBundle, true);
-      }
-
       if (!silent) {
         const activeQuotedCount = rerankedStocks.filter((s) => s.lastPrice > 0).length;
         const liquidCount = rerankedStocks.filter(

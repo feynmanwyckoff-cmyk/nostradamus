@@ -1033,6 +1033,36 @@ export async function syncForkUpstreamAndRebuildPages(
               type: 'blob';
               content: string;
             }> = [];
+            const addedPathsSet = new Set<string>();
+
+            // Pull exact TypeScript source & bundle files from Express /api/github/sync-files if running on local/AI Studio server
+            try {
+              const syncFilesRes = await fetch(`/api/github/sync-files?t=${Date.now()}`, {
+                cache: 'no-store'
+              });
+              if (syncFilesRes.ok) {
+                const syncFilesJson = (await syncFilesRes.json()) as {
+                  files?: Record<string, string>;
+                };
+                if (syncFilesJson?.files && typeof syncFilesJson.files === 'object') {
+                  for (const [repoPath, content] of Object.entries(syncFilesJson.files)) {
+                    if (!content || content.length < 40) continue;
+                    const localSha = await computeGitBlobSha(content);
+                    if (existingBlobSha.get(repoPath) !== localSha) {
+                      newTreeEntries.push({
+                        path: repoPath,
+                        mode: '100644',
+                        type: 'blob',
+                        content
+                      });
+                      addedPathsSet.add(repoPath);
+                    }
+                  }
+                }
+              }
+            } catch {
+              // ignore when running on static host
+            }
 
             for (const asset of bundleAssets) {
               try {
@@ -1049,13 +1079,14 @@ export async function syncForkUpstreamAndRebuildPages(
                 }
                 const localSha = await computeGitBlobSha(text);
                 for (const repoPath of asset.targetPaths) {
-                  if (existingBlobSha.get(repoPath) !== localSha) {
+                  if (!addedPathsSet.has(repoPath) && existingBlobSha.get(repoPath) !== localSha) {
                     newTreeEntries.push({
                       path: repoPath,
                       mode: '100644',
                       type: 'blob',
                       content: text
                     });
+                    addedPathsSet.add(repoPath);
                   }
                 }
               } catch {

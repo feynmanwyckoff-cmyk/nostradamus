@@ -1,4 +1,5 @@
 import express from 'express';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
@@ -1099,6 +1100,34 @@ INSTRUKSI GAYA BAHASA & PENALARAN KOMITE INVESTASI WAJIB (HUMANIS, LUGAS & KONSI
         err instanceof Error ? err.message : 'Gagal menghasilkan analisis AI emiten.';
       res.status(500).json({ error: message, fallbackRequired: true });
     }
+  });
+
+  // Serve raw source & pre-compiled bundle files so 1-Click GitHub Fork Sync keeps GitHub Actions & Pages 100% in sync
+  app.get('/api/github/sync-files', (_req, res) => {
+    const syncableRelPaths = [
+      'index.html',
+      'docs/index.html',
+      'docs/assets/app.js',
+      'docs/assets/index.css',
+      'src/App.tsx',
+      'src/utils/liveMarketFetcher.ts',
+      'src/utils/githubCloudSync.ts',
+      'src/components/EmitenFundamentalInspectorModal.tsx',
+      'src/data/backendTemplates.ts',
+      'scripts/generate-static-market-bundle.mjs'
+    ];
+    const files: Record<string, string> = {};
+    for (const relPath of syncableRelPaths) {
+      try {
+        const abs = path.join(__dirname, relPath);
+        if (fs.existsSync(abs)) {
+          files[relPath] = fs.readFileSync(abs, 'utf8');
+        }
+      } catch {
+        // ignore unreadable file
+      }
+    }
+    res.json({ files });
   });
 
   // Serve pre-compiled GitHub Pages static bundle (/docs) so client-side GitHub Fork Sync can push the latest assets
