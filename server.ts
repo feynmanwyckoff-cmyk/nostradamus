@@ -860,7 +860,17 @@ DATA FUNDAMENTAL & KUANTITATIF LIVE EMITEN:
   * Skor Komposit OOS: ${stock.dmuCompositeScore}/10 (Peringkat Top ${stock.dmuRankPct}%, Zona Buffer: ${stock.dmuZone})
   * Propensitas Bobot 1/β: ${betaPropensityVal.toFixed(2)}x (Beta ${stock.beta1Y}x) | Batas Alokasi Maks (1/β Cap): ≤${betaCapVal.toFixed(1)}% dari portofolio
 - Status Override Aset Defensif Terdiskon (Beta < 0.5 & Skor Value > 9.0): ${isDefensiveOverride ? 'AKTIF -> WAJIB abaikan koreksi harga 30D negatif dan tetapkan status "Strong Buy: Anomali Aset Defensif Terdiskon"' : 'TIDAK AKTIF (Gunakan uji silang normal)'}
-- Status Saringan Risiko HSC (Gorengan/Cornered): ${stock.isHscFlagged ? `TERINDIKASI HSC (${stock.hscReason || 'Anomali Spekulatif'})` : 'BEBAS INDIKASI HSC (Clean Institutional/Fundamental)'}
+- Status Saringan Risiko HSC BEI-KSEI & Early Warning Quant: ${
+        stock.hscSource === 'KSEI_OFFICIAL' && stock.hscTier === 'KSEI_DIVIDEND_PENALTY'
+          ? `TERCATAT DALAM DAFTAR RESMI HSC BEI-KSEI (Kepemilikan Top-10: ${Number(stock.kseiHscConcentrationPct || 95).toFixed(3)}%, Status: ${stock.kseiHscIsNew ? 'BARU 11 Nov 2026' : 'Eksisting'}) NAMUN MEMILIKI DIVIDEN KUAT -> Hanya dikenakan Penalti Skor -${Number(stock.kseiHscScorePenaltyPts || 0.45).toFixed(2)} poin TANPA blokir otomatis (${stock.hscReason || ''})`
+          : stock.hscSource === 'KSEI_OFFICIAL'
+          ? `DIBLOKIR OLEH DAFTAR RESMI HSC BEI-KSEI (Kepemilikan Top-10: ${Number(stock.kseiHscConcentrationPct || 95).toFixed(3)}%, Status: ${stock.kseiHscIsNew ? 'BARU 11 Nov 2026' : 'Eksisting'}, Catatan: ${stock.kseiHscFootnote || 'NONE'}) -> ${stock.hscReason || ''}`
+          : stock.hscTier === 'EARLY_WARNING_SUSPECT'
+          ? `TERDETEKSI RADAR EARLY WARNING QUANT SEBAGAI SUSPECT HSC PRA-RILIS BEI (${stock.hscReason || 'Anomali Spekulatif'}) -> Diblokir ke Rotate Out`
+          : stock.isHscFlagged
+          ? `TERINDIKASI HSC MANUAL (${stock.hscReason || 'Anomali Spekulatif'})`
+          : 'BEBAS INDIKASI HSC (Kepemilikan Top-10 KSEI < 92,5% · Free Float Sehat)'
+      }
 - Skor 4 Pilar Fundamental: (1) Gross Profit & Anti-Junk ${joeliardiEval?.businessQualityScore ?? 0}/100, (2) Kesehatan Neraca ${joeliardiEval?.balanceSheetHealthScore ?? 0}/100, (3) Justified PBV & Kurva SBN ${joeliardiEval?.valuationSafetyScore ?? 0}/100, (4) 1/β Barbell Position Sizing ${joeliardiEval?.oosQuantRobustnessScore ?? 0}/100
 - Rezim Pasar IHSG Saat Ini: ${regimeStatus || 'WASPADA'}
 

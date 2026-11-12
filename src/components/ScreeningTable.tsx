@@ -7,6 +7,10 @@ import {
 } from '../utils/quantEngine';
 import { IDX_SECTOR_CATALOG, fetchLiveIdxTicker } from '../utils/liveMarketFetcher';
 import {
+  formatKseiFootnoteFullDescription,
+  formatKseiFootnoteShortLabel
+} from '../data/idxKseiHscRegistry';
+import {
   formatIndonesianDecimalInput,
   formatIdrPriceDisplay,
   parseIndonesianNumber
@@ -169,10 +173,29 @@ export function ScreeningTable({
     [rankedStocks]
   );
 
+  const kseiOfficialAllCount = useMemo(
+    () => rankedStocks.filter((s) => s.hscSource === 'KSEI_OFFICIAL').length,
+    [rankedStocks]
+  );
+
+  const kseiDividendPenaltyCount = useMemo(
+    () => rankedStocks.filter((s) => s.hscTier === 'KSEI_DIVIDEND_PENALTY').length,
+    [rankedStocks]
+  );
+
+  const earlyWarningSuspectCount = useMemo(
+    () => rankedStocks.filter((s) => s.hscTier === 'EARLY_WARNING_SUSPECT').length,
+    [rankedStocks]
+  );
+
   const cleanNoHscCount = useMemo(
     () =>
       rankedStocks.filter(
-        (s) => s.isLiquid !== false && s.lastPrice >= 68 && !s.isHscFlagged
+        (s) =>
+          s.isLiquid !== false &&
+          s.lastPrice >= 68 &&
+          !s.isHscFlagged &&
+          s.hscSource !== 'KSEI_OFFICIAL'
       ).length,
     [rankedStocks]
   );
@@ -194,8 +217,28 @@ export function ScreeningTable({
     () => [
       {
         value: 'CLEAN_NO_HSC',
-        label: 'Bebas Indikasi HSC (Clean Value & Likuid)',
+        label: 'Bebas HSC KSEI & Suspect (Clean Value & Likuid)',
         count: cleanNoHscCount
+      },
+      {
+        value: 'KSEI_HSC_ALL',
+        label: 'Daftar Resmi HSC BEI-KSEI (383 Emiten Top-10 ≥92,5%)',
+        count: kseiOfficialAllCount
+      },
+      {
+        value: 'KSEI_DIVIDEND_PENALTY',
+        label: 'HSC BEI-KSEI Dividen Kuat (Penalti Skor · Lolos Blokir)',
+        count: kseiDividendPenaltyCount
+      },
+      {
+        value: 'EARLY_WARNING_SUSPECT',
+        label: 'Suspect HSC / Early Warning Quant (Pra-Rilis BEI)',
+        count: earlyWarningSuspectCount
+      },
+      {
+        value: 'HSC_FLAGGED_ONLY',
+        label: 'Semua HSC Diblokir (KSEI Non-Dividen + Suspect Quant)',
+        count: hscFlaggedCount
       },
       {
         value: 'DIVIDEND_ONLY',
@@ -208,17 +251,21 @@ export function ScreeningTable({
         count: liquidStockCount
       },
       {
-        value: 'HSC_FLAGGED_ONLY',
-        label: 'Terindikasi / Berlabel HSC (TRUK, ROCK, dll.)',
-        count: hscFlaggedCount
-      },
-      {
         value: 'ILLIQUID_ONLY',
         label: 'Illiquid / Gocap / Suspensi',
         count: illiquidStockCount
       }
     ],
-    [cleanNoHscCount, dividendStockCount, liquidStockCount, hscFlaggedCount, illiquidStockCount]
+    [
+      cleanNoHscCount,
+      kseiOfficialAllCount,
+      kseiDividendPenaltyCount,
+      earlyWarningSuspectCount,
+      hscFlaggedCount,
+      dividendStockCount,
+      liquidStockCount,
+      illiquidStockCount
+    ]
   );
 
   const zoneDropdownOptions = useMemo(
@@ -288,9 +335,15 @@ export function ScreeningTable({
           const isDiv = (s.dividendYieldPct ?? 0) > 0;
           const isIlliq = s.isLiquid === false || s.lastPrice < 68;
           const isHsc = Boolean(s.isHscFlagged);
-          const isClean = isLiq && !isHsc;
+          const isKseiOfficial = s.hscSource === 'KSEI_OFFICIAL';
+          const isKseiDivPen = s.hscTier === 'KSEI_DIVIDEND_PENALTY';
+          const isEarlyWarning = s.hscTier === 'EARLY_WARNING_SUSPECT';
+          const isClean = isLiq && !isHsc && !isKseiOfficial;
           const matchesAnyQuality =
             (selectedQualities.includes('CLEAN_NO_HSC') && isClean) ||
+            (selectedQualities.includes('KSEI_HSC_ALL') && isKseiOfficial) ||
+            (selectedQualities.includes('KSEI_DIVIDEND_PENALTY') && isKseiDivPen) ||
+            (selectedQualities.includes('EARLY_WARNING_SUSPECT') && isEarlyWarning) ||
             (selectedQualities.includes('HSC_FLAGGED_ONLY') && isHsc) ||
             (selectedQualities.includes('LIQUID_ONLY') && isLiq) ||
             (selectedQualities.includes('DIVIDEND_ONLY') && isDiv) ||
@@ -742,10 +795,10 @@ export function ScreeningTable({
 
         {/* HSC Labeling & Joeliardi Sunendar Fundamental Inspector Control Strip */}
         <div className="p-3 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2 text-xs">
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
             <span className="inline-flex items-center gap-1.5 font-bold text-[#9E2A2B]">
               <ShieldAlert className="w-3.5 h-3.5" />
-              <span>Filter &amp; Label Saham HSC ({hscFlaggedCount} Diblokir ke Rotate Out):</span>
+              <span>Radar HSC BEI-KSEI &amp; Quant:</span>
             </span>
             <button
               type="button"
@@ -763,25 +816,63 @@ export function ScreeningTable({
                   : 'bg-[#FFFFFF] text-[#0D5C46] border-[#059669]/40 hover:border-[#059669]'
               }`}
             >
-              Hanya Saham Clean / Bebas HSC ({cleanNoHscCount})
+              Bebas HSC ({cleanNoHscCount})
             </button>
             <button
               type="button"
               onClick={() => {
                 setSelectedQualities((prev) =>
-                  prev.includes('HSC_FLAGGED_ONLY')
-                    ? prev.filter((q) => q !== 'HSC_FLAGGED_ONLY')
-                    : ['HSC_FLAGGED_ONLY']
+                  prev.includes('KSEI_HSC_ALL')
+                    ? prev.filter((q) => q !== 'KSEI_HSC_ALL')
+                    : ['KSEI_HSC_ALL']
                 );
                 setCurrentPage(1);
               }}
               className={`px-2.5 py-1 text-[11px] font-bold rounded-xs border transition-colors cursor-pointer ${
-                selectedQualities.includes('HSC_FLAGGED_ONLY')
-                  ? 'bg-[#E11D48] text-white border-[#E11D48]'
-                  : 'bg-[#FFFFFF] text-[#9E2A2B] border-[#E11D48]/40 hover:border-[#E11D48]'
+                selectedQualities.includes('KSEI_HSC_ALL')
+                  ? 'bg-[#9E2A2B] text-white border-[#9E2A2B]'
+                  : 'bg-[#FFFFFF] text-[#9E2A2B] border-[#9E2A2B]/40 hover:border-[#9E2A2B]'
               }`}
             >
-              Lihat Daftar HSC ({hscFlaggedCount} termasuk TRUK, ROCK)
+              Resmi BEI-KSEI ({kseiOfficialAllCount})
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedQualities((prev) =>
+                  prev.includes('KSEI_DIVIDEND_PENALTY')
+                    ? prev.filter((q) => q !== 'KSEI_DIVIDEND_PENALTY')
+                    : ['KSEI_DIVIDEND_PENALTY']
+                );
+                setCurrentPage(1);
+              }}
+              className={`px-2.5 py-1 text-[11px] font-bold rounded-xs border transition-colors cursor-pointer ${
+                selectedQualities.includes('KSEI_DIVIDEND_PENALTY')
+                  ? 'bg-[#D97706] text-white border-[#D97706]'
+                  : 'bg-[#FFFFFF] text-[#D97706] border-[#D97706]/40 hover:border-[#D97706]'
+              }`}
+              title="Saham dalam Daftar HSC BEI-KSEI (Top-10 ≥92,5%) yang memiliki dividen kuat & kesehatan neraca baik sehingga hanya dikenakan penalti skor tanpa blokir otomatis"
+            >
+              HSC Dividen Kuat ({kseiDividendPenaltyCount})
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedQualities((prev) =>
+                  prev.includes('EARLY_WARNING_SUSPECT')
+                    ? prev.filter((q) => q !== 'EARLY_WARNING_SUSPECT')
+                    : ['EARLY_WARNING_SUSPECT']
+                );
+                setCurrentPage(1);
+              }}
+              className={`px-2.5 py-1 text-[11px] font-bold rounded-xs border transition-colors cursor-pointer ${
+                selectedQualities.includes('EARLY_WARNING_SUSPECT')
+                  ? 'bg-[#E11D48] text-white border-[#E11D48]'
+                  : 'bg-[#FFFFFF] text-[#E11D48] border-[#E11D48]/40 hover:border-[#E11D48]'
+              }`}
+              title="Deteksi dini kuantitatif atas pergerakan saham terindikasi cornering/spekulatif sebelum pengumuman resmi BEI-KSEI"
+            >
+              Suspect Early Warning ({earlyWarningSuspectCount})
             </button>
           </div>
 
@@ -1144,6 +1235,59 @@ export function ScreeningTable({
                 </tr>
                 <tr>
                   <td className="py-2 px-3 font-semibold text-neutral-600">
+                    Konsentrasi Top-10 KSEI &amp; Status HSC
+                  </td>
+                  {comparedStocksList.map((s) => {
+                    if (s.hscSource === 'KSEI_OFFICIAL' && s.kseiHscConcentrationPct) {
+                      const isDivPen = s.hscTier === 'KSEI_DIVIDEND_PENALTY';
+                      const fnShort = formatKseiFootnoteShortLabel(s.kseiHscFootnote || 'NONE');
+                      return (
+                        <td key={s.ticker} className="py-2 px-3 text-[11px]">
+                          <div
+                            className={`font-bold ${
+                              isDivPen ? 'text-[#D97706]' : 'text-[#9E2A2B]'
+                            }`}
+                          >
+                            KSEI Top-10: {s.kseiHscConcentrationPct.toFixed(3).replace('.', ',')}%{' '}
+                            {s.kseiHscIsNew ? '(BARU)' : '(Eksisting)'}
+                          </div>
+                          <div className="text-[10px] text-neutral-500">
+                            {isDivPen
+                              ? `Lolos Blokir · Penalti -${(s.kseiHscScorePenaltyPts ?? 0.45).toFixed(2)}`
+                              : 'Blokir HSC Non-Dividen'}
+                            {fnShort ? ` · ${fnShort}` : ''}
+                          </div>
+                        </td>
+                      );
+                    }
+                    if (s.hscTier === 'EARLY_WARNING_SUSPECT') {
+                      return (
+                        <td key={s.ticker} className="py-2 px-3 text-[11px]">
+                          <div className="font-bold text-[#E11D48]">
+                            Suspect HSC (Early Warning)
+                          </div>
+                          <div className="text-[10px] text-neutral-500">
+                            Deteksi Pra-Rilis BEI · Blokir
+                          </div>
+                        </td>
+                      );
+                    }
+                    if (s.isHscFlagged) {
+                      return (
+                        <td key={s.ticker} className="py-2 px-3 text-[11px] font-bold text-[#9E2A2B]">
+                          Manual HSC Blokir
+                        </td>
+                      );
+                    }
+                    return (
+                      <td key={s.ticker} className="py-2 px-3 text-[11px] font-semibold text-[#0D5C46]">
+                        Clean (&lt;92,5% KSEI · Free Float Sehat)
+                      </td>
+                    );
+                  })}
+                </tr>
+                <tr>
+                  <td className="py-2 px-3 font-semibold text-neutral-600">
                     Zona Buffer {rebalanceBufferPct}%
                   </td>
                   {comparedStocksList.map((s) => {
@@ -1487,19 +1631,45 @@ export function ScreeningTable({
                       </td>
 
                       <td className="py-2.5 px-2.5 font-bold text-[#D97706] bb-amber whitespace-nowrap">
-                        <div className="flex items-center gap-1">
+                        <div className="flex flex-wrap items-center gap-1">
                           <span>{stock.ticker}</span>
-                          {stock.isHscFlagged && (
+                          {stock.hscSource === 'KSEI_OFFICIAL' && stock.kseiHscConcentrationPct ? (
                             <span
                               title={
                                 stock.hscReason ||
-                                'Terindikasi HSC (High Speculative Concentration) — Diblokir dari Top Decile Buy'
+                                `Daftar Resmi HSC BEI-KSEI: Kepemilikan Top-10 ${stock.kseiHscConcentrationPct
+                                  .toFixed(3)
+                                  .replace('.', ',')}%`
+                              }
+                              className={`inline-flex items-center px-1.5 py-0.5 text-[9px] font-bold rounded-xs uppercase ${
+                                stock.hscTier === 'KSEI_DIVIDEND_PENALTY'
+                                  ? 'text-[#B45309] bg-[#F59E0B]/15 border border-[#F59E0B]/50'
+                                  : 'text-[#9E2A2B] bg-[#E11D48]/15 border border-[#E11D48]/50'
+                              }`}
+                            >
+                              KSEI {stock.kseiHscConcentrationPct.toFixed(1).replace('.', ',')}%
+                            </span>
+                          ) : stock.hscTier === 'EARLY_WARNING_SUSPECT' ? (
+                            <span
+                              title={
+                                stock.hscReason ||
+                                'Suspect HSC / Early Warning Quant (Pra-Rilis BEI)'
+                              }
+                              className="inline-flex items-center px-1.5 py-0.5 text-[9px] font-bold text-[#9E2A2B] bg-[#E11D48]/15 border border-[#E11D48]/50 rounded-xs uppercase"
+                            >
+                              SUSPECT HSC
+                            </span>
+                          ) : stock.isHscFlagged ? (
+                            <span
+                              title={
+                                stock.hscReason ||
+                                'Terindikasi HSC (High Shareholding Concentration) — Diblokir dari Top Decile Buy'
                               }
                               className="inline-flex items-center px-1.5 py-0.5 text-[9px] font-bold text-[#9E2A2B] bg-[#E11D48]/15 border border-[#E11D48]/50 rounded-xs uppercase"
                             >
                               HSC
                             </span>
-                          )}
+                          ) : null}
                         </div>
                         <span className="block text-[10px] font-semibold text-neutral-400">
                           {stock.yfTicker}
@@ -1528,14 +1698,52 @@ export function ScreeningTable({
                               QMJ -{accrualPen.toFixed(1)}
                             </span>
                           )}
-                          {stock.isHscFlagged && (
+                          {stock.hscSource === 'KSEI_OFFICIAL' && stock.kseiHscConcentrationPct && (
                             <span
-                              title={stock.hscReason || 'Indikasi HSC / Spekulatif Tinggi'}
-                              className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-bold text-[#9E2A2B] bg-[#E11D48]/10 border border-[#E11D48]/35 rounded-xs whitespace-nowrap"
+                              title={`${stock.hscReason || ''} ${
+                                stock.kseiHscFootnote && stock.kseiHscFootnote !== 'NONE'
+                                  ? '· ' + formatKseiFootnoteFullDescription(stock.kseiHscFootnote)
+                                  : ''
+                              }`}
+                              className={`inline-flex items-center px-1.5 py-0.5 text-[10px] font-bold rounded-xs whitespace-nowrap border ${
+                                stock.hscTier === 'KSEI_DIVIDEND_PENALTY'
+                                  ? 'text-[#B45309] bg-[#F59E0B]/10 border-[#F59E0B]/40'
+                                  : 'text-[#9E2A2B] bg-[#E11D48]/10 border-[#E11D48]/35'
+                              }`}
                             >
-                              AVOID HSC
+                              Top-10: {stock.kseiHscConcentrationPct.toFixed(2).replace('.', ',')}%
+                              {stock.kseiHscIsNew ? ' · BARU' : ''}
+                              {stock.kseiHscFootnote && stock.kseiHscFootnote !== 'NONE'
+                                ? ` · ${formatKseiFootnoteShortLabel(stock.kseiHscFootnote)}`
+                                : ''}
+                              {stock.hscTier === 'KSEI_DIVIDEND_PENALTY'
+                                ? ` · Penalti -${(stock.kseiHscScorePenaltyPts ?? 0.45)
+                                    .toFixed(2)
+                                    .replace('.', ',')}`
+                                : ' · BLOKIR'}
                             </span>
                           )}
+                          {stock.hscTier === 'EARLY_WARNING_SUSPECT' && (
+                            <span
+                              title={
+                                stock.hscReason ||
+                                'Suspect HSC / Early Warning Quant (Pra-Rilis BEI)'
+                              }
+                              className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-bold text-[#9E2A2B] bg-[#E11D48]/10 border border-[#E11D48]/35 rounded-xs whitespace-nowrap"
+                            >
+                              SUSPECT HSC · Early Warning
+                            </span>
+                          )}
+                          {stock.isHscFlagged &&
+                            stock.hscSource !== 'KSEI_OFFICIAL' &&
+                            stock.hscTier !== 'EARLY_WARNING_SUSPECT' && (
+                              <span
+                                title={stock.hscReason || 'Indikasi HSC Manual'}
+                                className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-bold text-[#9E2A2B] bg-[#E11D48]/10 border border-[#E11D48]/35 rounded-xs whitespace-nowrap"
+                              >
+                                MANUAL HSC
+                              </span>
+                            )}
                           {!isStockLiquid && (
                             <span
                               title="Saham Tidak Likuid / Stagnan / Gocap / Tidak Aktif di Yahoo Finance — Diblokir dari Keranjang 1 & 2"

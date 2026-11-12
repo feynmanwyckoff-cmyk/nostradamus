@@ -9,6 +9,7 @@ import {
   Moon,
   AlertCircle,
   CheckCircle2,
+  RefreshCw,
   X
 } from 'lucide-react';
 import { EncryptedPortfolioVault } from '../types/quant';
@@ -27,6 +28,7 @@ interface TerminalSecurityGateProps {
   existingVault: EncryptedPortfolioVault | null;
   repoScope?: string;
   initialSensitivePayload: VaultSensitivePayload;
+  onExecuteCacheBuster?: () => void;
   onUnlockSuccess: (
     decryptedPayload: VaultSensitivePayload,
     session: ActiveVaultSession,
@@ -40,6 +42,7 @@ export function TerminalSecurityGate({
   existingVault,
   repoScope,
   initialSensitivePayload,
+  onExecuteCacheBuster,
   onUnlockSuccess
 }: TerminalSecurityGateProps) {
   const isDefaultPassphraseActive =
@@ -51,16 +54,31 @@ export function TerminalSecurityGate({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const mountedAtRef = React.useRef<number>(Date.now());
   const hasHumanInteractedRef = React.useRef<boolean>(false);
+  const trustedGestureNonceRef = React.useRef<string>('');
+  const honeypotTrapRef = React.useRef<string>('');
+
+  // Dynamic input field name per mount so browser password managers cannot bind saved credentials
+  const dynamicInputName = React.useMemo(
+    () => `nostradamus_pin_${Math.random().toString(36).slice(2, 9)}`,
+    []
+  );
 
   React.useEffect(() => {
     mountedAtRef.current = Date.now();
     hasHumanInteractedRef.current = false;
+    trustedGestureNonceRef.current = '';
+    honeypotTrapRef.current = '';
     setPassphrase('');
   }, []);
 
   const markHumanInteraction = (e: React.SyntheticEvent) => {
     if (e.nativeEvent && e.nativeEvent.isTrusted !== false) {
       hasHumanInteractedRef.current = true;
+      const bootNonce =
+        typeof window !== 'undefined'
+          ? (window as unknown as { __NOSTRADAMUS_BOOT_NONCE__?: string }).__NOSTRADAMUS_BOOT_NONCE__ || 'trusted_boot'
+          : 'trusted_boot';
+      trustedGestureNonceRef.current = bootNonce;
     }
   };
 
@@ -68,11 +86,24 @@ export function TerminalSecurityGate({
     e.preventDefault();
     setErrorMsg(null);
 
-    // Block programmatic / browser password-manager auto-submit on page refresh
+    const expectedBootNonce =
+      typeof window !== 'undefined'
+        ? (window as unknown as { __NOSTRADAMUS_BOOT_NONCE__?: string }).__NOSTRADAMUS_BOOT_NONCE__ || 'trusted_boot'
+        : 'trusted_boot';
+
+    // Block programmatic / browser password-manager auto-submit or BFCache replay on page refresh
     const elapsedSinceMount = Date.now() - mountedAtRef.current;
-    if (!hasHumanInteractedRef.current || elapsedSinceMount < 250) {
+    if (
+      !hasHumanInteractedRef.current ||
+      trustedGestureNonceRef.current !== expectedBootNonce ||
+      honeypotTrapRef.current.length > 0 ||
+      elapsedSinceMount < 250
+    ) {
       setPassphrase('');
-      setErrorMsg('Silakan ketik sandi terminal secara manual lalu klik tombol Verifikasi.');
+      honeypotTrapRef.current = '';
+      setErrorMsg(
+        'Auto-login / autofill browser diblokir demi keamanan. Silakan ketik sandi terminal secara manual lalu klik Verifikasi.'
+      );
       return;
     }
 
@@ -180,6 +211,28 @@ export function TerminalSecurityGate({
           data-form-type="other"
           className="space-y-4"
         >
+          {/* Anti-Autofill Honeypot Decoy Inputs (Captures aggressive browser password managers) */}
+          <div aria-hidden="true" className="sr-only overflow-hidden h-0 w-0 opacity-0 pointer-events-none">
+            <input
+              type="text"
+              name="username"
+              tabIndex={-1}
+              autoComplete="username"
+              onChange={(e) => {
+                honeypotTrapRef.current = e.target.value;
+              }}
+            />
+            <input
+              type="password"
+              name="password"
+              tabIndex={-1}
+              autoComplete="current-password"
+              onChange={(e) => {
+                honeypotTrapRef.current = e.target.value;
+              }}
+            />
+          </div>
+
           <div>
             <label className="block text-xs font-bold text-[#111315] mb-1.5">
               Sandi Terminal
@@ -188,21 +241,26 @@ export function TerminalSecurityGate({
               <KeyRound className="w-4 h-4 text-neutral-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type={showPassphrase ? 'text' : 'password'}
-                name="nostradamus_vault_pin_gate"
+                name={dynamicInputName}
                 value={passphrase}
                 onKeyDown={markHumanInteraction}
+                onPaste={markHumanInteraction}
                 onChange={(e) => {
                   if (e.nativeEvent && e.nativeEvent.isTrusted !== false) {
-                    hasHumanInteractedRef.current = true;
+                    markHumanInteraction(e);
+                    setPassphrase(e.target.value);
+                  } else {
+                    // Reject untrusted script/password-manager autofill injection
+                    setPassphrase('');
                   }
-                  setPassphrase(e.target.value);
                 }}
                 autoFocus
-                autoComplete="new-password"
+                autoComplete="off"
                 data-lpignore="true"
                 data-1p-ignore="true"
+                data-bwignore="true"
                 data-form-type="other"
-                placeholder="Masukkan sandi untuk membuka kunci..."
+                placeholder="Ketik sandi terminal secara manual..."
                 className="w-full pl-9 pr-10 py-2 text-xs font-semibold bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs focus:outline-none focus:border-[#F59E0B]"
               />
               <button
@@ -242,13 +300,26 @@ export function TerminalSecurityGate({
           </button>
         </form>
 
-        <div className="pt-3 border-t border-[#E4E2DD] space-y-1.5 text-[11px] text-neutral-500">
-          <div className="flex items-center gap-1.5 font-semibold text-[#0D5C46]">
-            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-            <span>Zero-Knowledge PBKDF2-SHA256 (100.000 Iterasi) + AES-256-GCM</span>
+        <div className="pt-3 border-t border-[#E4E2DD] space-y-2 text-[11px] text-neutral-500">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 font-semibold text-[#0D5C46]">
+              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+              <span>Zero-Knowledge PBKDF2-SHA256 + Anti-Auto-Login Gate</span>
+            </div>
+            {onExecuteCacheBuster && (
+              <button
+                type="button"
+                onClick={onExecuteCacheBuster}
+                title="Bersihkan Cache Browser, Service Worker & Muat Ulang Paksa (?cb=timestamp)"
+                className="inline-flex items-center gap-1 px-2 py-1 text-[10.5px] font-bold text-[#0284C7] bg-[#FAF9F6] border border-[#0284C7]/40 hover:border-[#0284C7] rounded-xs cursor-pointer shrink-0"
+              >
+                <RefreshCw className="w-3 h-3" />
+                <span>Cache Buster</span>
+              </button>
+            )}
           </div>
           <p className="leading-relaxed">
-            Sandi Anda tidak pernah disimpan dalam bentuk teks biasa di kode sumber maupun browser. Setiap kali halaman di-refresh atau tab ditutup, kunci sesi di memori otomatis dihapus.
+            Sandi Anda tidak pernah disimpan dalam bentuk teks biasa. Dilengkapi <strong>Anti-Autofill Honeypot</strong> &amp; <strong>Boot Nonce</strong> sehingga reload halaman wajib melalui verifikasi login sah.
           </p>
         </div>
       </div>

@@ -20,6 +20,10 @@ import {
   getEmitenDividendYield,
   isInstitutionalLiquidCandidate
 } from '../data/idxAllEmitenCatalog';
+import {
+  formatKseiFootnoteShortLabel,
+  getKseiHscEntry
+} from '../data/idxKseiHscRegistry';
 
 export type RawStockInput = Omit<
   StockMetrics,
@@ -548,73 +552,197 @@ export function toggleManualHscTicker(
 export function evaluateHscIndication(
   item: RawStockInput,
   dmuValueScore: number,
-  divYield: number
+  divYield: number,
+  ocfToNetIncomeRatio: number = 1.0,
+  grossProfitabilityToAssets: number = 16.0,
+  accrualPenaltyScore: number = 0
 ): {
   isHscFlagged: boolean;
-  hscSource: 'MANUAL' | 'AUTO_QUANT' | 'NONE';
+  hscSource: 'MANUAL' | 'KSEI_OFFICIAL' | 'AUTO_QUANT' | 'NONE';
+  hscTier: 'HARD_BLOCK' | 'KSEI_DIVIDEND_PENALTY' | 'EARLY_WARNING_SUSPECT' | 'CLEAN';
   hscReason?: string;
+  kseiHscConcentrationPct?: number;
+  kseiHscIsNew?: boolean;
+  kseiHscFootnote?: 'NONE' | 'UNREPORTED_DISTRIBUTION' | 'REPO_TRANSACTION' | 'VOLUNTARY_DELISTING';
+  kseiHscScorePenaltyPts?: number;
 } {
   const clean = item.ticker.trim().toUpperCase().replace(/\.JK$/i, '');
   const overrides = getHscManualOverrides();
+  const kseiEntry = getKseiHscEntry(clean);
 
   if (overrides.removed.includes(clean)) {
-    return { isHscFlagged: false, hscSource: 'NONE' };
+    return {
+      isHscFlagged: false,
+      hscSource: 'NONE',
+      hscTier: 'CLEAN',
+      kseiHscConcentrationPct: kseiEntry?.top10ConcentrationPct,
+      kseiHscIsNew: kseiEntry?.isNew,
+      kseiHscFootnote: kseiEntry?.footnote,
+      kseiHscScorePenaltyPts: 0
+    };
   }
 
   if (overrides.added.includes(clean)) {
     return {
       isHscFlagged: true,
       hscSource: 'MANUAL',
-      hscReason: 'Label Manual HSC oleh Pengguna (Diblokir dari Top Decile Buy)'
-    };
-  }
-
-  if (PRE_SEEDED_HSC_TICKERS.has(clean)) {
-    return {
-      isHscFlagged: true,
-      hscSource: 'MANUAL',
-      hscReason: 'Watchlist Indikasi HSC / Cornered & Spekulatif Tinggi (TRUK, ROCK, dll.)'
+      hscTier: 'HARD_BLOCK',
+      hscReason: 'Label Manual HSC oleh Pengguna (Diblokir dari Top Decile Buy)',
+      kseiHscConcentrationPct: kseiEntry?.top10ConcentrationPct,
+      kseiHscIsNew: kseiEntry?.isNew,
+      kseiHscFootnote: kseiEntry?.footnote,
+      kseiHscScorePenaltyPts: 1.5
     };
   }
 
   const isInst = isInstitutionalLiquidCandidate(clean);
-  if (!isInst) {
-    // Heuristic 1: Speculative price spike / ARA anomaly without fundamental Value or Dividend backing
+
+  // Lapis 1: Daftar Resmi Evaluasi HSC BEI-KSEI (Peng-HSC-00088/BEI.WAS/11-2026 — 383 Emiten)
+  if (kseiEntry) {
+    const top10Str = kseiEntry.top10ConcentrationPct.toFixed(3).replace('.', ',');
+    const statusStr = kseiEntry.isNew ? 'Baru/New' : 'Eksisting';
+    const fnShort = formatKseiFootnoteShortLabel(kseiEntry.footnote);
+    const fnSuffix = fnShort ? ` · ${fnShort}` : '';
+
+    // 1. Disqualifying KSEI footnotes (*** Voluntary Delisting or ** Repo) or pre-seeded speculative cornered list
     if (
-      (Math.abs(item.change1D) >= 8.5 || item.return30D >= 22.0) &&
-      (dmuValueScore < 6.4 || item.roe < 10.5) &&
-      divYield <= 0
+      kseiEntry.footnote === 'VOLUNTARY_DELISTING' ||
+      kseiEntry.footnote === 'REPO_TRANSACTION' ||
+      PRE_SEEDED_HSC_TICKERS.has(clean)
+    ) {
+      return {
+        isHscFlagged: true,
+        hscSource: 'KSEI_OFFICIAL',
+        hscTier: 'HARD_BLOCK',
+        hscReason: `HSC Resmi BEI-KSEI (Top-10: ${top10Str}% · ${statusStr}${fnSuffix}) — Blokir Otomatis (${
+          kseiEntry.footnote === 'VOLUNTARY_DELISTING'
+            ? 'Proses Voluntary Delisting ***'
+            : kseiEntry.footnote === 'REPO_TRANSACTION'
+            ? 'Anomali Repo Saham **'
+            : 'Risiko Spekulatif Cornered'
+        })`,
+        kseiHscConcentrationPct: kseiEntry.top10ConcentrationPct,
+        kseiHscIsNew: kseiEntry.isNew,
+        kseiHscFootnote: kseiEntry.footnote,
+        kseiHscScorePenaltyPts: 1.5
+      };
+    }
+
+    // 2. Tier 1A: Saham HSC BEI-KSEI dengan Dividen & Fundamental Kuat -> Penalti Skor Tanpa Blokir Otomatis
+    const hasStrongDividendAndQuality =
+      (divYield >= 2.0 || (isInst && divYield >= 1.2 && item.roe >= 10.0)) &&
+      dmuValueScore >= 5.8 &&
+      item.debtToEquity < 2.2 &&
+      kseiEntry.top10ConcentrationPct < 99.65;
+
+    if (hasStrongDividendAndQuality) {
+      const penaltyPts = Number(
+        Math.min(
+          0.95,
+          0.30 + (Math.max(0, kseiEntry.top10ConcentrationPct - 92.5) / 7.5) * 0.65
+        ).toFixed(2)
+      );
+      return {
+        isHscFlagged: false, // Tidak diblokir otomatis karena pembagi dividen & value kuat
+        hscSource: 'KSEI_OFFICIAL',
+        hscTier: 'KSEI_DIVIDEND_PENALTY',
+        hscReason: `HSC Resmi BEI-KSEI (Top-10: ${top10Str}% · ${statusStr}${fnSuffix}) — Penalti Skor -${penaltyPts
+          .toFixed(2)
+          .replace('.', ',')} Poin Tanpa Blokir (Dividen Kuat ${divYield.toFixed(2).replace('.', ',')}%)`,
+        kseiHscConcentrationPct: kseiEntry.top10ConcentrationPct,
+        kseiHscIsNew: kseiEntry.isNew,
+        kseiHscFootnote: kseiEntry.footnote,
+        kseiHscScorePenaltyPts: penaltyPts
+      };
+    }
+
+    // 3. Tier 1B: Saham HSC BEI-KSEI Non-Dividen / Konsentrasi Ekstrem (>=99.65%) / Fundamental Lemah -> Blokir Otomatis
+    return {
+      isHscFlagged: true,
+      hscSource: 'KSEI_OFFICIAL',
+      hscTier: 'HARD_BLOCK',
+      hscReason: `HSC Resmi BEI-KSEI (Top-10: ${top10Str}% · ${statusStr}${fnSuffix}) — Diblokir Otomatis (Free Float Publik Maks ${kseiEntry.impliedPublicFloatMaxPct
+        .toFixed(2)
+        .replace('.', ',')}% Tanpa Dukungan Dividen Kuat)`,
+      kseiHscConcentrationPct: kseiEntry.top10ConcentrationPct,
+      kseiHscIsNew: kseiEntry.isNew,
+      kseiHscFootnote: kseiEntry.footnote,
+      kseiHscScorePenaltyPts: 1.25
+    };
+  }
+
+  // Lapis 2: Radar Deteksi Dini / Suspect & Early Warning HSC Kuantitatif (Belum Rilis Resmi BEI-KSEI)
+  if (PRE_SEEDED_HSC_TICKERS.has(clean)) {
+    return {
+      isHscFlagged: true,
+      hscSource: 'AUTO_QUANT',
+      hscTier: 'EARLY_WARNING_SUSPECT',
+      hscReason:
+        'Suspect HSC (Early Warning Quant): Watchlist Anomali Pergerakan Cornered & Spekulatif Tinggi (Pra-Rilis BEI)',
+      kseiHscScorePenaltyPts: 1.35
+    };
+  }
+
+  if (!isInst) {
+    // Signal 1: Speculative price spike / ARA anomaly without cashflow (OCF/NI) or dividend backing
+    if (
+      (Math.abs(item.change1D) >= 7.5 || item.return30D >= 18.0) &&
+      (dmuValueScore < 6.4 || item.roe < 10.5 || ocfToNetIncomeRatio < 0.68) &&
+      divYield < 1.5
     ) {
       return {
         isHscFlagged: true,
         hscSource: 'AUTO_QUANT',
-        hscReason: 'Auto HSC: Lonjakan harga spekulatif tanpa dukungan Value & Dividen'
+        hscTier: 'EARLY_WARNING_SUSPECT',
+        hscReason: `Suspect HSC (Early Warning Quant): Lonjakan harga spekulatif (1D ${
+          item.change1D >= 0 ? '+' : ''
+        }${item.change1D.toFixed(1)}% / 30D ${
+          item.return30D >= 0 ? '+' : ''
+        }${item.return30D.toFixed(1)}%) tanpa dukungan Kas OCF/NI (${ocfToNetIncomeRatio.toFixed(2)}x) & Dividen`,
+        kseiHscScorePenaltyPts: 1.25
       };
     }
 
-    // Heuristic 2: Extreme annualized volatility on non-institutional stock with weak Value score
-    if (item.volatilityAnn >= 40.0 && dmuValueScore < 6.2 && divYield <= 0) {
+    // Signal 2: Extreme annualized volatility (>38%) with weak Novy-Marx GP/A or Value score
+    if (
+      item.volatilityAnn >= 38.0 &&
+      (dmuValueScore < 6.2 || grossProfitabilityToAssets < 14.0) &&
+      divYield < 1.5
+    ) {
       return {
         isHscFlagged: true,
         hscSource: 'AUTO_QUANT',
-        hscReason: 'Auto HSC: Volatilitas ekstrem (>40%) non-institusional ber-Value rendah'
+        hscTier: 'EARLY_WARNING_SUSPECT',
+        hscReason: `Suspect HSC (Early Warning Quant): Volatilitas ekstrem (${item.volatilityAnn.toFixed(
+          1
+        )}%) dengan GP/A rendah (${grossProfitabilityToAssets.toFixed(1)}%) — Indikasi Cornered Pra-Rilis BEI`,
+        kseiHscScorePenaltyPts: 1.2
       };
     }
 
-    // Heuristic 3: Weak fundamental third-liner with low ROE & high leverage
+    // Signal 3: Weak fundamental third-liner with low ROE, high leverage, or high accrual manipulation
     if (
       (item.roe < 8.0 && item.debtToEquity >= 1.1 && divYield <= 0) ||
-      (dmuValueScore < 5.0 && divYield <= 0)
+      (dmuValueScore < 5.0 && divYield <= 0) ||
+      (accrualPenaltyScore >= 1.35 && divYield <= 0)
     ) {
       return {
         isHscFlagged: true,
         hscSource: 'AUTO_QUANT',
-        hscReason: 'Auto HSC: Fundamental lemah (ROE rendah / DER tinggi) non-institusional'
+        hscTier: 'EARLY_WARNING_SUSPECT',
+        hscReason:
+          'Suspect HSC (Early Warning Quant): Kerapuhan Neraca / Akrual Tinggi Non-Institusional Tanpa Dividen',
+        kseiHscScorePenaltyPts: 1.15
       };
     }
   }
 
-  return { isHscFlagged: false, hscSource: 'NONE' };
+  return {
+    isHscFlagged: false,
+    hscSource: 'NONE',
+    hscTier: 'CLEAN',
+    kseiHscScorePenaltyPts: 0
+  };
 }
 
 /**
@@ -742,8 +870,13 @@ export function computeDeMiguelFourFactors(item: RawStockInput): {
   accrualRatioToAssets: number;
   accrualPenaltyScore: number;
   isHscFlagged: boolean;
-  hscSource: 'MANUAL' | 'AUTO_QUANT' | 'NONE';
+  hscSource: 'MANUAL' | 'KSEI_OFFICIAL' | 'AUTO_QUANT' | 'NONE';
+  hscTier: 'HARD_BLOCK' | 'KSEI_DIVIDEND_PENALTY' | 'EARLY_WARNING_SUSPECT' | 'CLEAN';
   hscReason?: string;
+  kseiHscConcentrationPct?: number;
+  kseiHscIsNew?: boolean;
+  kseiHscFootnote?: 'NONE' | 'UNREPORTED_DISTRIBUTION' | 'REPO_TRANSACTION' | 'VOLUNTARY_DELISTING';
+  kseiHscScorePenaltyPts?: number;
 } {
   const isLiquid = item.isLiquid !== false && item.lastPrice >= 68;
   const divYield =
@@ -772,7 +905,14 @@ export function computeDeMiguelFourFactors(item: RawStockInput): {
         Math.min(5.5, (0.50 * gpaComp + 0.25 * roaComp + 0.25 * deComp) * 0.65 - accrualPenaltyScore * 0.5)
       ).toFixed(1)
     );
-    const hscEval = evaluateHscIndication(item, dmuValueScore, divYield);
+    const hscEval = evaluateHscIndication(
+      item,
+      dmuValueScore,
+      divYield,
+      ocfToNetIncomeRatio,
+      grossProfitabilityToAssets,
+      accrualPenaltyScore
+    );
     return {
       dmuLowVolScore: 1.5,
       dmuMomScore: 1.8,
@@ -802,7 +942,6 @@ export function computeDeMiguelFourFactors(item: RawStockInput): {
   const dmuMomScore = Number(Math.max(1.0, Math.min(9.9, relMomRaw)).toFixed(1));
 
   // 3. Gross Profitability (Novy-Marx GP/A) & Anti-Junk QMJ Value Score (Asness et al. 2019)
-  // Replaces reliance on easily-gamed Operating Margin & raw levered ROE with GP/A + Unlevered ROA - Accrual Penalty
   const anchorPrice = BASELINE_PRICE_ANCHORS[item.ticker] || item.lastPrice;
   const liveValuationMultiplier =
     item.lastPrice > 0
@@ -823,9 +962,25 @@ export function computeDeMiguelFourFactors(item: RawStockInput): {
     accrualPenaltyScore;
   const dmuValueScore = Number(Math.max(1.0, Math.min(9.9, rawValue)).toFixed(1));
 
-  // 4. Capital Efficiency & Institutional Liquidity Score
+  // Evaluate 3-Tier HSC (Official BEI-KSEI Registry + Calibrated Early Warning Suspect Quant)
+  const hscEval = evaluateHscIndication(
+    item,
+    dmuValueScore,
+    divYield,
+    ocfToNetIncomeRatio,
+    grossProfitabilityToAssets,
+    accrualPenaltyScore
+  );
+
+  // 4. Capital Efficiency & Institutional Liquidity Score (incorporating KSEI HSC free-float penalty)
   const isInst = isInstitutionalLiquidCandidate(item.ticker);
   const instLiqBonus = isInst ? 0.75 : 0;
+  const kseiSizeDrag =
+    hscEval.hscTier === 'KSEI_DIVIDEND_PENALTY'
+      ? (hscEval.kseiHscScorePenaltyPts || 0.45)
+      : hscEval.isHscFlagged
+      ? 1.4
+      : 0;
   const dmuSizeScore = Number(
     Math.max(
       1.0,
@@ -835,13 +990,11 @@ export function computeDeMiguelFourFactors(item: RawStockInput): {
           0.34 * gpaComp +
           (item.change1D >= 0 ? 0.5 : 0.1) +
           instLiqBonus -
-          accrualPenaltyScore * 0.35
+          accrualPenaltyScore * 0.35 -
+          kseiSizeDrag
       )
     ).toFixed(1)
   );
-
-  // Evaluate HSC (High Speculative Concentration / Cornered Risk)
-  const hscEval = evaluateHscIndication(item, dmuValueScore, divYield);
 
   // Value-Gated Momentum Cap: Non-institutional stocks with weak Value cannot use sudden price spikes to game composite rank
   const effectiveMomScore =
@@ -850,11 +1003,16 @@ export function computeDeMiguelFourFactors(item: RawStockInput): {
       : dmuMomScore;
 
   // Overall 4-Factor Composite Score (Value/GP-A Prioritized: 35% Value/GP-A, 28% Low-Vol, 22% Momentum, 15% Size/Liquidity)
+  const kseiCompositeDrag =
+    hscEval.hscTier === 'KSEI_DIVIDEND_PENALTY'
+      ? (hscEval.kseiHscScorePenaltyPts || 0.45) * 0.42
+      : 0;
   const rawComposite =
     0.35 * dmuValueScore +
     0.28 * dmuLowVolScore +
     0.22 * effectiveMomScore +
-    0.15 * dmuSizeScore;
+    0.15 * dmuSizeScore -
+    kseiCompositeDrag;
 
   const dmuCompositeScore = hscEval.isHscFlagged
     ? Number(Math.max(1.2, Math.min(3.45, rawComposite * 0.52)).toFixed(2))
@@ -1623,7 +1781,17 @@ export function evaluateJoeliardiOosFundamental(
       : forwardDividendYieldPct > 0
       ? 10
       : 3;
-  const hscSolvencyBonus = stock.isHscFlagged ? -25 : isInst ? 10 : 5;
+  const kseiDividendPenaltyPts =
+    stock.hscTier === 'KSEI_DIVIDEND_PENALTY'
+      ? Math.round((stock.kseiHscScorePenaltyPts || 0.45) * 9)
+      : 0;
+  const hscSolvencyBonus = stock.isHscFlagged
+    ? -25
+    : stock.hscTier === 'KSEI_DIVIDEND_PENALTY'
+    ? -kseiDividendPenaltyPts
+    : isInst
+    ? 10
+    : 5;
   const balanceSheetHealthScore = Math.round(
     Math.max(
       12,
@@ -1643,7 +1811,7 @@ export function evaluateJoeliardiOosFundamental(
   const oosLowVolPart = (stock.dmuLowVolScore / 10) * 30;
   const oosSizePart = (stock.dmuSizeScore / 10) * 20;
   const oosQuantRobustnessScore = Math.round(
-    Math.max(10, Math.min(98, oosCompositePart + oosLowVolPart + oosSizePart))
+    Math.max(10, Math.min(98, oosCompositePart + oosLowVolPart + oosSizePart - kseiDividendPenaltyPts * 0.5))
   );
 
   const totalConvictionScore = Math.round(
@@ -1658,7 +1826,9 @@ export function evaluateJoeliardiOosFundamental(
   if (stock.isHscFlagged || totalConvictionScore < 45) {
     valuationVerdict = 'OVERVALUED_OR_TRAP';
     valuationLabel = stock.isHscFlagged
-      ? 'Peringatan Indikasi HSC / Spekulatif (Hindari)'
+      ? stock.hscTier === 'EARLY_WARNING_SUSPECT'
+        ? 'Peringatan Suspect HSC / Early Warning Quant (Hindari)'
+        : 'Peringatan Indikasi HSC BEI-KSEI / Spekulatif (Hindari)'
       : 'Mahal / Risiko Value Trap (Margin of Safety Negatif)';
   } else if (isDefensiveDiscountAnomaly) {
     valuationVerdict = 'STRONG_UNDERVALUED';
@@ -1723,6 +1893,10 @@ export function evaluateJoeliardiOosFundamental(
   if (stock.isHscFlagged) {
     keyRisks.push(
       `${stock.hscReason || 'Terindikasi HSC (High Speculative Concentration)'}. Diblokir otomatis dari Top Decile Buy.`
+    );
+  } else if (stock.hscTier === 'KSEI_DIVIDEND_PENALTY' && stock.kseiHscConcentrationPct) {
+    keyRisks.push(
+      `Peringatan Konsentrasi Kepemilikan BEI-KSEI (Peng-HSC-00088/BEI.WAS/11-2026): Top 10 pemegang saham menguasai ${stock.kseiHscConcentrationPct.toFixed(3).replace('.', ',')}% (Status: ${stock.kseiHscIsNew ? 'Baru/New' : 'Eksisting'} · Sisa Free Float Maks ${(100 - stock.kseiHscConcentrationPct).toFixed(2).replace('.', ',')}%). Dikenakan penalti skor -${(stock.kseiHscScorePenaltyPts || 0.45).toFixed(2).replace('.', ',')} poin tanpa blokir otomatis karena didukung pembagian dividen rutin.`
     );
   }
   if (accrualPenaltyScore > 0) {
@@ -1798,6 +1972,11 @@ export function evaluateJoeliardiOosFundamental(
     sustainableGrowthRatePct,
     damodaranJustifiedPbv,
     betaWeightedSizingCapPct,
+    hscTier: stock.hscTier,
+    kseiHscConcentrationPct: stock.kseiHscConcentrationPct,
+    kseiHscIsNew: stock.kseiHscIsNew,
+    kseiHscFootnote: stock.kseiHscFootnote,
+    kseiHscScorePenaltyPts: stock.kseiHscScorePenaltyPts,
     adtv20dIdr,
     maxSafeAllocationIdr,
     isDefensiveDiscountAnomaly,

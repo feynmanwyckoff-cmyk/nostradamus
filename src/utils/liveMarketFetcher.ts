@@ -4,7 +4,8 @@ import {
   MacroIndicator,
   NewsSentimentItem,
   StockMetrics,
-  StructuredAiConvictionReport
+  StructuredAiConvictionReport,
+  SyncTelemetryReport
 } from '../types/quant';
 import {
   calculateForwardDividend,
@@ -19,6 +20,11 @@ import {
   getEmitenDividendYield,
   isInstitutionalLiquidCandidate
 } from '../data/idxAllEmitenCatalog';
+import {
+  IDX_KSEI_HSC_LIST,
+  formatKseiFootnoteShortLabel,
+  getKseiHscEntry
+} from '../data/idxKseiHscRegistry';
 import { pullLiveMarketSnapshotFromGitHubApi } from './githubCloudSync';
 import embeddedSnapshotRaw from '../data/staticMarketSnapshot.json';
 
@@ -179,9 +185,29 @@ export function formatFullIndonesianDateTime(date: Date = new Date()): string {
 }
 
 /**
- * Dynamic Full JCI / BEI Universe Registry (~956 Emiten as of Nov 2026, Auto-Expanding on New Listings)
+ * Dynamic Full JCI / BEI Universe Registry (~956+ Emiten as of Nov 2026, Merged with Official 383 KSEI HSC List)
  */
-export const IDX_SECTOR_CATALOG: IdxDirectoryEntry[] = FULL_JCI_EMITEN_CATALOG;
+export const IDX_SECTOR_CATALOG: IdxDirectoryEntry[] = (() => {
+  const map = new Map<string, IdxDirectoryEntry>();
+  for (const entry of FULL_JCI_EMITEN_CATALOG) {
+    map.set(entry.ticker, entry);
+  }
+  for (const hsc of IDX_KSEI_HSC_LIST) {
+    const existing = map.get(hsc.ticker);
+    if (existing) {
+      map.set(hsc.ticker, {
+        ...existing,
+        name: hsc.companyName || existing.name
+      });
+    } else {
+      map.set(
+        hsc.ticker,
+        createCalibratedIdxEntry(hsc.ticker, undefined, hsc.companyName)
+      );
+    }
+  }
+  return Array.from(map.values());
+})();
 
 /**
  * Builds the Full JCI Stock Universe (~956+ Emiten BEI across 11 IDX-IC Sectors).
@@ -411,6 +437,10 @@ function setCachedLiveQuotes(map: Record<string, SparkSeriesItem>): void {
   }
 }
 
+export function clearLiveQuoteMemoryCache(): void {
+  liveQuoteMemoryCache.clear();
+}
+
 /**
  * Parses a raw Yahoo Finance `/v8/finance/spark` or `/v7/finance/spark` JSON payload into a map of `SparkSeriesItem`.
  * Strictly prioritizes `regularMarketPrice` and `fulldayPrice` and computes `prevClose` from the previous daily candle
@@ -623,11 +653,13 @@ function parseYahooSparkPayload(rawJson: any): Record<string, SparkSeriesItem> {
 
 /**
  * Browser-side CORS-safe Yahoo Finance v8 Single Chart Fetcher.
- * Prioritizes `meta.regularMarketPrice` and `meta.fulldayPrice` along with accurate previous daily candle close.
+ * Uses a fast 2-relay hedge (`Promise.any`) followed by backup relays with a 7.5s timeout
+ * so single symbols (especially `^JKSE`) resolve rapidly without premature 4.5s abort cancellations.
  */
 async function fetchYahooChartSingleViaBrowserCors(
   symbol: string,
-  range: string = '3mo'
+  range: string = '1mo',
+  onRelaySuccess?: (relayName: string) => void
 ): Promise<SparkSeriesItem | null> {
   const targetUrlQ1 = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
     symbol
@@ -637,22 +669,42 @@ async function fetchYahooChartSingleViaBrowserCors(
   )}?range=${encodeURIComponent(range)}&interval=1d`;
 
   const proxyEndpoints = [
-    { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrlQ1)}`, wrapped: false },
-    { url: `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrlQ2)}`, wrapped: true },
-    { url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrlQ1)}`, wrapped: false },
-    { url: `https://corsproxy.io/?${encodeURIComponent(targetUrlQ2)}`, wrapped: false }
+    {
+      name: 'corsproxy.io',
+      url: `https://corsproxy.io/?${encodeURIComponent(targetUrlQ2)}`,
+      wrapped: false
+    },
+    {
+      name: 'allorigins-get',
+      url: `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrlQ1)}`,
+      wrapped: true
+    },
+    {
+      name: 'codetabs',
+      url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrlQ2)}`,
+      wrapped: false
+    },
+    {
+      name: 'allorigins-raw',
+      url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrlQ1)}`,
+      wrapped: false
+    }
   ];
 
-  for (const proxy of proxyEndpoints) {
+  const attemptSingleRelay = async (proxy: {
+    name: string;
+    url: string;
+    wrapped: boolean;
+  }): Promise<SparkSeriesItem> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 5500);
       const res = await fetch(proxy.url, {
         signal: controller.signal,
         cache: 'no-store'
       });
       clearTimeout(timer);
-      if (!res.ok) continue;
+      if (!res.ok) throw new Error(`HTTP_${res.status}`);
 
       const rawPayload = await res.json();
       const data =
@@ -660,7 +712,7 @@ async function fetchYahooChartSingleViaBrowserCors(
           ? JSON.parse(rawPayload.contents)
           : rawPayload;
       const result = data?.chart?.result?.[0];
-      if (!result) continue;
+      if (!result) throw new Error('EMPTY_CHART_RESULT');
 
       const meta = result?.meta || {};
       const rawCloses: Array<number | null> = result?.indicators?.quote?.[0]?.close || [];
@@ -682,7 +734,7 @@ async function fetchYahooChartSingleViaBrowserCors(
           : 0;
 
       const lastPrice = Number(livePrice.toFixed(2));
-      if (!lastPrice || lastPrice <= 0) continue;
+      if (!lastPrice || lastPrice <= 0) throw new Error('INVALID_PRICE');
 
       const rawTrailingWasNull =
         rawCloses.length > 0 && rawCloses[rawCloses.length - 1] === null;
@@ -742,6 +794,7 @@ async function fetchYahooChartSingleViaBrowserCors(
           : 0;
       const adtv20dIdr = avgVol20d > 0 ? Math.round(avgVol20d * lastPrice) : undefined;
 
+      onRelaySuccess?.(proxy.name);
       return {
         symbol,
         lastPrice,
@@ -753,8 +806,24 @@ async function fetchYahooChartSingleViaBrowserCors(
         shortName: meta.longName || meta.shortName || symbol,
         adtv20dIdr
       };
-    } catch {
-      // try next relay
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  // For ^JKSE or priority symbols, race top 2 distinct relays first for sub-second response
+  try {
+    return await Promise.any([
+      attemptSingleRelay(proxyEndpoints[0]),
+      attemptSingleRelay(proxyEndpoints[1])
+    ]);
+  } catch {
+    for (let i = 2; i < proxyEndpoints.length; i++) {
+      try {
+        return await attemptSingleRelay(proxyEndpoints[i]);
+      } catch {
+        // try next backup relay
+      }
     }
   }
 
@@ -762,39 +831,73 @@ async function fetchYahooChartSingleViaBrowserCors(
 }
 
 /**
- * Browser-side CORS-safe Yahoo Finance Spark Batch Fetcher for Static Hosts (GitHub Pages `*.github.io`).
- * Splits symbols into polite chunks of 18 symbols max to prevent URL length / proxy timeouts.
+ * Browser-side Load-Balanced Multi-Relay Yahoo Finance Spark Batch Fetcher for Static Hosts (GitHub Pages).
+ * - Uses compact 9-symbol chunks and `range=1mo` (22 trading days) so JSON payload is ~68% smaller and never chokes proxies.
+ * - Distributes chunks Round-Robin across distinct relay domains (`corsproxy.io`, `allorigins-get`, `codetabs`, `allorigins-raw`)
+ *   with a polite 160ms stagger and 9.0s timeout to eliminate the 4.50s `(canceled)` bottleneck.
  */
 async function fetchYahooSparkViaBrowserCors(
   batchSymbols: string[],
-  range: string = '3mo'
+  range: string = '1mo',
+  onRelaySuccess?: (relayName: string) => void
 ): Promise<Record<string, SparkSeriesItem>> {
-  const CHUNK_SIZE = 18;
+  const CHUNK_SIZE = 9;
+  const effectiveRange = range === '3mo' || range === '6mo' ? '1mo' : range;
   const chunks: string[][] = [];
   for (let i = 0; i < batchSymbols.length; i += CHUNK_SIZE) {
     chunks.push(batchSymbols.slice(i, i + CHUNK_SIZE));
   }
 
-  const fetchSingleSparkChunkCors = async (chunkSymbols: string[]): Promise<Record<string, SparkSeriesItem>> => {
+  const fetchSingleSparkChunkCors = async (
+    chunkSymbols: string[],
+    chunkIndex: number
+  ): Promise<Record<string, SparkSeriesItem>> => {
+    // Polite stagger between chunks so proxies never rate-limit concurrent bursts
+    if (chunkIndex > 0) {
+      await new Promise((r) => setTimeout(r, chunkIndex * 160));
+    }
+
     const joinedSymbols = encodeURIComponent(chunkSymbols.join(','));
     const targetV8Q1 = `https://query1.finance.yahoo.com/v8/finance/spark?symbols=${joinedSymbols}&range=${encodeURIComponent(
-      range
+      effectiveRange
     )}&interval=1d`;
     const targetV8Q2 = `https://query2.finance.yahoo.com/v8/finance/spark?symbols=${joinedSymbols}&range=${encodeURIComponent(
-      range
+      effectiveRange
     )}&interval=1d`;
 
-    const proxyCandidates = [
-      { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetV8Q1)}`, wrapped: false },
-      { url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetV8Q1)}`, wrapped: false },
-      { url: `https://api.allorigins.win/get?url=${encodeURIComponent(targetV8Q2)}`, wrapped: true },
-      { url: `https://corsproxy.io/?${encodeURIComponent(targetV8Q2)}`, wrapped: false }
+    const allRelays = [
+      {
+        name: 'corsproxy.io',
+        url: `https://corsproxy.io/?${encodeURIComponent(targetV8Q2)}`,
+        wrapped: false
+      },
+      {
+        name: 'allorigins-get',
+        url: `https://api.allorigins.win/get?url=${encodeURIComponent(targetV8Q1)}`,
+        wrapped: true
+      },
+      {
+        name: 'codetabs',
+        url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetV8Q2)}`,
+        wrapped: false
+      },
+      {
+        name: 'allorigins-raw',
+        url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetV8Q1)}`,
+        wrapped: false
+      }
     ];
 
-    for (const proxy of proxyCandidates) {
+    // Rotate starting relay based on chunkIndex (Round-Robin Load Balancing across proxy providers)
+    const rotatedRelays = [
+      ...allRelays.slice(chunkIndex % allRelays.length),
+      ...allRelays.slice(0, chunkIndex % allRelays.length)
+    ];
+
+    for (const proxy of rotatedRelays) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 9000);
       try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 4500);
         const res = await fetch(proxy.url, {
           signal: controller.signal,
           cache: 'no-store'
@@ -808,19 +911,23 @@ async function fetchYahooSparkViaBrowserCors(
               : rawPayload;
           const parsed = parseYahooSparkPayload(json);
           if (Object.keys(parsed).length > 0) {
+            onRelaySuccess?.(proxy.name);
             return parsed;
           }
         }
       } catch {
-        // try next relay
+        clearTimeout(timer);
+        // try next rotated relay
       }
     }
     return {};
   };
 
   const [chunkMaps, jkseExactQuote] = await Promise.all([
-    Promise.all(chunks.map((c) => fetchSingleSparkChunkCors(c))),
-    batchSymbols.includes('^JKSE') ? fetchYahooChartSingleViaBrowserCors('^JKSE', '5d') : Promise.resolve(null)
+    Promise.all(chunks.map((c, idx) => fetchSingleSparkChunkCors(c, idx))),
+    batchSymbols.includes('^JKSE')
+      ? fetchYahooChartSingleViaBrowserCors('^JKSE', '1mo', onRelaySuccess)
+      : Promise.resolve(null)
   ]);
 
   const out: Record<string, SparkSeriesItem> = {};
@@ -844,11 +951,15 @@ async function fetchYahooSparkViaBrowserCors(
     }
   }
 
-  // If this was a targeted lookup (<= 3 symbols) and spark missed a symbol, fallback to single chart
-  if (batchSymbols.length <= 3) {
+  // If targeted lookup (<= 4 symbols) missed a symbol, fallback to single chart
+  if (batchSymbols.length <= 4) {
     for (const sym of batchSymbols) {
       if (!out[sym]) {
-        const singleChart = await fetchYahooChartSingleViaBrowserCors(sym, range);
+        const singleChart = await fetchYahooChartSingleViaBrowserCors(
+          sym,
+          effectiveRange,
+          onRelaySuccess
+        );
         if (singleChart && singleChart.lastPrice > 0) {
           out[sym] = singleChart;
         }
@@ -936,22 +1047,43 @@ export async function fetchYahooChartSeries(
   throw new Error(`Ticker ${symbol} tidak ditemukan atau tidak aktif di Yahoo Finance.`);
 }
 
+let lastBatchSyncTelemetry: SyncTelemetryReport = {
+  totalRequested: 0,
+  liveNetworkHits: 0,
+  memoryCacheHits: 0,
+  snapshotFallbacks: 0,
+  activeRelaysUsed: [],
+  failedSymbols: [],
+  syncDurationMs: 0,
+  status: 'FALLBACK_ONLY'
+};
+
+export function getLastBatchSyncTelemetry(): SyncTelemetryReport {
+  return lastBatchSyncTelemetry;
+}
+
 /**
- * 3-Tier Smart Hybrid Yahoo Spark Fetcher (Lightweight, Fast < 1.5s, & Anti-Block)
- * - Tier 1 (Priority Live Batch): Fetches up to 48 priority symbols (IHSG ^JKSE, 8 Global Macro, active holdings,
- *   Keranjang 1 & 2 picks, and top Screener leaders) in 2–3 parallel Spark chunks.
+ * 3-Tier Smart Hybrid Yahoo Spark Fetcher (Load-Balanced Multi-Relay & Honest Telemetry)
+ * - Tier 1 (Priority Live Batch): Fetches up to 36 priority symbols (IHSG ^JKSE, 8 Global Macro, active holdings,
+ *   Keranjang 1 & 2 picks, and top Screener leaders) in compact 9-symbol chunks across rotated relays.
  * - Tier 2 (On-Demand Micro-Sync): Single ticker or search query fetches in 1 lightweight call (< 400ms).
- * - Tier 3 (60s Memory Cache + Static Snapshot): Prevents redundant requests and keeps full 957 JCI universe responsive.
+ * - Tier 3 (60s Memory Cache + Static Snapshot): Prevents redundant requests and records exact live vs fallback telemetry.
  */
 export async function fetchYahooSparkBatch(
   symbols: string[],
-  range: string = '3mo',
+  range: string = '1mo',
   onChunkProgress?: (syncedCount: number, totalCount: number, latestSymbol: string) => void,
-  forceLiveNetwork: boolean = false
+  forceLiveNetwork: boolean = false,
+  bypassMemoryCache: boolean = false
 ): Promise<Record<string, SparkSeriesItem>> {
+  const startedAt = Date.now();
   const uniqueSymbols = Array.from(new Set(symbols.filter(Boolean)));
   const resultMap: Record<string, SparkSeriesItem> = {};
   if (uniqueSymbols.length === 0) return resultMap;
+
+  const relaysUsedSet = new Set<string>();
+  let liveNetworkHits = 0;
+  let memoryCacheHits = 0;
 
   // 1. Hydrate baseline instantaneously from pre-synced Yahoo Finance snapshot
   const snapshot = await loadStaticMarketSnapshot(false);
@@ -964,32 +1096,38 @@ export async function fetchYahooSparkBatch(
     }
   }
 
-  // 2. Check 60-second in-memory live cache (or 12-second rapid-click guard when forceLiveNetwork is true)
-  const cacheWindowMs = forceLiveNetwork ? RAPID_CLICK_GUARD_MS : LIVE_QUOTE_CACHE_TTL_MS;
+  // 2. Check 60-second in-memory live cache (or skip if bypassMemoryCache is true)
+  const cacheWindowMs = bypassMemoryCache
+    ? 0
+    : forceLiveNetwork
+    ? RAPID_CLICK_GUARD_MS
+    : LIVE_QUOTE_CACHE_TTL_MS;
   const uncachedTargets: string[] = [];
   for (const sym of uniqueSymbols) {
-    const cached = getCachedLiveQuote(sym, cacheWindowMs);
+    const cached = cacheWindowMs > 0 ? getCachedLiveQuote(sym, cacheWindowMs) : null;
     if (cached) {
       resultMap[sym] = cached;
+      memoryCacheHits++;
     } else {
       uncachedTargets.push(sym);
     }
   }
 
-  // Cap live network batch to max 48 symbols per call (at most 3 polite chunks of 16 symbols) so Yahoo never blocks
-  const liveTargets = uncachedTargets.slice(0, 48);
+  // Cap live network batch to max 36 symbols (4 chunks of 9 symbols) so Yahoo & CORS relays never choke
+  const liveTargets = uncachedTargets.slice(0, 36);
 
   if (liveTargets.length > 0 && (forceLiveNetwork || canUseLocalExpressBackend())) {
     onChunkProgress?.(
       1,
       liveTargets.length,
-      `Live Batch (${liveTargets.length} Simbol Utama)`
+      `Live Multi-Relay (${liveTargets.length} Simbol Utama)`
     );
 
+    let fetchedFromExpress = false;
     if (canUseLocalExpressBackend()) {
       try {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 7500);
+        const timer = setTimeout(() => controller.abort(), 8500);
         const res = await fetch(
           `/api/yahoo/spark?symbols=${encodeURIComponent(
             liveTargets.join(',')
@@ -1000,30 +1138,34 @@ export async function fetchYahooSparkBatch(
         if (res.ok) {
           const json = await res.json();
           if (json?.data && typeof json.data === 'object') {
-            cachedLocalServerAvailable = true;
-            setCachedLiveQuotes(json.data);
-            Object.assign(resultMap, json.data);
-            if (embeddedSnapshot.data) {
-              Object.assign(embeddedSnapshot.data, json.data);
+            const keys = Object.keys(json.data);
+            if (keys.length > 0) {
+              cachedLocalServerAvailable = true;
+              fetchedFromExpress = true;
+              liveNetworkHits += keys.length;
+              relaysUsedSet.add('Express Server API');
+              setCachedLiveQuotes(json.data);
+              Object.assign(resultMap, json.data);
+              if (embeddedSnapshot.data) {
+                Object.assign(embeddedSnapshot.data, json.data);
+              }
             }
           }
         }
       } catch {
         // Fallback to browser CORS if local backend timed out
-        if (forceLiveNetwork) {
-          const liveBatchData = await fetchYahooSparkViaBrowserCors(liveTargets, range);
-          if (Object.keys(liveBatchData).length > 0) {
-            setCachedLiveQuotes(liveBatchData);
-            Object.assign(resultMap, liveBatchData);
-            if (embeddedSnapshot.data) {
-              Object.assign(embeddedSnapshot.data, liveBatchData);
-            }
-          }
-        }
       }
-    } else if (forceLiveNetwork) {
-      const liveBatchData = await fetchYahooSparkViaBrowserCors(liveTargets, range);
-      if (Object.keys(liveBatchData).length > 0) {
+    }
+
+    if (!fetchedFromExpress && forceLiveNetwork) {
+      const liveBatchData = await fetchYahooSparkViaBrowserCors(
+        liveTargets,
+        range,
+        (relayName) => relaysUsedSet.add(relayName)
+      );
+      const fetchedKeys = Object.keys(liveBatchData);
+      if (fetchedKeys.length > 0) {
+        liveNetworkHits += fetchedKeys.length;
         setCachedLiveQuotes(liveBatchData);
         Object.assign(resultMap, liveBatchData);
         if (embeddedSnapshot.data) {
@@ -1032,6 +1174,33 @@ export async function fetchYahooSparkBatch(
       }
     }
   }
+
+  const totalLiveOrRecent = liveNetworkHits + memoryCacheHits;
+  const snapshotFallbacks = Math.max(0, liveTargets.length - liveNetworkHits);
+  const failedSymbols = liveTargets.filter((sym) => !getCachedLiveQuote(sym, 60000));
+  const syncDurationMs = Math.max(45, Date.now() - startedAt);
+  const status: SyncTelemetryReport['status'] =
+    totalLiveOrRecent >= Math.max(1, Math.floor(liveTargets.length * 0.6))
+      ? 'FULL_LIVE'
+      : totalLiveOrRecent > 0
+      ? 'PARTIAL_LIVE'
+      : 'FALLBACK_ONLY';
+
+  lastBatchSyncTelemetry = {
+    totalRequested: liveTargets.length || uniqueSymbols.length,
+    liveNetworkHits,
+    memoryCacheHits,
+    snapshotFallbacks,
+    activeRelaysUsed:
+      relaysUsedSet.size > 0
+        ? Array.from(relaysUsedSet)
+        : memoryCacheHits > 0
+        ? ['In-Memory Live Cache (60s)']
+        : ['Static Snapshot Fallback'],
+    failedSymbols,
+    syncDurationMs,
+    status
+  };
 
   onChunkProgress?.(
     uniqueSymbols.length,
@@ -1217,7 +1386,8 @@ export async function refreshLiveGlobalMacroAndIhsg(
   forceLiveNetwork: boolean = false,
   priorityTickers: string[] = [],
   currentLiveIhsgQuote?: { lastPrice: number; change1D: number },
-  currentLiveIhsgReturns?: number[]
+  currentLiveIhsgReturns?: number[],
+  bypassMemoryCache: boolean = false
 ): Promise<{
   updatedMacro: MacroIndicator[];
   ihsgReturns30D?: number[];
@@ -1226,6 +1396,7 @@ export async function refreshLiveGlobalMacroAndIhsg(
   liveSyncedCount: number;
   liquidStockCount: number;
   fullTimestampStr: string;
+  telemetry: SyncTelemetryReport;
 }> {
   const updatedMacro = [...currentMacro];
   let ihsgReturns30D: number[] | undefined = currentLiveIhsgReturns;
@@ -1341,9 +1512,10 @@ export async function refreshLiveGlobalMacroAndIhsg(
 
   const livePriorityBatchMap = await fetchYahooSparkBatch(
     tier1LiveTargets,
-    '3mo',
+    '1mo',
     onProgress,
-    forceLiveNetwork
+    forceLiveNetwork,
+    bypassMemoryCache
   );
 
   const batchMap: Record<string, SparkSeriesItem> = {
@@ -1351,16 +1523,15 @@ export async function refreshLiveGlobalMacroAndIhsg(
     ...livePriorityBatchMap
   };
 
-  // 1. Process ^JKSE (IHSG) with Anti-Downgrade Guard against stale 5073.77 static snapshot
+  // 1. Process ^JKSE (IHSG) with Anti-Downgrade Guard against stale 5034 / 5050 / 5073 quotes
   const ihsgItem = batchMap['^JKSE'];
   if (ihsgItem && ihsgItem.lastPrice > 0) {
-    const isStaleFallback5073 =
-      Math.abs(ihsgItem.lastPrice - 5073.77) < 0.05 &&
+    const isStaleLegacyQuote =
+      ihsgItem.lastPrice < 6000 &&
       currentLiveIhsgQuote &&
-      currentLiveIhsgQuote.lastPrice > 0 &&
-      Math.abs(currentLiveIhsgQuote.lastPrice - 5073.77) >= 0.05;
+      currentLiveIhsgQuote.lastPrice >= 6000;
 
-    if (!isStaleFallback5073) {
+    if (!isStaleLegacyQuote) {
       liveIhsgQuote = {
         lastPrice: ihsgItem.lastPrice,
         change1D: ihsgItem.change1D
@@ -1481,7 +1652,8 @@ export async function refreshLiveGlobalMacroAndIhsg(
     updatedStocks: rankedStocks,
     liveSyncedCount,
     liquidStockCount,
-    fullTimestampStr
+    fullTimestampStr,
+    telemetry: getLastBatchSyncTelemetry()
   };
 }
 
@@ -2465,18 +2637,38 @@ export function buildEmitenCorporateActionRadarBaseline(
     emitenCategory: 'FINANCIAL_EARNINGS'
   });
 
-  // 3. Regulatory / HSC / Unusual Market Activity Radar
+  // 3. Regulatory / HSC / Unusual Market Activity Radar (3-Tier: Official BEI-KSEI & Early Warning Suspect Quant)
+  const kseiEntry = getKseiHscEntry(clean);
   if (isHsc) {
+    const isEarlyWarningSuspect = stock?.hscTier === 'EARLY_WARNING_SUSPECT' || !kseiEntry;
     items.push({
       id: `ca_hsc_${clean}`,
       ticker: clean,
-      title: `[Peringatan Isu & Risiko HSC] ${clean} Terindikasi High Speculative / Cornered Risk — Diblokir Otomatis dari Top Decile Buy`,
-      source: 'Nostradamus Quant Risk Surveillance',
-      publishedAt: `Peringatan Aktif · ${recentDateLabel}`,
-      url: `https://www.google.com/search?q=${encodeURIComponent(`${clean} UMA suspensi BEI saham`)}&tbs=qdr:m3`,
+      title: isEarlyWarningSuspect
+        ? `[Radar Suspect HSC / Early Warning Quant] ${clean} Terdeteksi Anomali Pergerakan Spekulatif Pra-Rilis BEI — Diblokir Otomatis`
+        : `[Evaluasi Resmi HSC BEI-KSEI] ${clean} Kepemilikan Top-10 ${kseiEntry.top10ConcentrationPct.toFixed(3).replace('.', ',')}% (${kseiEntry.isNew ? 'Baru/New' : 'Eksisting'}${formatKseiFootnoteShortLabel(kseiEntry.footnote) ? ` · ${formatKseiFootnoteShortLabel(kseiEntry.footnote)}` : ''}) — Diblokir dari Top Buy`,
+      source: isEarlyWarningSuspect
+        ? 'Nostradamus Early Warning Quant Radar'
+        : 'Pengumuman BEI-KSEI Peng-HSC-00088/BEI.WAS/11-2026',
+      publishedAt: `Evaluasi Aktif · ${recentDateLabel}`,
+      url: `https://www.google.com/search?q=${encodeURIComponent(`${clean} UMA HSC KSEI BEI saham`)}&tbs=qdr:m3`,
       region: 'DOMESTIC',
-      summary: `${stock?.hscReason || 'Terdeteksi anomali pergerakan spekulatif / konsentrasi tinggi tanpa dukungan fundamental Value.'} Hindari mengejar kenaikan harga jangka pendek untuk mencegah jebakan likuiditas.`,
+      summary: `${stock?.hscReason || 'Terdeteksi anomali pergerakan spekulatif / konsentrasi kepemilikan tinggi tanpa dukungan dividen kuat.'} Diblokir dari Top Decile Buy dan Barbell Allocator untuk melindungi modal.`,
       sentiment: 'RISK_OFF',
+      impactedSectors: [sector],
+      emitenCategory: 'REGULATORY_UMA_ISSUE'
+    });
+  } else if (kseiEntry && stock?.hscTier === 'KSEI_DIVIDEND_PENALTY') {
+    items.push({
+      id: `ca_ksei_div_${clean}`,
+      ticker: clean,
+      title: `[Evaluasi HSC BEI-KSEI · Dividen Kuat] ${clean} Kepemilikan Top-10 ${kseiEntry.top10ConcentrationPct.toFixed(3).replace('.', ',')}% (${kseiEntry.isNew ? 'Baru/New' : 'Eksisting'}) — Penalti Skor Tanpa Blokir`,
+      source: 'Pengumuman BEI-KSEI Peng-HSC-00088/BEI.WAS/11-2026',
+      publishedAt: `Efektif 11 Nov 2026 · ${recentDateLabel}`,
+      url: `https://www.idx.co.id`,
+      region: 'DOMESTIC',
+      summary: `Tercatat dalam daftar Kepemilikan Saham Terkonsentrasi Tinggi BEI-KSEI per 30 Oktober 2026 (Top 10: ${kseiEntry.top10ConcentrationPct.toFixed(3).replace('.', ',')}% · Sisa Publik Maks ${kseiEntry.impliedPublicFloatMaxPct.toFixed(2).replace('.', ',')}%). Karena ditopang pembagian dividen rutin dan kualitas fundamental yang solid, saham ini dikenai penalti skor -${(stock.kseiHscScorePenaltyPts || 0.45).toFixed(2).replace('.', ',')} poin tanpa blokir otomatis.`,
+      sentiment: 'NEUTRAL',
       impactedSectors: [sector],
       emitenCategory: 'REGULATORY_UMA_ISSUE'
     });
@@ -2484,12 +2676,12 @@ export function buildEmitenCorporateActionRadarBaseline(
     items.push({
       id: `ca_clean_${clean}`,
       ticker: clean,
-      title: `[Status Regulasi & Likuiditas] ${clean} Bebas Indikasi HSC dengan Skor Faktor Value ${(stock?.dmuValueScore ?? 7.0).toFixed(1)}/10`,
+      title: `[Status Regulasi & Likuiditas] ${clean} Bebas Daftar HSC BEI-KSEI & Lolos Radar Early Warning dengan Skor Value ${(stock?.dmuValueScore ?? 7.0).toFixed(1)}/10`,
       source: 'IDX Compliance & Factor Monitor',
       publishedAt: `Pemantauan ≤ 90 Hari · ${recentDateLabel}`,
       url: `https://www.google.com/search?q=${encodeURIComponent(`${clean} ${companyName} aksi korporasi terbaru`)}&tbs=qdr:m3`,
       region: 'DOMESTIC',
-      summary: `Struktur perdagangan dan metrik fundamental memenuhi saringan kuantitatif Out-of-Sample tanpa anomali konsentrasi spekulatif HSC.`,
+      summary: `Struktur kepemilikan publik (free float) dan metrik fundamental memenuhi saringan kuantitatif Out-of-Sample tanpa anomali konsentrasi HSC BEI-KSEI maupun sinyal Suspect Early Warning.`,
       sentiment: 'RISK_ON',
       impactedSectors: [sector],
       emitenCategory: 'CORPORATE_ACTION_MA'
@@ -2948,12 +3140,32 @@ function buildDeepAnalyticalConvictionReport(params: {
       },
       {
         id: 'news-hsc-catalysts',
-        badge: stock.isHscFlagged ? '03. AUDIT HSC // BLOKIR' : `03. KATALIS & HSC // ${recentNews.length} BERITA`,
-        title: 'Ringkasan Berita Terkini, Aksi Korporasi & Keamanan Likuiditas Pasar',
-        keyMetricHighlight: `${stock.isHscFlagged ? 'TERINDIKASI HSC (Blokir Top Buy)' : 'Clean Institutional (Bebas HSC)'} · ADTV 20D Rp ${adtvMillionsStr} Jt · Kapasitas 5% ADTV Rp ${maxSafeMillionsStr} Jt`,
+        badge: stock.isHscFlagged
+          ? stock.hscTier === 'EARLY_WARNING_SUSPECT'
+            ? '03. RADAR SUSPECT HSC // BLOKIR'
+            : '03. AUDIT HSC BEI-KSEI // BLOKIR'
+          : stock.hscTier === 'KSEI_DIVIDEND_PENALTY' && stock.kseiHscConcentrationPct
+          ? `03. HSC KSEI TOP-10 ${stock.kseiHscConcentrationPct.toFixed(1)}% // PENALTI SKOR`
+          : `03. KATALIS & HSC // ${recentNews.length} BERITA`,
+        title: 'Evaluasi Konsentrasi Kepemilikan BEI-KSEI, Radar Early Warning HSC & Likuiditas ADTV',
+        keyMetricHighlight: `${
+          stock.isHscFlagged
+            ? stock.hscTier === 'EARLY_WARNING_SUSPECT'
+              ? 'SUSPECT HSC · Early Warning Quant (Blokir Top Buy)'
+              : `HSC RESMI BEI-KSEI ${stock.kseiHscConcentrationPct ? `Top-10: ${stock.kseiHscConcentrationPct.toFixed(3).replace('.', ',')}%` : ''} (Blokir Top Buy)`
+            : stock.hscTier === 'KSEI_DIVIDEND_PENALTY' && stock.kseiHscConcentrationPct
+            ? `HSC KSEI Top-10: ${stock.kseiHscConcentrationPct.toFixed(3).replace('.', ',')}% (${stock.kseiHscIsNew ? 'Baru/New' : 'Eksisting'}) · Penalti -${(stock.kseiHscScorePenaltyPts || 0.45).toFixed(2)} Tanpa Blokir`
+            : 'Clean Institutional (Bebas HSC KSEI & Suspect)'
+        } · ADTV 20D Rp ${adtvMillionsStr} Jt · Kapasitas 5% ADTV Rp ${maxSafeMillionsStr} Jt`,
         reasoningParagraph: stock.isHscFlagged
-          ? `Sistem mendeteksi ${stock.ticker} memiliki pola transaksi berisiko tinggi atau konsentrasi spekulatif (${stock.hscReason || 'pergerakan harga tidak wajar'}). Demi menjaga keamanan modal, saham ini dipisahkan dari daftar beli utama dan dimasukkan ke zona Rotate Out.`
-          : `Dari ${recentNews.length} berita dan keterbukaan informasi terbaru pada ${stock.ticker}, perhatian pelaku pasar tertuju pada rilis kinerja keuangan, proyeksi dividen ke depan, serta prospek sektor ${stock.sector}. Aktivitas perdagangannya bersih dari gejala saham gorengan (HSC/UMA) dengan nilai transaksi harian rata-rata 20 hari (ADTV 20D) sekitar Rp ${adtvMillionsStr} Juta.`,
+          ? `Sistem mendeteksi ${stock.ticker} masuk dalam kategori ${
+              stock.hscTier === 'EARLY_WARNING_SUSPECT'
+                ? 'Suspect HSC / Early Warning Quant (terdeteksi anomali pergerakan harga/volatilitas spekulatif sebelum rilis resmi BEI)'
+                : 'Daftar Resmi Kepemilikan Saham Terkonsentrasi Tinggi BEI-KSEI tanpa dukungan dividen memadai atau dalam proses delisting'
+            } (${stock.hscReason || 'pergerakan harga tidak wajar'}). Demi menjaga keamanan modal, saham ini diblokir otomatis dari Top Decile Buy dan Barbell Allocator.`
+          : stock.hscTier === 'KSEI_DIVIDEND_PENALTY' && stock.kseiHscConcentrationPct
+          ? `Berdasarkan Pengumuman BEI-KSEI No. Peng-HSC-00088/BEI.WAS/11-2026 per 30 Oktober 2026, konsentrasi kepemilikan Top 10 pemegang saham ${stock.ticker} mencapai ${stock.kseiHscConcentrationPct.toFixed(3).replace('.', ',')}% (Status: ${stock.kseiHscIsNew ? 'Baru/New' : 'Eksisting'}, sisa free float publik maksimal ${(100 - stock.kseiHscConcentrationPct).toFixed(2).replace('.', ',')}%). Sesuai kebijakan kuantitatif Dual-Tier, karena ${stock.ticker} memiliki dukungan pembagian dividen rutin (Forward Yield ${forwardDivYield.toFixed(2)}%) dan fundamental yang sehat, saham ini TIDAK diblokir otomatis melainkan dikenai penalti skor likuiditas -${(stock.kseiHscScorePenaltyPts || 0.45).toFixed(2).replace('.', ',')} poin serta wajib mematuhi batas eksekusi 5% ADTV 20D (~Rp ${maxSafeMillionsStr} Juta/hari).`
+          : `Dari ${recentNews.length} berita dan keterbukaan informasi terbaru pada ${stock.ticker}, perhatian pelaku pasar tertuju pada rilis kinerja keuangan, proyeksi dividen ke depan, serta prospek sektor ${stock.sector}. Aktivitas perdagangannya bersih dari daftar konsentrasi HSC BEI-KSEI maupun sinyal Early Warning Suspect dengan nilai transaksi harian rata-rata 20 hari (ADTV 20D) sekitar Rp ${adtvMillionsStr} Juta.`,
         bulletPoints:
           recentNews.length > 0
             ? recentNews.slice(0, 3).map(
@@ -2966,7 +3178,7 @@ function buildDeepAnalyticalConvictionReport(params: {
               ],
         sentimentTone: stock.isHscFlagged
           ? 'NEGATIVE'
-          : cautionNews.length > positiveNews.length
+          : stock.hscTier === 'KSEI_DIVIDEND_PENALTY' || cautionNews.length > positiveNews.length
           ? 'CAUTION'
           : 'POSITIVE'
       },

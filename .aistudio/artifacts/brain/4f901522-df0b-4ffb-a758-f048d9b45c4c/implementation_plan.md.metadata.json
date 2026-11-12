@@ -1,6 +1,0 @@
-{
-  "summary":  "Rencana implementasi gabungan untuk: (1) Memperbaiki kartu IDX Composite (^JKSE) dan Realized 30D Volatility yang stagnan di 5.073,77 (+0.46%) saat sinkronisasi live maupun GitHub Cloud, serta (2) Menyinkronkan matriks kuantitatif akademik baru (GP/A Novy-Marx, Anti-Junk QMJ Accrual OCF/NI, Kurva Spot SBN 1Y/5Y/10Y & Dynamic Ke Fabozzi, Justified PBV Damodaran, serta 1/Beta Barbell Position Sizing Qian/Taleb) beserta narasi Chain-of-Thought Komite AI pada ekspor gambar PNG dan dokumen PDF.",
-  "updatedAt":  "2026-11-10T09:10:12.243080663Z",
-  "requestFeedback":  true,
-  "userFacing":  true
-}

@@ -82,8 +82,24 @@ export interface StockMetrics {
   adtv20dIdr?: number;
   lastSyncedAt?: string;
   isHscFlagged?: boolean;
-  hscSource?: 'MANUAL' | 'AUTO_QUANT' | 'NONE';
+  hscSource?: 'MANUAL' | 'KSEI_OFFICIAL' | 'AUTO_QUANT' | 'NONE';
+  hscTier?: 'HARD_BLOCK' | 'KSEI_DIVIDEND_PENALTY' | 'EARLY_WARNING_SUSPECT' | 'CLEAN';
   hscReason?: string;
+  kseiHscConcentrationPct?: number;
+  kseiHscIsNew?: boolean;
+  kseiHscFootnote?: 'NONE' | 'UNREPORTED_DISTRIBUTION' | 'REPO_TRANSACTION' | 'VOLUNTARY_DELISTING';
+  kseiHscScorePenaltyPts?: number;
+}
+
+export interface SyncTelemetryReport {
+  totalRequested: number;
+  liveNetworkHits: number;
+  memoryCacheHits: number;
+  snapshotFallbacks: number;
+  activeRelaysUsed: string[];
+  failedSymbols: string[];
+  syncDurationMs: number;
+  status: 'FULL_LIVE' | 'PARTIAL_LIVE' | 'FALLBACK_ONLY';
 }
 
 export interface JoeliardiOosEvaluation {
@@ -124,6 +140,12 @@ export interface JoeliardiOosEvaluation {
   sustainableGrowthRatePct?: number;
   damodaranJustifiedPbv?: number;
   betaWeightedSizingCapPct?: number;
+  // KSEI HSC & Early Warning Suspect Telemetry
+  hscTier?: 'HARD_BLOCK' | 'KSEI_DIVIDEND_PENALTY' | 'EARLY_WARNING_SUSPECT' | 'CLEAN';
+  kseiHscConcentrationPct?: number;
+  kseiHscIsNew?: boolean;
+  kseiHscFootnote?: 'NONE' | 'UNREPORTED_DISTRIBUTION' | 'REPO_TRANSACTION' | 'VOLUNTARY_DELISTING';
+  kseiHscScorePenaltyPts?: number;
   adtv20dIdr: number;
   maxSafeAllocationIdr: number;
   isDefensiveDiscountAnomaly: boolean;

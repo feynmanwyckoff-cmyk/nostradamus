@@ -5,6 +5,10 @@ import {
   StockMetrics,
   StructuredAiConvictionReport
 } from '../types/quant';
+import {
+  formatKseiFootnoteFullDescription,
+  formatKseiFootnoteShortLabel
+} from '../data/idxKseiHscRegistry';
 import { formatIdrPriceDisplay } from './numberFormat';
 
 export interface InspectorExportPayload {
@@ -33,7 +37,10 @@ const VERDICT_TERMS = [
   'BUKAN VALUE TRAP',
   'VALUE TRAP',
   'DIVIDEND TRAP',
+  'HIGH SHAREHOLDING CONCENTRATION',
   'HIGH SPECULATIVE CONCENTRATION',
+  'EARLY WARNING SUSPECT HSC',
+  'SUSPECT HSC',
   'CLEAN NON-HSC',
   'BLOKIR HSC',
   'ROTATE OUT'
@@ -51,6 +58,10 @@ const METRIC_LABELS = [
   'Wajar PBV',
   'Fair PBV',
   'PBV',
+  'Kepemilikan Top-10 KSEI',
+  'Top-10 KSEI',
+  'KSEI Top-10',
+  'Penalti Skor HSC',
   'GP/A (Novy-Marx)',
   'GP/A',
   'OCF/NI',
@@ -577,10 +588,11 @@ export function renderInspectorReportCanvas(
     24;
 
   const topNews = recentNews.slice(0, 4);
+  const hasHscBanner = Boolean(stock.isHscFlagged || stock.hscSource === 'KSEI_OFFICIAL');
 
   const LOGICAL_HEIGHT =
     128 +
-    (stock.isHscFlagged ? 68 : 0) +
+    (hasHscBanner ? 68 : 0) +
     102 +
     132 +
     74 +
@@ -681,27 +693,53 @@ export function renderInspectorReportCanvas(
 
   let curY = 128;
 
-  // 4. Optional HSC Alert Box
-  if (stock.isHscFlagged) {
+  // 4. Optional HSC Alert Box (Supports Official KSEI HSC Dividend Penalty, KSEI Hard Block & Quant Suspect HSC)
+  if (hasHscBanner) {
+    const isDivPenalty = stock.hscTier === 'KSEI_DIVIDEND_PENALTY';
     drawRoundedRect(ctx, 38, curY, LOGICAL_WIDTH - 76, 54, 4);
-    ctx.fillStyle = 'rgba(225, 29, 72, 0.12)';
+    ctx.fillStyle = isDivPenalty
+      ? 'rgba(245, 158, 11, 0.13)'
+      : 'rgba(225, 29, 72, 0.12)';
     ctx.fill();
-    ctx.strokeStyle = 'rgba(244, 63, 94, 0.45)';
+    ctx.strokeStyle = isDivPenalty
+      ? 'rgba(245, 158, 11, 0.55)'
+      : 'rgba(244, 63, 94, 0.45)';
     ctx.stroke();
-    ctx.fillStyle = '#FB7185';
+
+    ctx.fillStyle = isDivPenalty ? '#FBBF24' : '#FB7185';
     ctx.font = '700 11.5px Montserrat, sans-serif';
-    ctx.fillText(
-      'PERINGATAN SAHAM HSC (HIGH SPECULATIVE / CORNERED RISK) — DIBLOKIR DARI TOP DECILE BUY',
-      54,
-      curY + 22
+
+    const kseiPctText = stock.kseiHscConcentrationPct
+      ? `${stock.kseiHscConcentrationPct.toFixed(3).replace('.', ',')}%`
+      : '';
+    const kseiNewTag = stock.kseiHscIsNew ? 'BARU (11 Nov 2026)' : 'Eksisting';
+    const kseiFnText =
+      stock.kseiHscFootnote && stock.kseiHscFootnote !== 'NONE'
+        ? ` · ${formatKseiFootnoteFullDescription(stock.kseiHscFootnote)}`
+        : '';
+
+    const bannerHeader =
+      stock.hscSource === 'KSEI_OFFICIAL' && isDivPenalty
+        ? `DAFTAR RESMI HSC BEI–KSEI (KEPEMILIKAN TOP-10: ${kseiPctText} · STATUS: ${kseiNewTag.toUpperCase()}) — DIVIDEN KUAT LOLOS BLOKIR (PENALTI SKOR -${(
+            stock.kseiHscScorePenaltyPts ?? 0.45
+          )
+            .toFixed(2)
+            .replace('.', ',')} POIN)`
+        : stock.hscSource === 'KSEI_OFFICIAL'
+        ? `DAFTAR RESMI HSC BEI–KSEI (KEPEMILIKAN TOP-10: ${kseiPctText} · STATUS: ${kseiNewTag.toUpperCase()}) — DIBLOKIR DARI TOP DECILE BUY`
+        : stock.hscTier === 'EARLY_WARNING_SUSPECT'
+        ? 'RADAR EARLY WARNING QUANT: SUSPECT HSC (PRA-RILIS BEI) — DIBLOKIR DARI TOP DECILE BUY'
+        : 'PERINGATAN SAHAM HSC (MANUAL OVERRIDE) — DIBLOKIR DARI TOP DECILE BUY';
+
+    ctx.fillText(bannerHeader, 54, curY + 21);
+
+    ctx.fillStyle = isDivPenalty ? '#FDE68A' : '#FECDD3';
+    ctx.font = '500 10.5px Montserrat, sans-serif';
+    const subReasonText = `${stock.hscReason || 'Konsentrasi kepemilikan tinggi.'}${kseiFnText}`.slice(
+      0,
+      152
     );
-    ctx.fillStyle = '#FECDD3';
-    ctx.font = '500 11px Montserrat, sans-serif';
-    ctx.fillText(
-      `${stock.hscReason || 'Anomali spekulatif terdeteksi.'} Dikunci pada zona Rotate Out sesuai filter perlindungan modal Fundamental Kualitas Moat.`,
-      54,
-      curY + 41
-    );
+    ctx.fillText(subReasonText, 54, curY + 41);
     curY += 68;
   }
 
@@ -815,7 +853,19 @@ export function renderInspectorReportCanvas(
       lines: [
         `DER: ${stock.debtToEquity.toFixed(2)}x`,
         `Status Neraca: ${stock.debtToEquity <= 0.8 ? 'Konservatif' : 'Moderat/Tinggi'}`,
-        `Saringan HSC: ${stock.isHscFlagged ? 'Terindikasi HSC' : 'Bebas HSC'}`
+        stock.hscSource === 'KSEI_OFFICIAL' && stock.kseiHscConcentrationPct
+          ? `KSEI Top-10: ${stock.kseiHscConcentrationPct.toFixed(2).replace('.', ',')}%${
+              stock.kseiHscIsNew ? ' (BARU)' : ''
+            }${
+              stock.kseiHscFootnote && stock.kseiHscFootnote !== 'NONE'
+                ? ' ' + formatKseiFootnoteShortLabel(stock.kseiHscFootnote)
+                : ''
+            }`
+          : stock.hscTier === 'EARLY_WARNING_SUSPECT'
+          ? 'HSC: Suspect HSC (Early Warning)'
+          : stock.isHscFlagged
+          ? 'HSC: Manual HSC Blokir'
+          : 'HSC: Bebas HSC (<92,5% KSEI)'
       ]
     },
     {
