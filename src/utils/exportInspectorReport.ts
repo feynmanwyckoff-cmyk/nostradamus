@@ -1,4 +1,5 @@
 import {
+  EmitenNewsCategory,
   JoeliardiOosEvaluation,
   MarketRegimeStatus,
   NewsSentimentItem,
@@ -26,6 +27,8 @@ interface RichWordToken {
 
 const VERDICT_TERMS = [
   'STRONG BUY: ANOMALI ASET DEFENSIF TERDISKON',
+  'TERDISKON / MURAH',
+  'MAHAL / PREMIUM',
   'UNDERCUT / DEEP DISCOUNT',
   'LAYAK DIAKUMULASI BERTAHAP',
   'LAYAK KOLEKSI SELEKTIF SAAT KOREKSI',
@@ -111,6 +114,102 @@ const METRIC_LABELS = [
   'Nilai Intrinsik Wajar',
   'Nilai Wajar'
 ];
+
+/**
+ * Formats print timestamp in full Indonesian format, e.g.:
+ * "Kamis, 12 November 2026 pukul 09:15 WIB"
+ */
+export function formatIndonesianPrintTimestamp(date: Date = new Date()): string {
+  try {
+    const datePart = new Intl.DateTimeFormat('id-ID', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+      timeZone: 'Asia/Jakarta'
+    }).format(date);
+    const timePart = new Intl.DateTimeFormat('id-ID', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      timeZone: 'Asia/Jakarta'
+    })
+      .format(date)
+      .replace('.', ':');
+    return `${datePart} pukul ${timePart} WIB`;
+  } catch {
+    return `${date.toLocaleDateString('id-ID')} WIB`;
+  }
+}
+
+/**
+ * Draws single-line text that automatically shrinks its font size down to `minFontSize`
+ * if the measured width exceeds `maxWidth`, preventing text from clipping or overflowing card borders.
+ */
+function drawTextAutoFit(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  maxWidth: number,
+  weight: number | string,
+  initialFontSize: number,
+  minFontSize = 8.0,
+  fontFamily = 'Montserrat, sans-serif'
+): void {
+  let fontSize = initialFontSize;
+  ctx.font = `${weight} ${fontSize}px ${fontFamily}`;
+  while (ctx.measureText(text).width > maxWidth && fontSize > minFontSize) {
+    fontSize = Number((fontSize - 0.25).toFixed(2));
+    ctx.font = `${weight} ${fontSize}px ${fontFamily}`;
+  }
+  ctx.fillText(text, x, y);
+}
+
+function getExportNewsCategoryStyle(cat?: EmitenNewsCategory): {
+  label: string;
+  textColor: string;
+  bgColor: string;
+  borderColor: string;
+} {
+  switch (cat) {
+    case 'DIVIDEN_RUPS':
+      return {
+        label: 'DIVIDEN & RUPS',
+        textColor: '#34D399',
+        bgColor: 'rgba(16, 185, 129, 0.14)',
+        borderColor: 'rgba(16, 185, 129, 0.45)'
+      };
+    case 'CORPORATE_ACTION_MA':
+      return {
+        label: 'CORPORATE ACTION / M&A',
+        textColor: '#38BDF8',
+        bgColor: 'rgba(56, 189, 248, 0.14)',
+        borderColor: 'rgba(56, 189, 248, 0.45)'
+      };
+    case 'FINANCIAL_EARNINGS':
+      return {
+        label: 'KINERJA KEUANGAN',
+        textColor: '#FBBF24',
+        bgColor: 'rgba(245, 158, 11, 0.14)',
+        borderColor: 'rgba(245, 158, 11, 0.45)'
+      };
+    case 'REGULATORY_UMA_ISSUE':
+      return {
+        label: 'ISU REGULASI / UMA / HSC',
+        textColor: '#FB7185',
+        bgColor: 'rgba(244, 63, 94, 0.15)',
+        borderColor: 'rgba(244, 63, 94, 0.45)'
+      };
+    default:
+      return {
+        label: 'BERITA EMITEN (≤ 3 BULAN)',
+        textColor: '#D1D5DB',
+        bgColor: 'rgba(156, 163, 175, 0.12)',
+        borderColor: 'rgba(156, 163, 175, 0.35)'
+      };
+  }
+}
 
 function tokenizeFinancialNarrative(text: string, ticker?: string): RichWordToken[] {
   const cleanedText = String(text || '')
@@ -318,7 +417,7 @@ function drawRoundedRect(
 
 /**
  * Draws the official Nostradamus 8-Point Mariner's Compass Rose emblem onto a 2D canvas
- * inside the top-left header box.
+ * inside the top-left header box, vertically centered with the header typography.
  */
 function drawNostradamusCompassLogo(
   ctx: CanvasRenderingContext2D,
@@ -459,7 +558,43 @@ function drawLayersIcon(ctx: CanvasRenderingContext2D, x: number, y: number) {
 }
 
 /**
- * Renders the full Emiten Fundamental & AI Committee Inspection Report onto a 2x Retina HD Canvas
+ * Normalizes any legacy accumulation zone text so it always uses a clear range, fair value,
+ * and explicit valuation status (TERDISKON / MURAH, WAJAR, or MAHAL / PREMIUM).
+ */
+function normalizeExportAccumulationZone(
+  rawZone: string,
+  stock: StockMetrics,
+  joeliardiEval: JoeliardiOosEvaluation
+): string {
+  if (!rawZone || /di bawah batas akumulasi|UNDERCUT \/ DEEP DISCOUNT:/i.test(rawZone)) {
+    if (stock.isHscFlagged) {
+      return 'Tidak direkomendasikan (Blokir HSC — risiko spekulasi tinggi)';
+    }
+    const intrinsicCeiling = Math.round((joeliardiEval.intrinsicValueIdr * 0.85) / 5) * 5;
+    const isDeepDiscount = stock.lastPrice <= intrinsicCeiling;
+    const lowPrice = isDeepDiscount
+      ? Math.round((stock.lastPrice * 0.96) / 5) * 5
+      : Math.round((Math.min(stock.lastPrice * 0.98, intrinsicCeiling * 0.96)) / 5) * 5;
+    const highPrice = isDeepDiscount
+      ? intrinsicCeiling
+      : Math.round((Math.min(stock.lastPrice, intrinsicCeiling)) / 5) * 5;
+    const rLow = Math.min(lowPrice, highPrice);
+    const rHigh = Math.max(lowPrice, highPrice);
+
+    if (isDeepDiscount) {
+      return `Rentang Beli Ideal: Rp ${rLow.toLocaleString('id-ID')} – Rp ${rHigh.toLocaleString('id-ID')} | Nilai Wajar: Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${stock.lastPrice.toLocaleString('id-ID')}): TERDISKON / MURAH (Harga saat ini ${joeliardiEval.marginOfSafetyPct.toFixed(1)}% di bawah Nilai Wajar, sangat wajar untuk akumulasi bertahap)`;
+    }
+    if (joeliardiEval.marginOfSafetyPct >= 0) {
+      return `Rentang Beli Ideal: Rp ${rLow.toLocaleString('id-ID')} – Rp ${rHigh.toLocaleString('id-ID')} | Nilai Wajar: Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${stock.lastPrice.toLocaleString('id-ID')}): WAJAR (Harga saat ini masih di bawah Nilai Wajar dengan diskon +${joeliardiEval.marginOfSafetyPct.toFixed(1)}%, idealnya cicil beli di rentang akumulasi)`;
+    }
+    const pullbackLow = Math.round((joeliardiEval.intrinsicValueIdr * 0.8) / 5) * 5;
+    return `Rentang Beli Ideal: Rp ${pullbackLow.toLocaleString('id-ID')} – Rp ${intrinsicCeiling.toLocaleString('id-ID')} | Nilai Wajar: Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${stock.lastPrice.toLocaleString('id-ID')}): MAHAL / PREMIUM (Harga saat ini ${Math.abs(joeliardiEval.marginOfSafetyPct).toFixed(1)}% di atas Nilai Wajar, tunggu koreksi ke rentang beli ideal)`;
+  }
+  return rawZone;
+}
+
+/**
+ * Renders the full Emiten Fundamental & Nostradamus Inspection Report onto a 2x Retina HD Canvas
  * with official Nostradamus Quant Terminal watermarks (diagonal + header + footer).
  */
 export function renderInspectorReportCanvas(
@@ -475,14 +610,18 @@ export function renderInspectorReportCanvas(
 
   const rawSummaryText =
     structuredReport?.directAnswerSummary ||
-    `Hasil Analisis Komite Investasi: Di harga Rp ${formatIdrPriceDisplay(stock.lastPrice)}, ${stock.ticker} memiliki Nilai Intrinsik Wajar Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct.toFixed(1)}%) dengan Skor Keyakinan ${joeliardiEval.totalConvictionScore}/100.`;
+    `Hasil Analisis Nostradamus: Di harga Rp ${formatIdrPriceDisplay(stock.lastPrice)}, ${stock.ticker} memiliki Nilai Intrinsik Wajar Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct.toFixed(1)}%) dengan Skor Keyakinan ${joeliardiEval.totalConvictionScore}/100.`;
 
   const summaryHeaderMatch = rawSummaryText.match(
     /^((?:Hasil|Kesimpulan|Keputusan|Evaluasi|Audit)\s+[^:]{3,75}):\s*([\s\S]*)$/i
   );
-  const summaryBoxHeader = summaryHeaderMatch
+  const matchedHeaderUpper = summaryHeaderMatch
     ? summaryHeaderMatch[1].trim().toUpperCase()
-    : 'HASIL ANALISIS KOMITE INVESTASI';
+    : 'HASIL ANALISIS NOSTRADAMUS';
+  const summaryBoxHeader =
+    matchedHeaderUpper === 'HASIL ANALISIS KOMITE INVESTASI'
+      ? 'HASIL ANALISIS NOSTRADAMUS'
+      : matchedHeaderUpper;
   const summaryBodyText = summaryHeaderMatch
     ? summaryHeaderMatch[2].trim()
     : rawSummaryText.trim();
@@ -497,7 +636,7 @@ export function renderInspectorReportCanvas(
   );
   const summaryLineH = 22;
 
-  // Pre-parse and measure 4 Chain-of-Thought cards (matching Attachment 1 layout)
+  // Pre-parse and measure 4 Chain-of-Thought cards
   const cotSteps = structuredReport?.chainOfThoughtSteps || [];
   const halfCotW = (LOGICAL_WIDTH - 126) / 2;
 
@@ -544,7 +683,11 @@ export function renderInspectorReportCanvas(
   const exCols = ex
     ? [
         { label: 'TINDAKAN UTAMA', val: ex.recommendedAction, color: '#F3F4F6' },
-        { label: 'ZONA AKUMULASI IDEAL', val: ex.idealEntryZone, color: '#34D399' },
+        {
+          label: 'ZONA AKUMULASI IDEAL',
+          val: normalizeExportAccumulationZone(ex.idealEntryZone, stock, joeliardiEval),
+          color: '#34D399'
+        },
         {
           label: 'BATAS RISIKO / INVALIDATION',
           val: ex.InvalidationOrRiskLimit,
@@ -587,7 +730,54 @@ export function renderInspectorReportCanvas(
     (exCols.length > 0 ? 18 + exCardH : 0) +
     24;
 
-  const topNews = recentNews.slice(0, 4);
+  // Pre-measure ALL recentNews items (with category badge, full title, summary snippet & sector footer)
+  const allNews = recentNews;
+  const newsColW = (LOGICAL_WIDTH - 76 - 14) / 2;
+  const preparedNewsCards = allNews.map((item) => {
+    const catStyle = getExportNewsCategoryStyle(item.emitenCategory);
+    sCtx.font = '700 11.5px Montserrat, sans-serif';
+    const titleLines = wrapCanvasText(sCtx, item.title || '', newsColW - 26).slice(0, 2);
+
+    sCtx.font = '500 10px Montserrat, sans-serif';
+    const rawSnippet = String(item.summary || '').trim();
+    const snippetLines = rawSnippet
+      ? wrapCanvasText(sCtx, rawSnippet, newsColW - 26).slice(0, 3)
+      : [];
+
+    const cardH =
+      36 + // Top category badge & source/date row
+      titleLines.length * 16 +
+      (snippetLines.length > 0 ? 6 + snippetLines.length * 14.5 : 0) +
+      32; // Bottom divider & sector/source row
+
+    return {
+      item,
+      catStyle,
+      titleLines,
+      snippetLines,
+      cardH: Math.max(108, cardH)
+    };
+  });
+
+  const newsRowHeights: number[] = [];
+  for (let r = 0; r < Math.ceil(preparedNewsCards.length / 2); r++) {
+    const leftCard = preparedNewsCards[r * 2];
+    const rightCard = preparedNewsCards[r * 2 + 1];
+    const rowH = Math.max(
+      leftCard ? leftCard.cardH : 108,
+      rightCard ? rightCard.cardH : 108
+    );
+    newsRowHeights.push(rowH);
+  }
+
+  const totalNewsSectionH =
+    preparedNewsCards.length > 0
+      ? 32 +
+        newsRowHeights.reduce((acc, h) => acc + h, 0) +
+        Math.max(0, newsRowHeights.length - 1) * 12 +
+        14
+      : 0;
+
   const hasHscBanner = Boolean(stock.isHscFlagged || stock.hscSource === 'KSEI_OFFICIAL');
 
   const LOGICAL_HEIGHT =
@@ -595,10 +785,10 @@ export function renderInspectorReportCanvas(
     (hasHscBanner ? 68 : 0) +
     102 +
     132 +
-    74 +
+    80 + // Row 3 Academic Strip (slightly taller for clean 2-line / fitted metrics)
     aiBoxH +
     18 +
-    (topNews.length > 0 ? Math.ceil(topNews.length / 2) * 74 + 42 : 0) +
+    totalNewsSectionH +
     72;
 
   const canvas = document.createElement('canvas');
@@ -631,7 +821,7 @@ export function renderInspectorReportCanvas(
   ctx.lineWidth = 2;
   ctx.strokeRect(16, 16, LOGICAL_WIDTH - 32, LOGICAL_HEIGHT - 32);
 
-  // 3. Top Header Banner
+  // 3. Top Header Banner (y = 17..109, vertical center = 63)
   ctx.fillStyle = '#11161F';
   ctx.fillRect(17, 17, LOGICAL_WIDTH - 34, 92);
   ctx.strokeStyle = '#222C3C';
@@ -641,37 +831,32 @@ export function renderInspectorReportCanvas(
   ctx.lineTo(LOGICAL_WIDTH - 17, 109);
   ctx.stroke();
 
-  // Nostradamus Mariner's Compass Rose Logo in Header (Replaces plain 'N' box)
-  drawNostradamusCompassLogo(ctx, 36, 33, 48);
+  // Nostradamus Mariner's Compass Rose Logo in Header — Vertically Centered (y = 36..90, midpoint = 63)
+  drawNostradamusCompassLogo(ctx, 36, 36, 54);
 
-  // Kicker
+  // Shortened Kicker ("NOSTRADAMUS QUANT TERMINAL")
+  const headerTextX = 104;
   ctx.fillStyle = '#F59E0B';
-  ctx.font = '700 10.5px Montserrat, sans-serif';
-  ctx.fillText(
-    'NOSTRADAMUS QUANT TERMINAL // DEEP FUNDAMENTAL INSPECTOR · GP/A · SBN CURVE KE · ANTI-JUNK OCF/NI · JUSTIFIED PBV · 1/β BARBELL',
-    98,
-    46
-  );
+  ctx.font = '700 11px Montserrat, sans-serif';
+  ctx.fillText('NOSTRADAMUS QUANT TERMINAL', headerTextX, 43);
 
-  // Main Emiten Title
+  // Main Emiten Title (Vertically aligned with logo center)
   ctx.fillStyle = '#F9FAFB';
   ctx.font = '800 22px Montserrat, sans-serif';
-  ctx.fillText(`${stock.ticker} · ${stock.name}`, 98, 74);
+  ctx.fillText(`${stock.ticker} · ${stock.name}`, headerTextX, 69);
 
+  // Subtitle with "Tren IHSG" and full Indonesian print date ("Kamis, 12 November 2026 pukul 09:15 WIB")
   ctx.fillStyle = '#9CA3AF';
-  ctx.font = '600 12px Montserrat, sans-serif';
-  ctx.fillText(
-    `Sektor IDX-IC: ${stock.sector}   |   Rezim IHSG: ${regimeStatus}   |   Dicetak: ${new Date().toLocaleString('id-ID')}`,
-    98,
-    94
-  );
+  const subtitleText = `Sektor IDX-IC: ${stock.sector}   |   Tren IHSG: ${regimeStatus}   |   Dicetak: ${formatIndonesianPrintTimestamp()}`;
+  drawTextAutoFit(ctx, subtitleText, headerTextX, 91, LOGICAL_WIDTH - headerTextX - 40, 600, 11.5, 9.0);
 
-  // Right Grade Badge in Header
+  // Right Grade Badge in Header (Vertically centered in header bar at y = 47..79, midpoint = 63)
   const gradeText = `${joeliardiEval.convictionGrade} · SKOR ${joeliardiEval.totalConvictionScore}/100`;
   ctx.font = '700 12px Montserrat, sans-serif';
   const gradeW = ctx.measureText(gradeText).width + 28;
-  const gradeX = LOGICAL_WIDTH - 40 - gradeW;
-  drawRoundedRect(ctx, gradeX, 36, gradeW, 32, 4);
+  const gradeX = LOGICAL_WIDTH - 38 - gradeW;
+  const gradeY = 47;
+  drawRoundedRect(ctx, gradeX, gradeY, gradeW, 32, 4);
   ctx.fillStyle = stock.isHscFlagged
     ? 'rgba(225, 29, 72, 0.2)'
     : joeliardiEval.totalConvictionScore >= 72
@@ -689,7 +874,7 @@ export function renderInspectorReportCanvas(
     : joeliardiEval.totalConvictionScore >= 72
     ? '#34D399'
     : '#FBBF24';
-  ctx.fillText(gradeText, gradeX + 14, 56);
+  ctx.fillText(gradeText, gradeX + 14, gradeY + 20);
 
   let curY = 128;
 
@@ -707,8 +892,6 @@ export function renderInspectorReportCanvas(
     ctx.stroke();
 
     ctx.fillStyle = isDivPenalty ? '#FBBF24' : '#FB7185';
-    ctx.font = '700 11.5px Montserrat, sans-serif';
-
     const kseiPctText = stock.kseiHscConcentrationPct
       ? `${stock.kseiHscConcentrationPct.toFixed(3).replace('.', ',')}%`
       : '';
@@ -731,15 +914,11 @@ export function renderInspectorReportCanvas(
         ? 'RADAR EARLY WARNING QUANT: SUSPECT HSC (PRA-RILIS BEI) — DIBLOKIR DARI TOP DECILE BUY'
         : 'PERINGATAN SAHAM HSC (MANUAL OVERRIDE) — DIBLOKIR DARI TOP DECILE BUY';
 
-    ctx.fillText(bannerHeader, 54, curY + 21);
+    drawTextAutoFit(ctx, bannerHeader, 54, curY + 21, LOGICAL_WIDTH - 108, 700, 11.5, 8.5);
 
     ctx.fillStyle = isDivPenalty ? '#FDE68A' : '#FECDD3';
-    ctx.font = '500 10.5px Montserrat, sans-serif';
-    const subReasonText = `${stock.hscReason || 'Konsentrasi kepemilikan tinggi.'}${kseiFnText}`.slice(
-      0,
-      152
-    );
-    ctx.fillText(subReasonText, 54, curY + 41);
+    const subReasonText = `${stock.hscReason || 'Konsentrasi kepemilikan tinggi.'}${kseiFnText}`;
+    drawTextAutoFit(ctx, subReasonText, 54, curY + 41, LOGICAL_WIDTH - 108, 500, 10.5, 8.0);
     curY += 68;
   }
 
@@ -768,9 +947,10 @@ export function renderInspectorReportCanvas(
     stock.betaWeightedPropensity ?? 1 / Math.max(0.45, stock.beta1Y);
   const betaCap = joeliardiEval.betaWeightedSizingCapPct ?? 14.0;
 
-  // 5. Row 1: 4 Valuation & Intrinsic Cards
+  // 5. Row 1: 4 Valuation & Intrinsic Cards (Auto-fitted so no text ever clips or overflows)
   const cardGap = 14;
   const cardW = (LOGICAL_WIDTH - 76 - cardGap * 3) / 4;
+  const innerCardMaxW = cardW - 24;
   const valCards = [
     {
       label: 'HARGA PASAR LIVE (BEI)',
@@ -798,7 +978,7 @@ export function renderInspectorReportCanvas(
           : joeliardiEval.marginOfSafetyPct >= 0
           ? '#FBBF24'
           : '#FB7185',
-      sub: joeliardiEval.valuationLabel.slice(0, 38),
+      sub: joeliardiEval.valuationLabel,
       subColor: '#D1D5DB'
     },
     {
@@ -820,21 +1000,27 @@ export function renderInspectorReportCanvas(
     ctx.stroke();
 
     ctx.fillStyle = c.labelColor;
-    ctx.font = '700 10px Montserrat, sans-serif';
-    ctx.fillText(c.label, x + 14, curY + 22);
+    drawTextAutoFit(ctx, c.label, x + 12, curY + 22, innerCardMaxW, 700, 10, 8.0);
 
     ctx.fillStyle = c.mainColor;
-    ctx.font = idx === 3 ? '700 13.5px Montserrat, sans-serif' : '800 19px Montserrat, sans-serif';
-    ctx.fillText(c.main, x + 14, curY + 49);
+    drawTextAutoFit(
+      ctx,
+      c.main,
+      x + 12,
+      curY + 49,
+      innerCardMaxW,
+      idx === 3 ? 700 : 800,
+      idx === 3 ? 13.5 : 19,
+      11.0
+    );
 
     ctx.fillStyle = c.subColor;
-    ctx.font = '600 11px Montserrat, sans-serif';
-    ctx.fillText(c.sub, x + 14, curY + 71);
+    drawTextAutoFit(ctx, c.sub, x + 12, curY + 71, innerCardMaxW, 600, 10.5, 7.8);
   });
 
   curY += 102;
 
-  // 6. Row 2: 4 Academic Pillar Scores (Novy-Marx GP/A, Neraca, Damodaran Justified PBV & SBN Curve, 1/Beta Barbell)
+  // 6. Row 2: 4 Academic Pillar Scores (Auto-fitted lines inside each card)
   const pillars = [
     {
       title: '1. Gross Profit & Anti-Junk',
@@ -899,35 +1085,34 @@ export function renderInspectorReportCanvas(
     ctx.stroke();
 
     ctx.fillStyle = '#F3F4F6';
-    ctx.font = '700 11.5px Montserrat, sans-serif';
-    ctx.fillText(p.title, x + 14, curY + 23);
+    drawTextAutoFit(ctx, p.title, x + 12, curY + 23, cardW - 72, 700, 11.5, 8.5);
 
     ctx.fillStyle = p.color;
+    ctx.font = '700 11.5px Montserrat, sans-serif';
     ctx.textAlign = 'right';
-    ctx.fillText(`${p.score}/100`, x + cardW - 14, curY + 23);
+    ctx.fillText(`${p.score}/100`, x + cardW - 12, curY + 23);
     ctx.textAlign = 'left';
 
     // Progress Bar Track
-    drawRoundedRect(ctx, x + 14, curY + 32, cardW - 28, 6, 2);
+    drawRoundedRect(ctx, x + 12, curY + 32, cardW - 24, 6, 2);
     ctx.fillStyle = '#222C3C';
     ctx.fill();
 
     // Progress Bar Fill
-    const fillW = Math.max(4, ((cardW - 28) * Math.min(100, Math.max(0, p.score))) / 100);
-    drawRoundedRect(ctx, x + 14, curY + 32, fillW, 6, 2);
+    const fillW = Math.max(4, ((cardW - 24) * Math.min(100, Math.max(0, p.score))) / 100);
+    drawRoundedRect(ctx, x + 12, curY + 32, fillW, 6, 2);
     ctx.fillStyle = p.color;
     ctx.fill();
 
     ctx.fillStyle = '#9CA3AF';
-    ctx.font = '500 10.5px Montserrat, sans-serif';
     p.lines.forEach((ln, lIdx) => {
-      ctx.fillText(ln, x + 14, curY + 57 + lIdx * 18);
+      drawTextAutoFit(ctx, ln, x + 12, curY + 57 + lIdx * 18, innerCardMaxW, 500, 10.5, 8.0);
     });
   });
 
   curY += 132;
 
-  // 7. Row 3: 4-Column Academic Quantitative Strip (GP/A, Spot SBN Curve & Ke, Anti-Junk QMJ Accrual, Justified PBV & 1/Beta Sizing)
+  // 7. Row 3: 4-Column Academic Quantitative Strip (Auto-fitted / wrapped inside card boundaries)
   const academicStrip = [
     {
       label: 'GP/A (NOVY-MARX) & DUPONT',
@@ -936,7 +1121,7 @@ export function renderInspectorReportCanvas(
     },
     {
       label: 'KURVA SPOT SBN (1Y/5Y/10Y) & KE',
-      val: `Ke ${dynKe.toFixed(2)}% (Rf ${sbnBlended.toFixed(2)}%: 1Y ${sbn1Y}%·5Y ${sbn5Y}%·10Y ${sbn10Y}%)`,
+      val: `Ke ${dynKe.toFixed(2)}% (Rf ${sbnBlended.toFixed(2)}%: 1Y ${sbn1Y}% · 5Y ${sbn5Y}% · 10Y ${sbn10Y}%)`,
       color: '#F3F4F6'
     },
     {
@@ -953,24 +1138,46 @@ export function renderInspectorReportCanvas(
 
   academicStrip.forEach((d, idx) => {
     const x = 38 + idx * (cardW + cardGap);
-    drawRoundedRect(ctx, x, curY, cardW, 56, 4);
+    drawRoundedRect(ctx, x, curY, cardW, 62, 4);
     ctx.fillStyle = '#141B26';
     ctx.fill();
     ctx.strokeStyle = '#243044';
     ctx.stroke();
 
     ctx.fillStyle = '#9CA3AF';
-    ctx.font = '700 9.5px Montserrat, sans-serif';
-    ctx.fillText(d.label, x + 12, curY + 21);
+    drawTextAutoFit(ctx, d.label, x + 12, curY + 20, innerCardMaxW, 700, 9.5, 8.0);
 
     ctx.fillStyle = d.color;
-    ctx.font = '700 11.5px Montserrat, sans-serif';
-    ctx.fillText(d.val, x + 12, curY + 42);
+    ctx.font = '700 10.5px Montserrat, sans-serif';
+    if (ctx.measureText(d.val).width <= innerCardMaxW) {
+      ctx.fillText(d.val, x + 12, curY + 43);
+    } else {
+      // Check if slight auto-fit keeps it on 1 crisp line (>= 8.8px), otherwise wrap onto 2 lines
+      ctx.font = '700 9.0px Montserrat, sans-serif';
+      if (ctx.measureText(d.val).width <= innerCardMaxW) {
+        drawTextAutoFit(ctx, d.val, x + 12, curY + 43, innerCardMaxW, 700, 10.5, 8.8);
+      } else {
+        ctx.font = '700 9.5px Montserrat, sans-serif';
+        const wrappedStrip = wrapCanvasText(ctx, d.val, innerCardMaxW).slice(0, 2);
+        wrappedStrip.forEach((sLine, sIdx) => {
+          drawTextAutoFit(
+            ctx,
+            sLine,
+            x + 12,
+            curY + 37 + sIdx * 13.5,
+            innerCardMaxW,
+            700,
+            9.5,
+            8.0
+          );
+        });
+      }
+    }
   });
 
-  curY += 74;
+  curY += 80;
 
-  // 8. AI Investment Committee Synthesis Box (Matches Attachment 1 Web UI Layout)
+  // 8. Nostradamus Synthesis Box (Matches Web UI Layout)
   drawRoundedRect(ctx, 38, curY, LOGICAL_WIDTH - 76, aiBoxH, 5);
   ctx.fillStyle = '#11161F';
   ctx.fill();
@@ -980,7 +1187,7 @@ export function renderInspectorReportCanvas(
 
   let textY = curY + 22;
 
-  // Top Bordered Status Badge (matching Attachment 1 green/amber/red pill box)
+  // Top Bordered Status Badge
   const isDangerBadge =
     verdictBadge.includes('AVOID') ||
     verdictBadge.includes('HSC') ||
@@ -1031,7 +1238,7 @@ export function renderInspectorReportCanvas(
 
   textY += 18;
 
-  // Boxed Bold Header with Amber Square Dot: [ ■ HASIL ANALISIS KOMITE INVESTASI ]
+  // Boxed Bold Header with Amber Square Dot: [ ■ HASIL ANALISIS NOSTRADAMUS ]
   ctx.font = '800 12px Montserrat, sans-serif';
   const hdrBoxW = ctx.measureText(summaryBoxHeader).width + 44;
   drawRoundedRect(ctx, 56, textY, hdrBoxW, 30, 3);
@@ -1064,7 +1271,7 @@ export function renderInspectorReportCanvas(
     '#F59E0B'
   );
 
-  // 4 Chain-of-Thought Cards Section (Matching Attachment 1)
+  // 4 Chain-of-Thought Cards Section
   if (parsedCotCards.length > 0) {
     textY += 6;
     // Subtle Horizontal Divider Line
@@ -1106,8 +1313,7 @@ export function renderInspectorReportCanvas(
 
         // Bold Step Header
         ctx.fillStyle = '#F9FAFB';
-        ctx.font = '700 12px Montserrat, sans-serif';
-        ctx.fillText(card.header, bx + 14, by + 22);
+        drawTextAutoFit(ctx, card.header, bx + 14, by + 22, halfCotW - 28, 700, 12, 9.5);
 
         // Subtle Header Bottom Border inside Card
         ctx.strokeStyle = '#1F2A3C';
@@ -1158,8 +1364,7 @@ export function renderInspectorReportCanvas(
       ctx.stroke();
 
       ctx.fillStyle = '#9CA3AF';
-      ctx.font = '700 9.5px Montserrat, sans-serif';
-      ctx.fillText(ec.label, exX + 11, textY + 19);
+      drawTextAutoFit(ctx, ec.label, exX + 11, textY + 19, exW - 22, 700, 9.5, 8.0);
 
       ctx.fillStyle = ec.color;
       ctx.font = '600 10.5px Montserrat, sans-serif';
@@ -1171,46 +1376,108 @@ export function renderInspectorReportCanvas(
 
   curY += aiBoxH + 18;
 
-  // 9. Recent News & Corporate Action Radar (<= 3 Months)
-  if (topNews.length > 0) {
+  // 9. Full Recent News, Corporate Action & Radar Section (All items with Category Badge & Snippet)
+  if (preparedNewsCards.length > 0) {
     ctx.fillStyle = '#38BDF8';
     ctx.font = '700 11.5px Montserrat, sans-serif';
     ctx.fillText(
-      `BERITA TERKINI, CORPORATE ACTION & RADAR ISU SPESIFIK EMITEN (${stock.ticker} · MAKSIMAL 3 BULAN TERAKHIR)`,
+      `BERITA TERKINI, CORPORATE ACTION & RADAR ISU SPESIFIK EMITEN (${stock.ticker} · ${preparedNewsCards.length} ITEM TERKAIT ≤ 3 BULAN)`,
       38,
-      curY + 14
+      curY + 16
     );
-    curY += 26;
+    curY += 32;
 
-    const newsColW = (LOGICAL_WIDTH - 76 - 14) / 2;
-    topNews.forEach((n, idx) => {
-      const col = idx % 2;
-      const row = Math.floor(idx / 2);
-      const nx = 38 + col * (newsColW + 14);
-      const ny = curY + row * 74;
+    let newsRowY = curY;
+    for (let r = 0; r < newsRowHeights.length; r++) {
+      const rowH = newsRowHeights[r];
 
-      drawRoundedRect(ctx, nx, ny, newsColW, 64, 4);
-      ctx.fillStyle = '#141B26';
-      ctx.fill();
-      ctx.strokeStyle = '#243044';
-      ctx.stroke();
+      for (let col = 0; col < 2; col++) {
+        const cardIdx = r * 2 + col;
+        if (cardIdx >= preparedNewsCards.length) continue;
+        const nc = preparedNewsCards[cardIdx];
+        const nx = 38 + col * (newsColW + 14);
+        const ny = newsRowY;
 
-      ctx.fillStyle = '#F59E0B';
-      ctx.font = '700 9.5px Montserrat, sans-serif';
-      ctx.fillText(`${n.source} · ${n.publishedAt}`, nx + 12, ny + 18);
+        drawRoundedRect(ctx, nx, ny, newsColW, rowH, 4);
+        ctx.fillStyle = '#141B26';
+        ctx.fill();
+        ctx.strokeStyle = '#243044';
+        ctx.lineWidth = 1;
+        ctx.stroke();
 
-      ctx.fillStyle = '#F3F4F6';
-      ctx.font = '600 11px Montserrat, sans-serif';
-      const nLines = wrapCanvasText(ctx, n.title, newsColW - 24).slice(0, 2);
-      nLines.forEach((nl, nIdx) => {
-        ctx.fillText(nl, nx + 12, ny + 36 + nIdx * 16);
-      });
-    });
+        // Category Badge Pill on top-left
+        ctx.font = '700 8.5px Montserrat, sans-serif';
+        const badgeW = ctx.measureText(nc.catStyle.label).width + 14;
+        drawRoundedRect(ctx, nx + 12, ny + 10, badgeW, 18, 3);
+        ctx.fillStyle = nc.catStyle.bgColor;
+        ctx.fill();
+        ctx.strokeStyle = nc.catStyle.borderColor;
+        ctx.stroke();
 
-    curY += Math.ceil(topNews.length / 2) * 74 + 12;
+        ctx.fillStyle = nc.catStyle.textColor;
+        ctx.fillText(nc.catStyle.label, nx + 19, ny + 22);
+
+        // Source & Published Date on top-right
+        ctx.fillStyle = '#9CA3AF';
+        ctx.textAlign = 'right';
+        const metaStr = `${nc.item.source} · ${nc.item.publishedAt}`;
+        drawTextAutoFit(
+          ctx,
+          metaStr,
+          nx + newsColW - 12,
+          ny + 22,
+          newsColW - badgeW - 36,
+          600,
+          9.5,
+          7.8
+        );
+        ctx.textAlign = 'left';
+
+        // News Title (up to 2 lines)
+        let innerY = ny + 44;
+        ctx.fillStyle = '#F9FAFB';
+        ctx.font = '700 11.5px Montserrat, sans-serif';
+        nc.titleLines.forEach((tLine) => {
+          drawTextAutoFit(ctx, tLine, nx + 12, innerY, newsColW - 24, 700, 11.5, 9.5);
+          innerY += 16;
+        });
+
+        // News Content Snippet (up to 3 lines)
+        if (nc.snippetLines.length > 0) {
+          innerY += 4;
+          ctx.fillStyle = '#9CA3AF';
+          ctx.font = '500 10px Montserrat, sans-serif';
+          nc.snippetLines.forEach((sLine) => {
+            drawTextAutoFit(ctx, sLine, nx + 12, innerY, newsColW - 24, 500, 10, 8.5);
+            innerY += 14.5;
+          });
+        }
+
+        // Bottom Card Divider + Sector & Source Footer (matching Web UI card style)
+        const cardFooterY = ny + rowH - 26;
+        ctx.strokeStyle = '#1F2A3C';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(nx + 12, cardFooterY);
+        ctx.lineTo(nx + newsColW - 12, cardFooterY);
+        ctx.stroke();
+
+        ctx.fillStyle = '#F59E0B';
+        ctx.font = '700 9.5px Montserrat, sans-serif';
+        ctx.fillText(`Sektor: ${stock.sector}`, nx + 12, cardFooterY + 16);
+
+        ctx.textAlign = 'right';
+        ctx.fillText('Buka Sumber ↗', nx + newsColW - 12, cardFooterY + 16);
+        ctx.textAlign = 'left';
+      }
+
+      newsRowY += rowH + 12;
+    }
+
+    curY = newsRowY + 2;
   }
 
-  // 10. Institutional Footer Bar (Clean Left Footer matching Attachment 3)
+  // 10. Institutional Footer Bar
   const footerY = LOGICAL_HEIGHT - 56;
   ctx.fillStyle = '#11161F';
   ctx.fillRect(17, footerY, LOGICAL_WIDTH - 34, 39);

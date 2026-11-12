@@ -962,7 +962,7 @@ DATA FUNDAMENTAL & KUANTITATIF LIVE EMITEN:
           : 'BEBAS INDIKASI HSC (Kepemilikan Top-10 KSEI < 92,5% · Free Float Sehat)'
       }
 - Skor 4 Pilar Fundamental: (1) Gross Profit & Anti-Junk ${joeliardiEval?.businessQualityScore ?? 0}/100, (2) Kesehatan Neraca ${joeliardiEval?.balanceSheetHealthScore ?? 0}/100, (3) Justified PBV & Kurva SBN ${joeliardiEval?.valuationSafetyScore ?? 0}/100, (4) 1/β Barbell Position Sizing ${joeliardiEval?.oosQuantRobustnessScore ?? 0}/100
-- Rezim Pasar IHSG Saat Ini: ${regimeStatus || 'WASPADA'}
+- Tren IHSG Saat Ini: ${regimeStatus || 'WASPADA'}
 
 RADAR BERITA TERKINI & AKSI KORPORASI (${stock.ticker}):
 ${newsContext}
@@ -970,12 +970,12 @@ ${newsContext}
 PERTANYAAN / FOKUS UTAMA INVESTOR:
 "${activePromptFocus}"
 
-INSTRUKSI GAYA BAHASA & PENALARAN KOMITE INVESTASI WAJIB (HUMANIS, LUGAS & KONSISTEN MATEMATIS):
+INSTRUKSI GAYA BAHASA & PENALARAN NOSTRADAMUS WAJIB (HUMANIS, LUGAS & KONSISTEN MATEMATIS):
 1. Gunakan gaya bahasa analis investasi senior Indonesia yang lugas, natural, humanis, dan enak dibaca. DILARANG KERAS menggunakan kata-kata terjemahan kaku seperti "kuotasi", "diskon optik", "secara optik", "secara kausal", "trajektori", "pengungkit utang", atau "bermoat".
 2. Konsistensi Matriks Baru Wajib: Gunakan selalu metrik baru GP/A (Novy-Marx) ${gpToAssetsVal.toFixed(1)}%, OCF/NI ${ocfNiVal.toFixed(2)}x, Kurva Spot SBN (1Y ${sbn1YVal}% · 5Y ${sbn5YVal}% · 10Y ${sbn10YVal}% -> Spot Rf ${sbnBlendedVal.toFixed(2)}%), Dynamic Cost of Equity Ke ${dynKeVal.toFixed(2)}%, Damodaran Justified PBV ${justPbvVal}x, Wajar PER ${joeliardiEval?.joeliardiFairPer ?? '-'}x, serta Batas Alokasi Maks (1/β Cap) ≤${betaCapVal.toFixed(1)}% (Propensitas 1/β ${betaPropensityVal.toFixed(2)}x).
 3. Aturan Override Defensif Wajib pada Langkah 03: Jika Beta < 0.5 DAN Skor Value > 9.0 (${isDefensiveOverride ? 'KONDISI TERPENUHI PADA SAHAM INI' : 'tidak terpenuhi'}), maka sistem WAJIB mengabaikan tekanan harga 30D yang negatif dan menulis kesimpulan langkah ke-3 sebagai "Strong Buy: Anomali Aset Defensif Terdiskon".
 4. Batas Alokasi 1/β Cap & Likuiditas 5% ADTV 20D: Pada panduan porsi keranjang, gunakan plafon 1/β Cap ≤${betaCapVal.toFixed(1)}% portofolio dan tegaskan bahwa nilai nominal alokasi TIDAK BOLEH melebihi 5% dari ADTV 20D (Maks Rp ${maxSafeMillions} Juta/hari dari ADTV Rp ${adtvMillions} Juta).
-5. Jawab fokus analisis secara langsung pada directAnswerSummary dengan awalan "Hasil Analisis Komite Investasi: " TANPA mengulang kalimat pertanyaan pengguna, dan jangan pernah menulis simbol bintang ganda (**).
+5. Jawab fokus analisis secara langsung pada directAnswerSummary dengan awalan "Hasil Analisis Nostradamus: " TANPA mengulang kalimat pertanyaan pengguna, dan jangan pernah menulis simbol bintang ganda (**).
 `.trim();
 
       const response = await ai.models.generateContent({

@@ -66,20 +66,26 @@ function parseDirectSummaryHeaderAndBody(rawSummary: string): {
     /^((?:Hasil|Kesimpulan|Keputusan|Evaluasi|Audit)\s+[^:]{3,75}):\s*([\s\S]*)$/i
   );
   if (match) {
+    const rawHdr = match[1].trim();
     return {
-      header: match[1].trim(),
+      header: /Hasil Analisis Komite Investasi/i.test(rawHdr)
+        ? 'Hasil Analisis Nostradamus'
+        : rawHdr,
       body: match[2].trim()
     };
   }
   const genericColon = clean.match(/^([^:]{5,55}):\s*([\s\S]+)$/);
   if (genericColon && !genericColon[1].includes('.')) {
+    const rawHdr = genericColon[1].trim();
     return {
-      header: genericColon[1].trim(),
+      header: /Hasil Analisis Komite Investasi/i.test(rawHdr)
+        ? 'Hasil Analisis Nostradamus'
+        : rawHdr,
       body: genericColon[2].trim()
     };
   }
   return {
-    header: 'Hasil Analisis Komite Investasi',
+    header: 'Hasil Analisis Nostradamus',
     body: clean
   };
 }
@@ -132,6 +138,8 @@ function renderHighlightedFinancialNarrative(
 
   const verdictTerms = [
     'STRONG BUY: ANOMALI ASET DEFENSIF TERDISKON',
+    'TERDISKON / MURAH',
+    'MAHAL / PREMIUM',
     'UNDERCUT / DEEP DISCOUNT',
     'LAYAK DIAKUMULASI BERTAHAP',
     'LAYAK KOLEKSI SELEKTIF SAAT KOREKSI',
@@ -700,7 +708,7 @@ export function EmitenFundamentalInspectorModal({
 
   const parsedDirectSummary = structuredReport
     ? parseDirectSummaryHeaderAndBody(structuredReport.directAnswerSummary)
-    : { header: 'Hasil Analisis Komite Investasi', body: '' };
+    : { header: 'Hasil Analisis Nostradamus', body: '' };
 
   const displayedDirectBody = parsedDirectSummary.body.slice(0, typedCharCount);
 
@@ -717,7 +725,7 @@ export function EmitenFundamentalInspectorModal({
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-[#D97706] bb-amber">
-                    ON-DEMAND FUNDAMENTAL &amp; AI INSPECTOR // FUNDAMENTAL KUALITAS MOAT
+                    NOSTRADAMUS QUANT TERMINAL
                   </span>
                   <span
                     className={`text-[10px] font-bold px-2 py-0.5 rounded-xs border ${gradeBadgeCls}`}
@@ -740,7 +748,7 @@ export function EmitenFundamentalInspectorModal({
                   <span className="text-neutral-400 font-normal">·</span>
                   <span>{activeStock.name}</span>
                   <span className="text-xs font-normal text-neutral-500">
-                    ({activeStock.sector})
+                    ({activeStock.sector} · Tren IHSG: {regimeStatus})
                   </span>
                 </h3>
               </div>
@@ -1627,7 +1635,7 @@ export function EmitenFundamentalInspectorModal({
                             </span>
                             {structuredReport.executionStrategy.isUndercutDeepDiscount && (
                               <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold uppercase bg-[#059669]/15 text-[#0D5C46] border border-[#059669]/40 rounded-xs">
-                                UNDERCUT / DEEP DISCOUNT
+                                TERDISKON / MURAH
                               </span>
                             )}
                           </div>

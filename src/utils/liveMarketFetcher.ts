@@ -3250,7 +3250,7 @@ function buildDeepAnalyticalConvictionReport(params: {
   // Contextual Direct Analysis (Synchronized with 5 Academic Pillars)
   let directAnswerSummary = '';
   if (stock.isHscFlagged) {
-    directAnswerSummary = `Hasil Analisis Komite Investasi: Saham ${stock.ticker} TIDAK LAYAK DIAKUMULASI karena masuk dalam pantauan High Speculative Concentration (${stock.hscReason || 'pergerakan harga tidak didukung kinerja fundamental'}). Meskipun harga bergerak ${stock.change1D >= 0 ? '+' : ''}${stock.change1D}% (1D) dan ${stock.return30D >= 0 ? '+' : ''}${stock.return30D}% (30D), risiko spekulasinya terlalu tinggi bagi portofolio yang mengutamakan keamanan modal.`;
+    directAnswerSummary = `Hasil Analisis Nostradamus: Saham ${stock.ticker} TIDAK LAYAK DIAKUMULASI karena masuk dalam pantauan High Speculative Concentration (${stock.hscReason || 'pergerakan harga tidak didukung kinerja fundamental'}). Meskipun harga bergerak ${stock.change1D >= 0 ? '+' : ''}${stock.change1D}% (1D) dan ${stock.return30D >= 0 ? '+' : ''}${stock.return30D}% (30D), risiko spekulasinya terlalu tinggi bagi portofolio yang mengutamakan keamanan modal.`;
   } else if (isAskingTrapOrHsc) {
     directAnswerSummary = isValueTrapCandidate
       ? `Hasil Audit Value Trap & Anti-Junk QMJ: Meskipun ${stock.ticker} bersih dari indikasi saham gorengan (HSC) dan tampak murah di atas kertas (Implied PER ${joeliardiEval.impliedPer}x, Implied PBV ${joeliardiEval.impliedPbv}x vs Justified PBV ${justPbv}x, Margin of Safety +${joeliardiEval.marginOfSafetyPct}%), komite mencatat risiko Value Trap karena ${isStructuralUnderperformer ? `ROE (${stock.roe}%) berada di bawah Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}% (Spot Rf ${sbnBlended.toFixed(2)}%)` : `pergerakan harga 30 hari masih melemah (${stock.return30D}%) dengan rasio kas operasi OCF/NI ${ocfNi.toFixed(2)}x`}. Sebaiknya tunggu tekanan jual mereda sebelum mencicil beli.`
@@ -3264,7 +3264,7 @@ function buildDeepAnalyticalConvictionReport(params: {
   } else if (isAskingDividendOrCash) {
     directAnswerSummary = `Hasil Bedah Kualitas Dividen & Arus Kas Anti-Junk: Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, Forward Dividend Yield (Est) ${stock.ticker} diestimasi sebesar ${forwardDivYield.toFixed(2)}% (Annualized EPS Q3 Rp ${fwdDivCalc.annualizedEpsQ3Idr.toLocaleString('id-ID')} × DPR 3Y ${historicalDpr3Y.toFixed(0)}%) dengan Total Shareholder Yield murni ${totalShareholderYieldPct}%. Rasio arus kas operasi terhadap laba bersih (OCF/NI) tercatat ${ocfNi.toFixed(2)}x dengan GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}%. ${isDividendTrapRisk ? `Waspadai potensi Dividend Trap karena tren harga 30D masih tertekan (${stock.return30D}%)` : `Dividen ini tergolong sehat karena dibiayai dari kas operasi riil (OCF/NI ${ocfNi.toFixed(2)}x) dan posisi utang yang terjaga (DER ${stock.debtToEquity}x).`}`;
   } else {
-    directAnswerSummary = `Hasil Analisis Komite Investasi: Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, komite menilai ${stock.ticker} ${isDefensiveDiscountAnomaly || (joeliardiEval.marginOfSafetyPct >= 12 && !isValueTrapCandidate) ? 'LAYAK DIAKUMULASI BERTAHAP' : joeliardiEval.marginOfSafetyPct >= 0 ? 'LAYAK KOLEKSI SELEKTIF SAAT KOREKSI' : 'LEBIH TEPAT DITUNGGU PADA AREA PULLBACK'}${isDefensiveDiscountAnomaly ? ' (Strong Buy: Anomali Aset Defensif Terdiskon)' : ''}. Pasar menghargai ${stock.ticker} pada Implied PBV ${joeliardiEval.impliedPbv}x (vs Damodaran Justified PBV ${justPbv}x) dan Implied PER ${joeliardiEval.impliedPer}x (Earnings Yield ${earningsYieldPct}% vs Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}% dari Kurva Spot SBN 1Y ${sbn1Y}%·5Y ${sbn5Y}%·10Y ${sbn10Y}%), padahal perusahaan mencetak GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}%, kualitas kas OCF/NI ${ocfNi.toFixed(2)}x, serta ROE ${stock.roe}% (DER ${stock.debtToEquity}x). Nilai Intrinsik Wajar ditetapkan pada Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (Margin of Safety ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%) dengan batas alokasi 1/β Barbell ≤${betaCap.toFixed(1)}% portofolio.`;
+    directAnswerSummary = `Hasil Analisis Nostradamus: Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, tim riset menilai ${stock.ticker} ${isDefensiveDiscountAnomaly || (joeliardiEval.marginOfSafetyPct >= 12 && !isValueTrapCandidate) ? 'LAYAK DIAKUMULASI BERTAHAP' : joeliardiEval.marginOfSafetyPct >= 0 ? 'LAYAK KOLEKSI SELEKTIF SAAT KOREKSI' : 'LEBIH TEPAT DITUNGGU PADA AREA PULLBACK'}${isDefensiveDiscountAnomaly ? ' (Strong Buy: Anomali Aset Defensif Terdiskon)' : ''}. Pasar menghargai ${stock.ticker} pada Implied PBV ${joeliardiEval.impliedPbv}x (vs Damodaran Justified PBV ${justPbv}x) dan Implied PER ${joeliardiEval.impliedPer}x (Earnings Yield ${earningsYieldPct}% vs Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}% dari Kurva Spot SBN 1Y ${sbn1Y}%·5Y ${sbn5Y}%·10Y ${sbn10Y}%), padahal perusahaan mencetak GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}%, kualitas kas OCF/NI ${ocfNi.toFixed(2)}x, serta ROE ${stock.roe}% (DER ${stock.debtToEquity}x). Nilai Intrinsik Wajar ditetapkan pada Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (Margin of Safety ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%) dengan batas alokasi 1/β Barbell ≤${betaCap.toFixed(1)}% portofolio.`;
   }
 
   // BEI Tick-Aware Dynamic Accumulation Zone & Undercut / Deep Discount Detection
@@ -3276,9 +3276,20 @@ function buildDeepAnalyticalConvictionReport(params: {
     ? roundToIdxTick(stock.lastPrice * 0.96)
     : roundToIdxTick(Math.min(stock.lastPrice * 0.98, intrinsicAccumulationCeiling * 0.96));
   const idealBuyHigh = isUndercutDeepDiscount
-    ? spotTick
+    ? intrinsicAccumulationCeiling
     : roundToIdxTick(Math.min(stock.lastPrice, intrinsicAccumulationCeiling));
   const riskStopPrice = roundToIdxTick(stock.lastPrice * (stock.beta1Y > 1.1 ? 0.91 : 0.93));
+
+  // Clear Range, Fair Value & Valuation Reasonableness Status for Accumulation Zone
+  const rangeLowIdr = Math.min(idealBuyLow, idealBuyHigh);
+  const rangeHighIdr = Math.max(idealBuyLow, idealBuyHigh);
+  const formattedAccumulationZone = stock.isHscFlagged
+    ? 'Tidak direkomendasikan (Blokir HSC — risiko spekulasi tinggi)'
+    : isUndercutDeepDiscount
+    ? `Rentang Beli Ideal: Rp ${rangeLowIdr.toLocaleString('id-ID')} – Rp ${rangeHighIdr.toLocaleString('id-ID')} | Nilai Wajar: Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${stock.lastPrice.toLocaleString('id-ID')}): TERDISKON / MURAH (Harga saat ini ${joeliardiEval.marginOfSafetyPct.toFixed(1)}% di bawah Nilai Wajar, sangat wajar untuk akumulasi bertahap)`
+    : joeliardiEval.marginOfSafetyPct >= 0
+    ? `Rentang Beli Ideal: Rp ${rangeLowIdr.toLocaleString('id-ID')} – Rp ${rangeHighIdr.toLocaleString('id-ID')} | Nilai Wajar: Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${stock.lastPrice.toLocaleString('id-ID')}): WAJAR (Harga saat ini masih di bawah Nilai Wajar dengan diskon +${joeliardiEval.marginOfSafetyPct.toFixed(1)}%, idealnya cicil beli di rentang akumulasi)`
+    : `Rentang Beli Ideal: Rp ${roundToIdxTick(joeliardiEval.intrinsicValueIdr * 0.8).toLocaleString('id-ID')} – Rp ${intrinsicAccumulationCeiling.toLocaleString('id-ID')} | Nilai Wajar: Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${stock.lastPrice.toLocaleString('id-ID')}): MAHAL / PREMIUM (Harga saat ini ${Math.abs(joeliardiEval.marginOfSafetyPct).toFixed(1)}% di atas Nilai Wajar, tunggu koreksi ke rentang beli ideal)`;
 
   // 20D ADTV & 5% Daily Market Liquidity Cap + 1/Beta Barbell Position Sizing Cap
   const adtv20dIdr =
@@ -3402,7 +3413,7 @@ function buildDeepAnalyticalConvictionReport(params: {
       },
       {
         id: 'regime-momentum-fit',
-        badge: `04. 1/β BARBELL SIZING & REZIM // ${regimeStatus}`,
+        badge: `04. 1/β BARBELL SIZING & TREN IHSG // ${regimeStatus}`,
         title: 'Penjatahan Porsi 1/β Barbell (Qian & Taleb), Volatilitas & Batas Likuiditas ADTV',
         keyMetricHighlight: `Propensitas 1/β ${betaPropensity.toFixed(2)}x · Cap 1/β ≤${targetMaxPct}% · Beta ${stock.beta1Y.toFixed(2)}x · Volatilitas ${stock.volatilityAnn.toFixed(1)}%`,
         reasoningParagraph: `Sesuai prinsip Risk Parity (Qian 2005) dan Barbell Antifragile (Taleb 2012), saham dengan Beta 1Y ${stock.beta1Y.toFixed(2)}x dan volatilitas tahunan ${stock.volatilityAnn.toFixed(1)}% memiliki Propensitas Bobot 1/β sebesar ${betaPropensity.toFixed(2)}x dengan Batas Alokasi Maksimum (1/β Cap) ≤${targetMaxPct}% dari modal portofolio. ${isDefensiveDiscountAnomaly ? `Karena Beta sangat rendah (${stock.beta1Y.toFixed(2)}x < 0,50) dan Skor Value mencapai ${stock.dmuValueScore.toFixed(1)}/10 (> 9,0), sistem mengaktifkan sinyal Strong Buy: Anomali Aset Defensif Terdiskon.` : `Perubahan harga 30 hari terakhir sebesar ${stock.return30D >= 0 ? '+' : ''}${stock.return30D.toFixed(2)}% (Skor Momentum ${stock.dmuMomScore.toFixed(1)}/10) mencerminkan ${stock.return30D >= 3 ? 'minat beli pasar yang sejalan dengan kinerja fundamentalnya' : stock.return30D <= -5 ? 'adanya koreksi harga yang membuka ruang cicil beli sesuai plafon 1/β' : 'pergerakan mendatar yang sehat sambil menunggu katalis baru'}.`}`,
@@ -3425,11 +3436,7 @@ function buildDeepAnalyticalConvictionReport(params: {
         : joeliardiEval.marginOfSafetyPct >= 12 && stock.dmuCompositeScore >= 6.8
         ? 'Akumulasi Bertahap (Buy on Weakness / Cicil 2–3 Tahap) di area diskon nilai wajar.'
         : 'Tunggu Koreksi Wajar (Buy on Pullback) agar mendapatkan ruang Margin of Safety yang lebih aman.',
-      idealEntryZone: stock.isHscFlagged
-        ? 'Tidak direkomendasikan (Blokir HSC)'
-        : isUndercutDeepDiscount
-        ? `UNDERCUT / DEEP DISCOUNT: Rp ${idealBuyLow.toLocaleString('id-ID')} – Rp ${idealBuyHigh.toLocaleString('id-ID')} (Spot Rp ${stock.lastPrice.toLocaleString('id-ID')} di bawah batas akumulasi Rp ${intrinsicAccumulationCeiling.toLocaleString('id-ID')} · Nilai Wajar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')})`
-        : `Rp ${idealBuyLow.toLocaleString('id-ID')} – Rp ${Math.max(idealBuyLow, idealBuyHigh).toLocaleString('id-ID')} (Nilai Wajar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} · Justified PBV ${justPbv}x)`,
+      idealEntryZone: formattedAccumulationZone,
       InvalidationOrRiskLimit: stock.isHscFlagged
         ? 'Batasi porsi maksimal 0% dari portofolio.'
         : `Tinjau ulang posisi jika harga turun di bawah Rp ${riskStopPrice.toLocaleString('id-ID')} disertai penurunan GP/A < 10%, OCF/NI < 0,65x, atau keluar dari zona Top 40% Buffer.`,
