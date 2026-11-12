@@ -444,19 +444,19 @@ export async function pullLiveMarketSnapshotFromGitHubApi(
       ? { ...snapPayload, data: { ...(snapPayload.data || {}) } }
       : { generatedAt: new Date().toISOString(), data: {} };
 
-  // Merge fresher liveIhsgQuote / liveIhsgReturns from cloud state JSON if static snapshot still has old 5073.77
-  if (cloudStatePayload?.liveIhsgQuote && cloudStatePayload.liveIhsgQuote.lastPrice > 0) {
+  // Merge fresher liveIhsgQuote / liveIhsgReturns from cloud state JSON
+  if (cloudStatePayload?.liveIhsgQuote && cloudStatePayload.liveIhsgQuote.lastPrice > 1000) {
     const cloudQuote = cloudStatePayload.liveIhsgQuote;
     const existingJkse = mergedSnapshot.data['^JKSE'];
-    const isExistingStaleDefault =
+    const isCloudNewerOrMissing =
       !existingJkse ||
-      Math.abs(Number(existingJkse.lastPrice) - 5073.77) < 0.05 ||
+      Math.abs(Number(existingJkse.lastPrice) - 7210.16) < 0.05 ||
       (cloudStatePayload.updatedAt &&
         mergedSnapshot.generatedAt &&
-        new Date(cloudStatePayload.updatedAt).getTime() >
+        new Date(cloudStatePayload.updatedAt).getTime() >=
           new Date(mergedSnapshot.generatedAt).getTime());
 
-    if (isExistingStaleDefault && Math.abs(cloudQuote.lastPrice - 5073.77) >= 0.05) {
+    if (isCloudNewerOrMissing && Math.abs(cloudQuote.lastPrice - 7210.16) >= 0.05) {
       const baseCloses: number[] =
         existingJkse && Array.isArray(existingJkse.closes) && existingJkse.closes.length >= 2
           ? [...existingJkse.closes]

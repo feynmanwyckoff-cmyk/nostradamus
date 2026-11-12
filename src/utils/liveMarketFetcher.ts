@@ -561,6 +561,36 @@ export function ingestCloudStateIntoEmbeddedSnapshot(cloudState: {
 }
 
 /**
+ * Returns the latest verified IHSG (^JKSE) quote and 30D daily returns directly from `embeddedSnapshot`
+ * so initial state never falls back to a hardcoded 7210.16 constant.
+ */
+export function getEmbeddedIhsgBaseline(): {
+  quote: { lastPrice: number; change1D: number };
+  returns30D?: number[];
+} {
+  const jkse = embeddedSnapshot?.data?.['^JKSE'];
+  if (jkse && typeof jkse.lastPrice === 'number' && jkse.lastPrice > 1000) {
+    const closes = Array.isArray(jkse.closes) ? jkse.closes : [];
+    const rets: number[] = [];
+    for (let i = 1; i < closes.length; i++) {
+      if (closes[i - 1] > 0) {
+        rets.push(Number((((closes[i] - closes[i - 1]) / closes[i - 1]) * 100).toFixed(2)));
+      }
+    }
+    return {
+      quote: {
+        lastPrice: Number(jkse.lastPrice.toFixed(2)),
+        change1D: Number((jkse.change1D ?? 0).toFixed(2))
+      },
+      returns30D: rets.length >= 15 ? rets.slice(-30) : undefined
+    };
+  }
+  return {
+    quote: { lastPrice: 5188.49, change1D: 1.44 }
+  };
+}
+
+/**
  * Fetches closing price series and latest market quote for a single symbol.
  * Uses local Express /api/yahoo/chart when available, or GitHub Cloud Snapshot on GitHub Pages (zero public CORS proxy errors).
  */
@@ -1108,27 +1138,20 @@ export async function refreshLiveGlobalMacroAndIhsg(
     ...livePriorityBatchMap
   };
 
-  // 1. Process ^JKSE (IHSG) with Anti-Downgrade Guard against stale 5034 / 5050 / 5073 quotes
+  // 1. Process ^JKSE (IHSG) directly from live / snapshot batch (> 1000 valid index range)
   const ihsgItem = batchMap['^JKSE'];
-  if (ihsgItem && ihsgItem.lastPrice > 0) {
-    const isStaleLegacyQuote =
-      ihsgItem.lastPrice < 6000 &&
-      currentLiveIhsgQuote &&
-      currentLiveIhsgQuote.lastPrice >= 6000;
-
-    if (!isStaleLegacyQuote) {
-      liveIhsgQuote = {
-        lastPrice: ihsgItem.lastPrice,
-        change1D: ihsgItem.change1D
-      };
-      ihsgRawDecimalRets = computeDailyReturns(ihsgItem.closes);
-      const retsPct = ihsgRawDecimalRets.map((r) => Number((r * 100).toFixed(2)));
-      if (retsPct.length >= 15) {
-        ihsgReturns30D = retsPct.slice(-30);
-      }
-    } else if (currentLiveIhsgReturns && currentLiveIhsgReturns.length >= 15) {
-      ihsgRawDecimalRets = currentLiveIhsgReturns.map((r) => r / 100);
+  if (ihsgItem && ihsgItem.lastPrice > 1000) {
+    liveIhsgQuote = {
+      lastPrice: Number(ihsgItem.lastPrice.toFixed(2)),
+      change1D: Number(ihsgItem.change1D.toFixed(2))
+    };
+    ihsgRawDecimalRets = computeDailyReturns(ihsgItem.closes);
+    const retsPct = ihsgRawDecimalRets.map((r) => Number((r * 100).toFixed(2)));
+    if (retsPct.length >= 15) {
+      ihsgReturns30D = retsPct.slice(-30);
     }
+  } else if (currentLiveIhsgReturns && currentLiveIhsgReturns.length >= 15) {
+    ihsgRawDecimalRets = currentLiveIhsgReturns.map((r) => r / 100);
   }
 
   // 2. Process Global Macro Indicators

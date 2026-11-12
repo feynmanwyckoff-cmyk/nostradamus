@@ -33,6 +33,7 @@ import {
   clearLiveQuoteMemoryCache,
   fetchLiveFinancialNewsRss,
   formatFullIndonesianDateTime,
+  getEmbeddedIhsgBaseline,
   ingestCloudStateIntoEmbeddedSnapshot,
   refreshLiveGlobalMacroAndIhsg
 } from './utils/liveMarketFetcher';
@@ -71,14 +72,16 @@ import {
 import { EmitenFundamentalInspectorModal } from './components/EmitenFundamentalInspectorModal';
 import { Sun, Moon, Cloud, RefreshCw, Lock, KeyRound } from 'lucide-react';
 
-const SCREENER_CACHE_KEY = 'nostradamus_dmu24_screener_v14_ksei_hsc383';
+const SCREENER_CACHE_KEY = 'nostradamus_dmu24_screener_v15_real_ihsg';
 const LEGACY_SCREENER_KEYS = [
+  'nostradamus_dmu24_screener_v14_ksei_hsc383',
   'nostradamus_dmu24_screener_v12_hsc_value',
   'nostradamus_screener_cache_v3_mf40'
 ];
 const PORTFOLIO_CACHE_KEY = 'nostradamus_dmu24_portfolio_v4';
 const THEME_CACHE_KEY = 'nostradamus_theme_mode_v1';
-const VERIFIED_IHSG_BASELINE = { lastPrice: 7210.16, change1D: -0.51 };
+const INITIAL_EMBEDDED_IHSG = getEmbeddedIhsgBaseline();
+const VERIFIED_IHSG_BASELINE = INITIAL_EMBEDDED_IHSG.quote;
 
 interface ScreenerCachePayload {
   savedAt: string;
@@ -113,8 +116,7 @@ function loadScreenerCache(): ScreenerCachePayload | null {
       parsed.stocks[0].hscTier !== undefined &&
       parsed.liveIhsgQuote?.lastPrice
     ) {
-      // Sanitize any legacy anomalous IHSG < 6000
-      if (parsed.liveIhsgQuote.lastPrice < 6000) {
+      if (!parsed.liveIhsgQuote || parsed.liveIhsgQuote.lastPrice <= 1000) {
         parsed.liveIhsgQuote = { ...VERIFIED_IHSG_BASELINE };
       }
       return parsed;
@@ -183,19 +185,24 @@ export default function App() {
   );
   const [liveIhsgQuote, setLiveIhsgQuote] = useState<{ lastPrice: number; change1D: number }>(
     () =>
-      initialScreenerCache?.liveIhsgQuote && initialScreenerCache.liveIhsgQuote.lastPrice >= 6000
+      initialScreenerCache?.liveIhsgQuote && initialScreenerCache.liveIhsgQuote.lastPrice > 1000
         ? initialScreenerCache.liveIhsgQuote
         : VERIFIED_IHSG_BASELINE
   );
   const [liveIhsgReturns, setLiveIhsgReturns] = useState<number[]>(
-    () => initialScreenerCache?.liveIhsgReturns || REAL_IHSG_30D_RETURNS
+    () =>
+      initialScreenerCache?.liveIhsgReturns ||
+      INITIAL_EMBEDDED_IHSG.returns30D ||
+      REAL_IHSG_30D_RETURNS
   );
   const [regime, setRegime] = useState<MarketRegime>(() =>
     computeMarketRegime(
-      initialScreenerCache?.liveIhsgReturns || REAL_IHSG_30D_RETURNS,
+      initialScreenerCache?.liveIhsgReturns ||
+        INITIAL_EMBEDDED_IHSG.returns30D ||
+        REAL_IHSG_30D_RETURNS,
       18.0,
       initialScreenerCache?.macroIndicators || DEFAULT_GLOBAL_MACRO,
-      initialScreenerCache?.liveIhsgQuote && initialScreenerCache.liveIhsgQuote.lastPrice >= 6000
+      initialScreenerCache?.liveIhsgQuote && initialScreenerCache.liveIhsgQuote.lastPrice > 1000
         ? initialScreenerCache.liveIhsgQuote
         : VERIFIED_IHSG_BASELINE
     )
@@ -417,7 +424,7 @@ export default function App() {
         }
 
         const nextQuote =
-          bundle.liveIhsgQuote && bundle.liveIhsgQuote.lastPrice >= 6000
+          bundle.liveIhsgQuote && bundle.liveIhsgQuote.lastPrice > 1000
             ? bundle.liveIhsgQuote
             : liveIhsgQuote;
         const nextRets =
@@ -969,7 +976,7 @@ export default function App() {
 
       const rawQuote = fetchedQuote || liveIhsgQuote;
       const activeQuote =
-        rawQuote.lastPrice >= 6000 ? rawQuote : VERIFIED_IHSG_BASELINE;
+        rawQuote.lastPrice > 1000 ? rawQuote : VERIFIED_IHSG_BASELINE;
       const activeRets = ihsgReturns30D || liveIhsgReturns;
       setLiveIhsgQuote(activeQuote);
       setLiveIhsgReturns(activeRets);
@@ -1147,8 +1154,9 @@ export default function App() {
             if (res.ok) {
               const snap = (await res.json()) as Partial<CloudStateBundle> & {
                 encryptedVault?: EncryptedPortfolioVault;
+                data?: Record<string, { lastPrice?: number; change1D?: number; closes?: number[] }>;
               };
-              if (snap && (Array.isArray(snap.stocks) || snap.liveIhsgQuote)) {
+              if (snap && (Array.isArray(snap.stocks) || snap.liveIhsgQuote || snap.data)) {
                 ingestCloudStateIntoEmbeddedSnapshot(snap);
                 const targetBuffer =
                   typeof snap.rebalanceBufferPct === 'number'
@@ -1156,15 +1164,32 @@ export default function App() {
                     : rebalanceBufferPct;
                 const freshBase = buildIdx100StockUniverse(targetBuffer);
                 setStocks(freshBase);
-                if (Array.isArray(snap.macroIndicators) && snap.macroIndicators.length > 0) {
-                  setMacroIndicators(snap.macroIndicators);
-                }
-                if (snap.liveIhsgQuote && snap.liveIhsgQuote.lastPrice >= 6000) {
-                  setLiveIhsgQuote(snap.liveIhsgQuote);
-                }
-                if (Array.isArray(snap.liveIhsgReturns) && snap.liveIhsgReturns.length >= 15) {
-                  setLiveIhsgReturns(snap.liveIhsgReturns);
-                }
+
+                const resolvedBaseline = getEmbeddedIhsgBaseline();
+                const nextQuote =
+                  snap.liveIhsgQuote && snap.liveIhsgQuote.lastPrice > 1000
+                    ? snap.liveIhsgQuote
+                    : snap.data?.['^JKSE']?.lastPrice && snap.data['^JKSE'].lastPrice > 1000
+                    ? {
+                        lastPrice: Number(snap.data['^JKSE'].lastPrice.toFixed(2)),
+                        change1D: Number((snap.data['^JKSE'].change1D ?? 0).toFixed(2))
+                      }
+                    : resolvedBaseline.quote;
+                const nextRets =
+                  Array.isArray(snap.liveIhsgReturns) && snap.liveIhsgReturns.length >= 15
+                    ? snap.liveIhsgReturns
+                    : resolvedBaseline.returns30D || liveIhsgReturns;
+                const nextMacro =
+                  Array.isArray(snap.macroIndicators) && snap.macroIndicators.length > 0
+                    ? snap.macroIndicators
+                    : macroIndicators;
+
+                setLiveIhsgQuote(nextQuote);
+                setLiveIhsgReturns(nextRets);
+                setMacroIndicators(nextMacro);
+                setRegime(
+                  computeMarketRegime(nextRets, thresholdAnnVol, nextMacro, nextQuote, 'LIVE')
+                );
               }
               if (snap?.encryptedVault && isVaultMatchingRepoScope(snap.encryptedVault, scope)) {
                 setSecurityVault((prev) => {
@@ -1182,14 +1207,21 @@ export default function App() {
           }
         }
       }
-      // Hydrate pre-synced RSS news from static snapshot without triggering Yahoo CORS proxy requests
-      fetchLiveFinancialNewsRss(DEFAULT_NEWS_SENTIMENT)
-        .then((items) => {
-          if (Array.isArray(items) && items.length > 0) {
-            setNewsItems(items);
-          }
-        })
-        .catch(() => {});
+
+      // If running on local Express / AI Studio backend, refresh live quotes via /api/yahoo/spark (zero CORS error);
+      // on static GitHub Pages, only hydrate RSS news from snapshot.
+      const host = window.location.hostname;
+      if (host === 'localhost' || host === '127.0.0.1' || host.endsWith('.run.app')) {
+        await handleMasterSyncAll(true);
+      } else {
+        fetchLiveFinancialNewsRss(DEFAULT_NEWS_SENTIMENT)
+          .then((items) => {
+            if (Array.isArray(items) && items.length > 0) {
+              setNewsItems(items);
+            }
+          })
+          .catch(() => {});
+      }
     };
     initSync();
   }, []);
