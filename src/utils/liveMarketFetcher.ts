@@ -652,9 +652,66 @@ function parseYahooSparkPayload(rawJson: any): Record<string, SparkSeriesItem> {
 }
 
 /**
+ * Smart Relay Circuit Breaker & Health Tracker.
+ * Automatically quarantines any public CORS relay that returns HTTP 4xx/5xx or times out
+ * for 5 minutes so subsequent chunks never trigger repetitive console errors.
+ */
+interface RelayHealthState {
+  quarantinedUntil: number;
+  lastSuccessAt: number;
+  consecutiveFailures: number;
+}
+
+const RELAY_QUARANTINE_MS = 5 * 60 * 1000; // 5 minutes quarantine on 403/429/5xx
+const relayHealthMap: Record<string, RelayHealthState> = {};
+
+function isRelayHealthy(name: string): boolean {
+  const st = relayHealthMap[name];
+  if (!st) return true;
+  if (Date.now() < st.quarantinedUntil) return false;
+  return true;
+}
+
+function recordRelaySuccess(name: string): void {
+  relayHealthMap[name] = {
+    quarantinedUntil: 0,
+    lastSuccessAt: Date.now(),
+    consecutiveFailures: 0
+  };
+}
+
+function recordRelayFailure(name: string, statusCode?: number): void {
+  const prev = relayHealthMap[name] || {
+    quarantinedUntil: 0,
+    lastSuccessAt: 0,
+    consecutiveFailures: 0
+  };
+  const failures = prev.consecutiveFailures + 1;
+  // Immediate quarantine on 401/403/429 Forbidden/Rate-Limit, or after 2 consecutive timeouts
+  const shouldQuarantine =
+    statusCode === 401 ||
+    statusCode === 403 ||
+    statusCode === 429 ||
+    (statusCode !== undefined && statusCode >= 500) ||
+    failures >= 2;
+
+  relayHealthMap[name] = {
+    quarantinedUntil: shouldQuarantine ? Date.now() + RELAY_QUARANTINE_MS : 0,
+    lastSuccessAt: prev.lastSuccessAt,
+    consecutiveFailures: failures
+  };
+}
+
+function filterHealthyRelays<T extends { name: string }>(relays: T[]): T[] {
+  const healthy = relays.filter((r) => isRelayHealthy(r.name));
+  // If all relays were quarantined, fall back to the primary JSON-wrapped relay
+  return healthy.length > 0 ? healthy : [relays[0]];
+}
+
+/**
  * Browser-side CORS-safe Yahoo Finance v8 Single Chart Fetcher.
- * Uses a fast 2-relay hedge (`Promise.any`) followed by backup relays with a 7.5s timeout
- * so single symbols (especially `^JKSE`) resolve rapidly without premature 4.5s abort cancellations.
+ * Uses Smart Relay Circuit Breaker starting with the healthiest JSON-wrapped relay
+ * so single symbols (especially `^JKSE`) resolve cleanly without 403 console noise.
  */
 async function fetchYahooChartSingleViaBrowserCors(
   symbol: string,
@@ -668,12 +725,7 @@ async function fetchYahooChartSingleViaBrowserCors(
     symbol
   )}?range=${encodeURIComponent(range)}&interval=1d`;
 
-  const proxyEndpoints = [
-    {
-      name: 'corsproxy.io',
-      url: `https://corsproxy.io/?${encodeURIComponent(targetUrlQ2)}`,
-      wrapped: false
-    },
+  const proxyEndpoints = filterHealthyRelays([
     {
       name: 'allorigins-get',
       url: `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrlQ1)}`,
@@ -689,7 +741,7 @@ async function fetchYahooChartSingleViaBrowserCors(
       url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrlQ1)}`,
       wrapped: false
     }
-  ];
+  ]);
 
   const attemptSingleRelay = async (proxy: {
     name: string;
@@ -704,7 +756,10 @@ async function fetchYahooChartSingleViaBrowserCors(
         cache: 'no-store'
       });
       clearTimeout(timer);
-      if (!res.ok) throw new Error(`HTTP_${res.status}`);
+      if (!res.ok) {
+        recordRelayFailure(proxy.name, res.status);
+        throw new Error(`HTTP_${res.status}`);
+      }
 
       const rawPayload = await res.json();
       const data =
@@ -794,6 +849,7 @@ async function fetchYahooChartSingleViaBrowserCors(
           : 0;
       const adtv20dIdr = avgVol20d > 0 ? Math.round(avgVol20d * lastPrice) : undefined;
 
+      recordRelaySuccess(proxy.name);
       onRelaySuccess?.(proxy.name);
       return {
         symbol,
@@ -806,24 +862,19 @@ async function fetchYahooChartSingleViaBrowserCors(
         shortName: meta.longName || meta.shortName || symbol,
         adtv20dIdr
       };
+    } catch (err) {
+      recordRelayFailure(proxy.name);
+      throw err;
     } finally {
       clearTimeout(timer);
     }
   };
 
-  // For ^JKSE or priority symbols, race top 2 distinct relays first for sub-second response
-  try {
-    return await Promise.any([
-      attemptSingleRelay(proxyEndpoints[0]),
-      attemptSingleRelay(proxyEndpoints[1])
-    ]);
-  } catch {
-    for (let i = 2; i < proxyEndpoints.length; i++) {
-      try {
-        return await attemptSingleRelay(proxyEndpoints[i]);
-      } catch {
-        // try next backup relay
-      }
+  for (const proxy of proxyEndpoints) {
+    try {
+      return await attemptSingleRelay(proxy);
+    } catch {
+      // try next healthy relay
     }
   }
 
@@ -833,8 +884,8 @@ async function fetchYahooChartSingleViaBrowserCors(
 /**
  * Browser-side Load-Balanced Multi-Relay Yahoo Finance Spark Batch Fetcher for Static Hosts (GitHub Pages).
  * - Uses compact 9-symbol chunks and `range=1mo` (22 trading days) so JSON payload is ~68% smaller and never chokes proxies.
- * - Distributes chunks Round-Robin across distinct relay domains (`corsproxy.io`, `allorigins-get`, `codetabs`, `allorigins-raw`)
- *   with a polite 160ms stagger and 9.0s timeout to eliminate the 4.50s `(canceled)` bottleneck.
+ * - Distributes chunks across healthy CORS relays (`allorigins-get`, `codetabs`, `allorigins-raw`) protected by
+ *   Smart Relay Circuit Breaker with a polite 160ms stagger and 9.0s timeout.
  */
 async function fetchYahooSparkViaBrowserCors(
   batchSymbols: string[],
@@ -865,12 +916,7 @@ async function fetchYahooSparkViaBrowserCors(
       effectiveRange
     )}&interval=1d`;
 
-    const allRelays = [
-      {
-        name: 'corsproxy.io',
-        url: `https://corsproxy.io/?${encodeURIComponent(targetV8Q2)}`,
-        wrapped: false
-      },
+    const allRelays = filterHealthyRelays([
       {
         name: 'allorigins-get',
         url: `https://api.allorigins.win/get?url=${encodeURIComponent(targetV8Q1)}`,
@@ -886,15 +932,18 @@ async function fetchYahooSparkViaBrowserCors(
         url: `https://api.allorigins.win/raw?url=${encodeURIComponent(targetV8Q1)}`,
         wrapped: false
       }
-    ];
+    ]);
 
-    // Rotate starting relay based on chunkIndex (Round-Robin Load Balancing across proxy providers)
+    // Rotate starting relay based on chunkIndex across healthy relays
     const rotatedRelays = [
       ...allRelays.slice(chunkIndex % allRelays.length),
       ...allRelays.slice(0, chunkIndex % allRelays.length)
     ];
 
     for (const proxy of rotatedRelays) {
+      if (!isRelayHealthy(proxy.name) && rotatedRelays.length > 1) {
+        continue;
+      }
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 9000);
       try {
@@ -911,12 +960,16 @@ async function fetchYahooSparkViaBrowserCors(
               : rawPayload;
           const parsed = parseYahooSparkPayload(json);
           if (Object.keys(parsed).length > 0) {
+            recordRelaySuccess(proxy.name);
             onRelaySuccess?.(proxy.name);
             return parsed;
           }
+        } else {
+          recordRelayFailure(proxy.name, res.status);
         }
       } catch {
         clearTimeout(timer);
+        recordRelayFailure(proxy.name);
         // try next rotated relay
       }
     }

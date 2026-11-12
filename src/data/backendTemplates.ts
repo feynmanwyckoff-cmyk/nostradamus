@@ -861,14 +861,17 @@ export const STANDALONE_GITHUB_PAGES_HTML = `<!DOCTYPE html>
 
     async function fetchViaCorsMultiProxy(targetUrl) {
       const proxies = [
-        'https://corsproxy.io/?' + encodeURIComponent(targetUrl),
-        'https://api.allorigins.win/raw?url=' + encodeURIComponent(targetUrl),
-        'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(targetUrl)
+        { url: 'https://api.allorigins.win/get?url=' + encodeURIComponent(targetUrl), wrapped: true },
+        { url: 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(targetUrl), wrapped: false },
+        { url: 'https://api.allorigins.win/raw?url=' + encodeURIComponent(targetUrl), wrapped: false }
       ];
       for (const p of proxies) {
         try {
-          const res = await fetch(p, { cache: 'no-store' });
-          if (res.ok) return await res.json();
+          const res = await fetch(p.url, { cache: 'no-store' });
+          if (res.ok) {
+            const raw = await res.json();
+            return p.wrapped && typeof raw?.contents === 'string' ? JSON.parse(raw.contents) : raw;
+          }
         } catch {}
       }
       throw new Error('Proxy timeout');
