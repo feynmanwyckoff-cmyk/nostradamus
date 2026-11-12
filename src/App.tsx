@@ -73,8 +73,9 @@ import {
 import { EmitenFundamentalInspectorModal } from './components/EmitenFundamentalInspectorModal';
 import { Sun, Moon, Cloud, RefreshCw, Lock, KeyRound } from 'lucide-react';
 
-const SCREENER_CACHE_KEY = 'nostradamus_dmu24_screener_v16_full956_prevclose';
+const SCREENER_CACHE_KEY = 'nostradamus_dmu24_screener_v17_yahoo_live_sync_fix';
 const LEGACY_SCREENER_KEYS = [
+  'nostradamus_dmu24_screener_v16_full956_prevclose',
   'nostradamus_dmu24_screener_v15_real_ihsg',
   'nostradamus_dmu24_screener_v14_ksei_hsc383',
   'nostradamus_dmu24_screener_v12_hsc_value',
@@ -425,18 +426,16 @@ export default function App() {
           setCapitalIdr(bundle.capitalIdr);
         }
 
+        // Strict Separation: GitHub Cloud state restores portfolio & cash only; market prices & ^JKSE always follow Yahoo Live / Verified Snapshot
+        const embeddedBaseline = getEmbeddedIhsgBaseline();
         const nextQuote =
-          bundle.liveIhsgQuote && bundle.liveIhsgQuote.lastPrice > 1000
-            ? bundle.liveIhsgQuote
-            : liveIhsgQuote;
+          liveIhsgQuote && liveIhsgQuote.lastPrice > 1000
+            ? liveIhsgQuote
+            : embeddedBaseline.quote;
         const nextRets =
-          Array.isArray(bundle.liveIhsgReturns) && bundle.liveIhsgReturns.length >= 15
-            ? bundle.liveIhsgReturns
-            : liveIhsgReturns;
-        const nextMacro =
-          Array.isArray(bundle.macroIndicators) && bundle.macroIndicators.length > 0
-            ? bundle.macroIndicators
-            : macroIndicators;
+          Array.isArray(liveIhsgReturns) && liveIhsgReturns.length >= 15
+            ? liveIhsgReturns
+            : embeddedBaseline.returns30D || REAL_IHSG_30D_RETURNS;
         const nextThreshold =
           typeof bundle.thresholdAnnVol === 'number' && bundle.thresholdAnnVol >= 8
             ? bundle.thresholdAnnVol
@@ -444,12 +443,11 @@ export default function App() {
 
         setLiveIhsgQuote(nextQuote);
         setLiveIhsgReturns(nextRets);
-        setMacroIndicators(nextMacro);
         if (typeof bundle.thresholdAnnVol === 'number' && bundle.thresholdAnnVol >= 8) {
           setThresholdAnnVol(bundle.thresholdAnnVol);
         }
         setRegime(
-          computeMarketRegime(nextRets, nextThreshold, nextMacro, nextQuote, 'LIVE')
+          computeMarketRegime(nextRets, nextThreshold, macroIndicators, nextQuote, 'LIVE')
         );
         const cfgScope = getActiveRepoScope(cfg);
         if (isVaultMatchingRepoScope(bundle.encryptedVault, cfgScope)) {
@@ -957,7 +955,36 @@ export default function App() {
           priorityHoldingTickers,
           liveIhsgQuote,
           liveIhsgReturns,
-          bypassMemoryCache
+          bypassMemoryCache,
+          (partialWave1) => {
+            // Immediately render Wave 1 Priority (<1s) updates for IHSG, Macro, Portfolio & Liquid Leaders
+            const rerankedWave1 = rankUniverseWithBuffer(
+              partialWave1.updatedStocks,
+              rebalanceBufferPct
+            );
+            setMacroIndicators(partialWave1.updatedMacro);
+            setStocks(rerankedWave1);
+            if (partialWave1.liveIhsgQuote && partialWave1.liveIhsgQuote.lastPrice > 1000) {
+              setLiveIhsgQuote(partialWave1.liveIhsgQuote);
+            }
+            if (partialWave1.ihsgReturns30D && partialWave1.ihsgReturns30D.length >= 15) {
+              setLiveIhsgReturns(partialWave1.ihsgReturns30D);
+            }
+            const activeWave1Quote =
+              partialWave1.liveIhsgQuote && partialWave1.liveIhsgQuote.lastPrice > 1000
+                ? partialWave1.liveIhsgQuote
+                : liveIhsgQuote;
+            const activeWave1Rets = partialWave1.ihsgReturns30D || liveIhsgReturns;
+            setRegime(
+              computeMarketRegime(
+                activeWave1Rets,
+                thresholdAnnVol,
+                partialWave1.updatedMacro,
+                activeWave1Quote,
+                'LIVE'
+              )
+            );
+          }
         ),
         fetchLiveFinancialNewsRss(DEFAULT_NEWS_SENTIMENT)
       ]);
@@ -1141,8 +1168,8 @@ export default function App() {
     };
   }, []);
 
-  // On initial mount: hydrate directly from GitHub Cloud state (nostradamus_cloud_state.json) and static-market-snapshot.json
-  // without firing unsolicited third-party CORS proxy requests.
+  // On initial mount: restore portfolio/vault configuration from GitHub Cloud if configured,
+  // while strictly sourcing all market prices (^JKSE, ARNA, and 975 BEI stocks) from Yahoo Finance Live & static-market-snapshot.json.
   useEffect(() => {
     const initSync = async () => {
       const cfg = loadGitHubCloudConfig();
@@ -1151,8 +1178,8 @@ export default function App() {
         await handlePullFromGitHub(cfg, true);
       } else {
         const candidatePaths = [
-          `./data/nostradamus_cloud_state.json?t=${Date.now()}`,
-          `./static-market-snapshot.json?t=${Date.now()}`
+          `./static-market-snapshot.json?t=${Date.now()}`,
+          `./data/nostradamus_cloud_state.json?t=${Date.now()}`
         ];
         for (const path of candidatePaths) {
           try {
@@ -1162,8 +1189,8 @@ export default function App() {
                 encryptedVault?: EncryptedPortfolioVault;
                 data?: Record<string, { lastPrice?: number; change1D?: number; closes?: number[] }>;
               };
-              if (snap && (Array.isArray(snap.stocks) || snap.liveIhsgQuote || snap.data)) {
-                ingestCloudStateIntoEmbeddedSnapshot(snap);
+              if (snap && snap.data && typeof snap.data === 'object') {
+                // Only update market prices from static-market-snapshot.json (never from nostradamus_cloud_state.json)
                 const targetBuffer =
                   typeof snap.rebalanceBufferPct === 'number'
                     ? snap.rebalanceBufferPct
@@ -1173,28 +1200,18 @@ export default function App() {
 
                 const resolvedBaseline = getEmbeddedIhsgBaseline();
                 const nextQuote =
-                  snap.liveIhsgQuote && snap.liveIhsgQuote.lastPrice > 1000
-                    ? snap.liveIhsgQuote
-                    : snap.data?.['^JKSE']?.lastPrice && snap.data['^JKSE'].lastPrice > 1000
+                  snap.data['^JKSE']?.lastPrice && snap.data['^JKSE'].lastPrice > 1000
                     ? {
                         lastPrice: Number(snap.data['^JKSE'].lastPrice.toFixed(2)),
                         change1D: Number((snap.data['^JKSE'].change1D ?? 0).toFixed(2))
                       }
                     : resolvedBaseline.quote;
-                const nextRets =
-                  Array.isArray(snap.liveIhsgReturns) && snap.liveIhsgReturns.length >= 15
-                    ? snap.liveIhsgReturns
-                    : resolvedBaseline.returns30D || liveIhsgReturns;
-                const nextMacro =
-                  Array.isArray(snap.macroIndicators) && snap.macroIndicators.length > 0
-                    ? snap.macroIndicators
-                    : macroIndicators;
+                const nextRets = resolvedBaseline.returns30D || liveIhsgReturns;
 
                 setLiveIhsgQuote(nextQuote);
                 setLiveIhsgReturns(nextRets);
-                setMacroIndicators(nextMacro);
                 setRegime(
-                  computeMarketRegime(nextRets, thresholdAnnVol, nextMacro, nextQuote, 'LIVE')
+                  computeMarketRegime(nextRets, thresholdAnnVol, macroIndicators, nextQuote, 'LIVE')
                 );
               }
               if (snap?.encryptedVault && isVaultMatchingRepoScope(snap.encryptedVault, scope)) {
@@ -1214,20 +1231,8 @@ export default function App() {
         }
       }
 
-      // If running on local Express / AI Studio backend, refresh live quotes via /api/yahoo/spark (zero CORS error);
-      // on static GitHub Pages, only hydrate RSS news from snapshot.
-      const host = window.location.hostname;
-      if (host === 'localhost' || host === '127.0.0.1' || host.endsWith('.run.app')) {
-        await handleMasterSyncAll(true);
-      } else {
-        fetchLiveFinancialNewsRss(DEFAULT_NEWS_SENTIMENT)
-          .then((items) => {
-            if (Array.isArray(items) && items.length > 0) {
-              setNewsItems(items);
-            }
-          })
-          .catch(() => {});
-      }
+      // Trigger Hybrid Two-Stage Live Sync (Wave 1 Priority <1s + Wave 2 Full 975 Emiten) with bypassMemoryCache = true
+      await handleMasterSyncAll(true, undefined, true);
     };
     initSync();
   }, []);

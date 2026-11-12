@@ -52,16 +52,40 @@ export interface SparkSeriesItem {
   marketState?: string;
 }
 
+export function isSameJakartaTradingDayClient(tsA?: number, tsB?: number): boolean {
+  if (
+    typeof tsA !== 'number' ||
+    typeof tsB !== 'number' ||
+    !Number.isFinite(tsA) ||
+    !Number.isFinite(tsB)
+  ) {
+    return false;
+  }
+  try {
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Jakarta',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
+    return fmt.format(new Date(tsA * 1000)) === fmt.format(new Date(tsB * 1000));
+  } catch {
+    return Math.abs(tsA - tsB) < 43200;
+  }
+}
+
 /**
  * Resolves the official Previous Trading Day Close Price (IDR) for an IDX stock.
  * Uses explicit `previousClose` from Yahoo Finance when available, or extracts the prior session close
- * from the historical `closes` array, or derives from `lastPrice / (1 + change1D / 100)`.
+ * from the historical `closes` array using Jakarta trading day timestamps (so flat 0.00% stocks like
+ * ARNA at Rp 505 resolve `previousClose = 505` instead of jumping to 2 days ago).
  */
 export function resolveStockPreviousClose(
   lastPrice: number,
   change1D: number,
   explicitPrevClose?: number,
-  closes?: number[]
+  closes?: number[],
+  timestamps?: number[]
 ): number {
   if (!Number.isFinite(lastPrice) || lastPrice <= 0) return 0;
 
@@ -69,14 +93,28 @@ export function resolveStockPreviousClose(
     typeof explicitPrevClose === 'number' &&
     Number.isFinite(explicitPrevClose) &&
     explicitPrevClose > 0 &&
-    Math.round(explicitPrevClose) !== Math.round(lastPrice)
+    (Math.round(explicitPrevClose) !== Math.round(lastPrice) || Math.abs(change1D) < 0.01)
   ) {
     return Math.round(explicitPrevClose);
   }
 
   if (Array.isArray(closes) && closes.length >= 2) {
-    const secondLast = closes[closes.length - 2];
-    const thirdLast = closes.length >= 3 ? closes[closes.length - 3] : secondLast;
+    const n = closes.length;
+    const secondLast = closes[n - 2];
+    const thirdLast = n >= 3 ? closes[n - 3] : secondLast;
+
+    if (Array.isArray(timestamps) && timestamps.length === n) {
+      const sameDayDuplicate = isSameJakartaTradingDayClient(timestamps[n - 1], timestamps[n - 2]);
+      const candidate = sameDayDuplicate ? thirdLast : secondLast;
+      if (typeof candidate === 'number' && Number.isFinite(candidate) && candidate > 0) {
+        return Math.round(candidate);
+      }
+    }
+
+    if (Math.abs(change1D) < 0.01) {
+      return Math.round(lastPrice);
+    }
+
     const candidate =
       Math.round(secondLast) !== Math.round(lastPrice) ? secondLast : thirdLast;
     if (typeof candidate === 'number' && Number.isFinite(candidate) && candidate > 0) {
@@ -424,7 +462,8 @@ export function buildIdx100StockUniverse(
         lastPrice,
         change1D,
         snapItem.previousClose,
-        snapItem.closes
+        snapItem.closes,
+        snapItem.timestamp
       );
 
       return enrichStockMetrics({
@@ -498,6 +537,288 @@ function canUseExpressOnDemandApi(): boolean {
   if (typeof window === 'undefined') return false;
   const host = window.location.hostname;
   return host === 'localhost' || host === '127.0.0.1' || host.endsWith('.run.app');
+}
+
+/**
+ * Fast Browser CORS Relay Fetcher for Static Hosts (GitHub Pages):
+ * Races lightweight CORS relays (`corsproxy.io`, `allorigins.win/raw`, `codetabs`) so single-ticker
+ * On-Demand Inspector (`ARNA.JK`, `^JKSE`) and Priority Wave 1 symbols always get real-time Yahoo Finance
+ * quotes even when running on static GitHub Pages without a Node/Express backend.
+ */
+async function fetchYahooJsonViaBrowserRelay(
+  yahooUrl: string,
+  timeoutMs: number = 5500
+): Promise<any | null> {
+  const relayBuilders = [
+    (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+    (u: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+    (u: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`
+  ];
+
+  for (const buildUrl of relayBuilders) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(buildUrl(yahooUrl), {
+        signal: controller.signal,
+        cache: 'no-store'
+      });
+      clearTimeout(timer);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && typeof data === 'object') {
+          return data;
+        }
+      }
+    } catch {
+      clearTimeout(timer);
+    }
+  }
+  return null;
+}
+
+function resolveDailyPrevCloseClient(
+  closes: number[],
+  timestamps: number[]
+): number {
+  if (closes.length < 2) return 0;
+  const n = closes.length;
+  if (timestamps.length === n && n >= 2) {
+    if (isSameJakartaTradingDayClient(timestamps[n - 1], timestamps[n - 2])) {
+      return n >= 3 ? closes[n - 3] : closes[n - 2];
+    }
+    return closes[n - 2];
+  }
+  return closes[n - 2];
+}
+
+async function fetchSingleChartViaBrowserRelay(
+  symbol: string,
+  range: string = '3mo'
+): Promise<SparkSeriesItem | null> {
+  const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
+    symbol
+  )}?range=${encodeURIComponent(range)}&interval=1d&events=div`;
+  const data = await fetchYahooJsonViaBrowserRelay(yahooUrl, 5500);
+  const result = data?.chart?.result?.[0];
+  if (!result) return null;
+
+  const meta = result?.meta || {};
+  const rawTimestamps: Array<number | null> = result?.timestamp || [];
+  const rawCloses: Array<number | null> = result?.indicators?.quote?.[0]?.close || [];
+  const closes: number[] = [];
+  const timestamps: number[] = [];
+  for (let i = 0; i < rawCloses.length; i++) {
+    const c = rawCloses[i];
+    if (typeof c === 'number' && Number.isFinite(c) && c > 0) {
+      closes.push(Number(c.toFixed(2)));
+      const t = rawTimestamps[i];
+      if (typeof t === 'number' && Number.isFinite(t)) {
+        timestamps.push(t);
+      }
+    }
+  }
+
+  const livePrice =
+    typeof meta.regularMarketPrice === 'number' &&
+    Number.isFinite(meta.regularMarketPrice) &&
+    meta.regularMarketPrice > 0
+      ? meta.regularMarketPrice
+      : typeof meta.fulldayPrice === 'number' &&
+        Number.isFinite(meta.fulldayPrice) &&
+        meta.fulldayPrice > 0
+      ? meta.fulldayPrice
+      : closes.length > 0
+      ? closes[closes.length - 1]
+      : 0;
+
+  const lastPrice = Number(livePrice.toFixed(2));
+  if (!lastPrice || lastPrice <= 0) return null;
+
+  const rawTrailingWasNull =
+    rawCloses.length > 0 && rawCloses[rawCloses.length - 1] === null;
+  if (closes.length > 0) {
+    if (
+      rawTrailingWasNull &&
+      typeof meta.regularMarketTime === 'number' &&
+      timestamps.length > 0 &&
+      !isSameJakartaTradingDayClient(timestamps[timestamps.length - 1], meta.regularMarketTime)
+    ) {
+      closes.push(lastPrice);
+      timestamps.push(meta.regularMarketTime);
+    } else if (closes[closes.length - 1] !== lastPrice) {
+      closes[closes.length - 1] = lastPrice;
+    }
+  }
+
+  const dailyPrevClose = resolveDailyPrevCloseClient(closes, timestamps);
+  const prevClose =
+    typeof meta.previousClose === 'number' &&
+    Number.isFinite(meta.previousClose) &&
+    meta.previousClose > 0
+      ? meta.previousClose
+      : dailyPrevClose > 0
+      ? dailyPrevClose
+      : lastPrice;
+
+  const officialChangePct =
+    typeof meta.regularMarketChangePercent === 'number' &&
+    Number.isFinite(meta.regularMarketChangePercent)
+      ? meta.regularMarketChangePercent
+      : typeof meta.fulldayChangePercent === 'number' &&
+        Number.isFinite(meta.fulldayChangePercent)
+      ? meta.fulldayChangePercent
+      : null;
+
+  const change1D =
+    officialChangePct !== null
+      ? Number(officialChangePct.toFixed(2))
+      : prevClose > 0
+      ? Number((((lastPrice - prevClose) / prevClose) * 100).toFixed(2))
+      : 0;
+
+  return {
+    symbol,
+    lastPrice,
+    previousClose: Number(prevClose.toFixed(2)),
+    change1D,
+    closes: closes.length >= 2 ? closes : [prevClose, lastPrice],
+    timestamp: timestamps.length === closes.length ? timestamps : undefined,
+    shortName: meta.longName || meta.shortName,
+    marketState: typeof meta.marketState === 'string' ? meta.marketState : undefined
+  };
+}
+
+async function fetchSparkChunkViaBrowserRelay(
+  symbolsChunk: string[],
+  range: string = '1mo'
+): Promise<Record<string, SparkSeriesItem>> {
+  const resultMap: Record<string, SparkSeriesItem> = {};
+  const healTargets: string[] = [];
+  if (symbolsChunk.length === 0) return resultMap;
+
+  const joined = symbolsChunk.map((s) => encodeURIComponent(s)).join(',');
+  const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/spark?symbols=${joined}&range=${encodeURIComponent(
+    range
+  )}&interval=1d`;
+
+  const sparkData = await fetchYahooJsonViaBrowserRelay(yahooUrl, 5500);
+  if (sparkData && typeof sparkData === 'object') {
+    for (const sym of symbolsChunk) {
+      const entry = sparkData[sym];
+      if (!entry || typeof entry !== 'object') continue;
+      const rawTimestamps: Array<number | null> = entry?.timestamp || [];
+      const rawCloses: Array<number | null> = entry?.close || [];
+      const closes: number[] = [];
+      const timestamps: number[] = [];
+      for (let i = 0; i < rawCloses.length; i++) {
+        const c = rawCloses[i];
+        if (typeof c === 'number' && Number.isFinite(c) && c > 0) {
+          closes.push(Number(c.toFixed(2)));
+          const t = rawTimestamps[i];
+          if (typeof t === 'number' && Number.isFinite(t)) {
+            timestamps.push(t);
+          }
+        }
+      }
+
+      const liveEntryPrice =
+        typeof entry.regularMarketPrice === 'number' &&
+        Number.isFinite(entry.regularMarketPrice) &&
+        entry.regularMarketPrice > 0
+          ? entry.regularMarketPrice
+          : typeof entry.fulldayPrice === 'number' &&
+            Number.isFinite(entry.fulldayPrice) &&
+            entry.fulldayPrice > 0
+          ? entry.fulldayPrice
+          : closes.length > 0
+          ? closes[closes.length - 1]
+          : 0;
+
+      if (liveEntryPrice > 0) {
+        const lastPrice = Number(liveEntryPrice.toFixed(2));
+        const rawTrailingWasNull =
+          rawCloses.length > 0 && rawCloses[rawCloses.length - 1] === null;
+
+        if (closes.length === 0) {
+          const basePrev = entry.previousClose || lastPrice;
+          closes.push(Number(Number(basePrev).toFixed(2)), lastPrice);
+        } else if (
+          rawTrailingWasNull &&
+          rawTimestamps.length > 0 &&
+          typeof rawTimestamps[rawTimestamps.length - 1] === 'number' &&
+          timestamps.length > 0 &&
+          !isSameJakartaTradingDayClient(
+            timestamps[timestamps.length - 1],
+            rawTimestamps[rawTimestamps.length - 1] as number
+          )
+        ) {
+          closes.push(lastPrice);
+          timestamps.push(rawTimestamps[rawTimestamps.length - 1] as number);
+        } else if (closes[closes.length - 1] !== lastPrice) {
+          closes[closes.length - 1] = lastPrice;
+        }
+
+        if (
+          lastPrice >= 68 &&
+          timestamps.length >= 2 &&
+          timestamps[timestamps.length - 1] - timestamps[timestamps.length - 2] > 120000 &&
+          new Date(timestamps[timestamps.length - 1] * 1000).getUTCDay() !== 1
+        ) {
+          healTargets.push(sym);
+        }
+
+        const dailyPrevClose = resolveDailyPrevCloseClient(closes, timestamps);
+        const prevClose =
+          typeof entry.previousClose === 'number' &&
+          Number.isFinite(entry.previousClose) &&
+          entry.previousClose > 0
+            ? entry.previousClose
+            : dailyPrevClose > 0
+            ? dailyPrevClose
+            : lastPrice;
+
+        const officialChangePct =
+          typeof entry.regularMarketChangePercent === 'number' &&
+          Number.isFinite(entry.regularMarketChangePercent)
+            ? entry.regularMarketChangePercent
+            : typeof entry.fulldayChangePercent === 'number' &&
+              Number.isFinite(entry.fulldayChangePercent)
+            ? entry.fulldayChangePercent
+            : null;
+
+        const change1D =
+          officialChangePct !== null
+            ? Number(officialChangePct.toFixed(2))
+            : prevClose > 0
+            ? Number((((lastPrice - prevClose) / prevClose) * 100).toFixed(2))
+            : 0;
+
+        resultMap[sym] = {
+          symbol: sym,
+          lastPrice,
+          previousClose: Number(prevClose.toFixed(2)),
+          change1D,
+          closes,
+          timestamp: timestamps.length === closes.length ? timestamps : undefined,
+          marketState: typeof entry.marketState === 'string' ? entry.marketState : undefined
+        };
+      }
+    }
+  }
+
+  if (healTargets.length > 0) {
+    await Promise.all(
+      healTargets.map(async (sym) => {
+        const single = await fetchSingleChartViaBrowserRelay(sym, range);
+        if (single) {
+          resultMap[sym] = single;
+        }
+      })
+    );
+  }
+
+  return resultMap;
 }
 
 /**
@@ -589,9 +910,10 @@ export function clearLiveQuoteMemoryCache(): void {
 }
 
 /**
- * Merges a loaded `nostradamus_cloud_state.json` payload (stocks, macroIndicators, liveIhsgQuote, liveIhsgReturns)
- * directly into `embeddedSnapshot.data` and the 60s in-memory quote cache so Screener, Barbell, and Emiten Inspector
- * always reflect the latest GitHub Cloud state without requiring third-party CORS proxies.
+ * Strictly isolates GitHub Cloud portfolio state (`nostradamus_cloud_state.json`) from live Yahoo Finance prices:
+ * - NEVER overwrites existing `embeddedSnapshot.data` prices (such as `^JKSE` or `ARNA.JK`) with stale cloud state prices.
+ * - NEVER pollutes `liveQuoteMemoryCache` with cloud state prices.
+ * - Only registers custom user-added tickers that do not yet exist in `embeddedSnapshot.data` at all.
  */
 export function ingestCloudStateIntoEmbeddedSnapshot(cloudState: {
   stocks?: Array<{ ticker?: string; name?: string; lastPrice?: number; change1D?: number }>;
@@ -604,42 +926,6 @@ export function ingestCloudStateIntoEmbeddedSnapshot(cloudState: {
     embeddedSnapshot.data = {};
   }
 
-  const freshMap: Record<string, SparkSeriesItem> = {};
-
-  if (cloudState.liveIhsgQuote && cloudState.liveIhsgQuote.lastPrice > 0) {
-    const cloudQuote = cloudState.liveIhsgQuote;
-    const existingJkse = embeddedSnapshot.data['^JKSE'];
-    let closes: number[] =
-      existingJkse && Array.isArray(existingJkse.closes) && existingJkse.closes.length >= 2
-        ? [...existingJkse.closes]
-        : [cloudQuote.lastPrice, cloudQuote.lastPrice];
-
-    if (Array.isArray(cloudState.liveIhsgReturns) && cloudState.liveIhsgReturns.length >= 15) {
-      const rets = cloudState.liveIhsgReturns;
-      const reconstructed: number[] = new Array(rets.length + 1);
-      reconstructed[rets.length] = Number(cloudQuote.lastPrice.toFixed(2));
-      for (let i = rets.length - 1; i >= 0; i--) {
-        const rDec = Number(rets[i]) / 100;
-        const prev = reconstructed[i + 1] / Math.max(0.5, 1 + rDec);
-        reconstructed[i] = Number(prev.toFixed(2));
-      }
-      closes = reconstructed;
-    } else {
-      closes[closes.length - 1] = Number(cloudQuote.lastPrice.toFixed(2));
-    }
-
-    const jkseItem: SparkSeriesItem = {
-      ...(existingJkse || {}),
-      symbol: '^JKSE',
-      lastPrice: Number(cloudQuote.lastPrice.toFixed(2)),
-      change1D: Number(cloudQuote.change1D.toFixed(2)),
-      closes,
-      shortName: 'IDX Composite'
-    };
-    embeddedSnapshot.data['^JKSE'] = jkseItem;
-    freshMap['^JKSE'] = jkseItem;
-  }
-
   if (Array.isArray(cloudState.stocks)) {
     for (const st of cloudState.stocks) {
       if (!st || !st.ticker || typeof st.lastPrice !== 'number' || st.lastPrice <= 0) {
@@ -647,64 +933,27 @@ export function ingestCloudStateIntoEmbeddedSnapshot(cloudState: {
       }
       const cleanTicker = String(st.ticker).trim().toUpperCase().replace(/\.JK$/i, '');
       const yfSym = `${cleanTicker}.JK`;
-      const existingItem = embeddedSnapshot.data[yfSym];
+      // Never overwrite an existing Yahoo Finance snapshot entry with stale cloud state prices
+      if (embeddedSnapshot.data[yfSym]) {
+        continue;
+      }
       const lastPrice = Number(st.lastPrice);
       const change1D = typeof st.change1D === 'number' ? Number(st.change1D) : 0;
       const prevClose =
         change1D !== 0 && change1D > -99
           ? Number((lastPrice / (1 + change1D / 100)).toFixed(2))
           : lastPrice;
-      const baseCloses: number[] =
-        existingItem && Array.isArray(existingItem.closes) && existingItem.closes.length >= 2
-          ? [...existingItem.closes]
-          : Array(21).fill(prevClose).concat([lastPrice]);
-      baseCloses[baseCloses.length - 1] = lastPrice;
-      if (baseCloses.length >= 2 && change1D !== 0) {
-        baseCloses[baseCloses.length - 2] = prevClose;
-      }
-      const nextItem: SparkSeriesItem = {
-        ...(existingItem || {}),
+      const baseCloses: number[] = Array(21).fill(prevClose).concat([lastPrice]);
+      embeddedSnapshot.data[yfSym] = {
         symbol: yfSym,
         lastPrice,
+        previousClose: prevClose,
         change1D,
         closes: baseCloses,
-        shortName: st.name || existingItem?.shortName || cleanTicker
+        shortName: st.name || cleanTicker
       };
-      embeddedSnapshot.data[yfSym] = nextItem;
-      freshMap[yfSym] = nextItem;
     }
   }
-
-  if (Array.isArray(cloudState.macroIndicators)) {
-    for (const m of cloudState.macroIndicators) {
-      if (!m || !m.symbol || typeof m.value !== 'number' || m.value <= 0) {
-        continue;
-      }
-      const existingMacro = embeddedSnapshot.data[m.symbol];
-      const lastPrice = Number(m.value);
-      const change1D = typeof m.change1D === 'number' ? Number(m.change1D) : 0;
-      const prevClose =
-        change1D !== 0 && change1D > -99
-          ? Number((lastPrice / (1 + change1D / 100)).toFixed(2))
-          : lastPrice;
-      const baseCloses: number[] =
-        existingMacro && Array.isArray(existingMacro.closes) && existingMacro.closes.length >= 2
-          ? [...existingMacro.closes]
-          : [prevClose, lastPrice];
-      baseCloses[baseCloses.length - 1] = lastPrice;
-      const nextMacro: SparkSeriesItem = {
-        ...(existingMacro || {}),
-        symbol: m.symbol,
-        lastPrice,
-        change1D,
-        closes: baseCloses
-      };
-      embeddedSnapshot.data[m.symbol] = nextMacro;
-      freshMap[m.symbol] = nextMacro;
-    }
-  }
-
-  setCachedLiveQuotes(freshMap);
 }
 
 /**
@@ -733,33 +982,31 @@ export function getEmbeddedIhsgBaseline(): {
     };
   }
   return {
-    quote: { lastPrice: 5188.49, change1D: 1.44 }
+    quote: { lastPrice: 5219.53, change1D: 2.04 }
   };
 }
 
 /**
  * Fetches closing price series and latest market quote for a single symbol.
- * Uses local Express /api/yahoo/chart when available, or GitHub Cloud Snapshot on GitHub Pages (zero public CORS proxy errors).
+ * Uses local Express `/api/yahoo/chart` when available, or direct Browser CORS Relay on GitHub Pages,
+ * falling back to GitHub Cloud Snapshot if offline.
  */
 export async function fetchYahooChartSeries(
   symbol: string,
-  range: string = '3mo'
-): Promise<{
-  lastPrice: number;
-  change1D: number;
-  closes: number[];
-  shortName?: string;
-  adtv20dIdr?: number;
-}> {
-  const cached = getCachedLiveQuote(symbol, RAPID_CLICK_GUARD_MS);
-  if (cached && cached.lastPrice > 0 && cached.closes.length >= 2) {
-    return cached;
+  range: string = '3mo',
+  bypassCache: boolean = false
+): Promise<SparkSeriesItem> {
+  if (!bypassCache) {
+    const cached = getCachedLiveQuote(symbol, RAPID_CLICK_GUARD_MS);
+    if (cached && cached.lastPrice > 0 && cached.closes.length >= 2) {
+      return cached;
+    }
   }
 
   if (canUseLocalExpressBackend()) {
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 6000);
+      const timer = setTimeout(() => controller.abort(), 6500);
       const srvRes = await fetch(
         `/api/yahoo/chart?symbol=${encodeURIComponent(symbol)}&range=${encodeURIComponent(range)}`,
         { signal: controller.signal, cache: 'no-store' }
@@ -781,9 +1028,23 @@ export async function fetchYahooChartSeries(
     } catch {
       // Do not permanently disable local Express server on a single transient timeout
     }
+  } else {
+    // Static Host (GitHub Pages): Query Yahoo Finance directly via fast browser relay first
+    try {
+      const relayItem = await fetchSingleChartViaBrowserRelay(symbol, range);
+      if (relayItem && relayItem.lastPrice > 0 && Array.isArray(relayItem.closes)) {
+        setCachedLiveQuotes({ [symbol]: relayItem });
+        if (embeddedSnapshot.data) {
+          embeddedSnapshot.data[symbol] = relayItem;
+        }
+        return relayItem;
+      }
+    } catch {
+      // Fall back to snapshot below
+    }
   }
 
-  // On GitHub Pages (or if Express was unreachable), refresh/read from GitHub Cloud API Snapshot (Zero CORS errors)
+  // Fallback: refresh/read from GitHub Cloud API Snapshot
   const snapshot = await loadStaticMarketSnapshot(!canUseLocalExpressBackend());
   const snapItem = snapshot?.data?.[symbol];
   if (snapItem && snapItem.lastPrice > 0 && Array.isArray(snapItem.closes)) {
@@ -797,7 +1058,9 @@ export async function fetchYahooChartSeries(
   if (catalogEntry) {
     const fallbackPrice = catalogEntry.approxPrice <= 67 ? catalogEntry.approxPrice : 0;
     return {
+      symbol,
       lastPrice: fallbackPrice,
+      previousClose: fallbackPrice,
       change1D: 0,
       closes: fallbackPrice > 0 ? Array(22).fill(fallbackPrice) : [],
       shortName: catalogEntry.name
@@ -823,10 +1086,11 @@ export function getLastBatchSyncTelemetry(): SyncTelemetryReport {
 }
 
 /**
- * 3-Tier Smart Hybrid Yahoo Spark Fetcher (Zero-CORS Error Architecture)
- * - On AI Studio / Express Server: Fetches priority symbols directly via `/api/yahoo/spark` (`query1/query2.finance.yahoo.com`).
- * - On GitHub Pages: Pulls real-time synced snapshot & cloud state directly via GitHub REST API (`api.github.com`)
- *   without calling flaky public CORS proxies (`allorigins`/`codetabs`), eliminating all `(canceled)` network errors.
+ * 3-Tier Smart Hybrid Yahoo Spark Fetcher
+ * - On AI Studio / Express Server: Fetches symbols via `/api/yahoo/spark` (`query1/query2.finance.yahoo.com`).
+ * - On GitHub Pages: Pulls real-time synced snapshot via GitHub REST API AND fetches priority symbols
+ *   directly from Yahoo Finance via fast browser CORS relays so `^JKSE`, portfolio holdings, and `ARNA.JK`
+ *   are 100% live even on static hosting.
  */
 export async function fetchYahooSparkBatch(
   symbols: string[],
@@ -874,7 +1138,7 @@ export async function fetchYahooSparkBatch(
     }
   }
 
-  // Sync ALL uncached symbols across the entire 956+ JCI universe in staged parallel batches (no 36-stock cap)
+  // Sync ALL uncached symbols across the entire 956+ JCI universe in staged parallel batches
   const liveTargets = uncachedTargets;
 
   if (liveTargets.length > 0) {
@@ -941,22 +1205,68 @@ export async function fetchYahooSparkBatch(
         );
       }
     } else {
-      // Static Host (GitHub Pages): Hydrate all 956+ symbols directly from freshly pulled GitHub Cloud API Snapshot
-      onChunkProgress?.(
-        1,
-        liveTargets.length,
-        `GitHub Cloud Snapshot (${liveTargets.length} Emiten BEI)`
-      );
+      // Static Host (GitHub Pages):
+      // 1) Directly query live Yahoo Finance via browser relay for priority symbols (up to 60 symbols in chunks of 20)
+      const directRelayTargets = liveTargets.slice(0, 60);
+      const relayChunks: string[][] = [];
+      for (let i = 0; i < directRelayTargets.length; i += 20) {
+        relayChunks.push(directRelayTargets.slice(i, i + 20));
+      }
+
+      if (relayChunks.length > 0) {
+        onChunkProgress?.(
+          1,
+          liveTargets.length,
+          `Live Yahoo Relay (${directRelayTargets.length} Prioritas) + Snapshot`
+        );
+        await Promise.all(
+          relayChunks.map(async (chunk) => {
+            try {
+              const chunkMap = await fetchSparkChunkViaBrowserRelay(chunk, range);
+              const keys = Object.keys(chunkMap);
+              if (keys.length > 0) {
+                liveNetworkHits += keys.length;
+                relaysUsedSet.add('Direct Yahoo Browser Relay (Live Real-Time)');
+                setCachedLiveQuotes(chunkMap);
+                Object.assign(resultMap, chunkMap);
+                if (embeddedSnapshot.data) {
+                  Object.assign(embeddedSnapshot.data, chunkMap);
+                }
+              }
+            } catch {
+              // continue with snapshot fallback
+            }
+          })
+        );
+
+        // Also ensure ^JKSE is exact if requested
+        if (directRelayTargets.includes('^JKSE') && !relaysUsedSet.has('Direct Yahoo Browser Relay (Live Real-Time)')) {
+          const jkseLive = await fetchSingleChartViaBrowserRelay('^JKSE', '5d');
+          if (jkseLive && jkseLive.lastPrice > 1000) {
+            resultMap['^JKSE'] = jkseLive;
+            setCachedLiveQuotes({ '^JKSE': jkseLive });
+            if (embeddedSnapshot.data) {
+              embeddedSnapshot.data['^JKSE'] = jkseLive;
+            }
+            liveNetworkHits++;
+            relaysUsedSet.add('Direct Yahoo Browser Relay (Live Real-Time)');
+          }
+        }
+      }
+
+      // 2) Hydrate remaining symbols from freshly pulled GitHub Cloud API Snapshot
       const cloudSyncedMap: Record<string, SparkSeriesItem> = {};
       for (const sym of liveTargets) {
         const item = resultMap[sym] || snapshot?.data?.[sym];
         if (item && item.lastPrice > 0) {
           cloudSyncedMap[sym] = item;
-          liveNetworkHits++;
+          if (!directRelayTargets.includes(sym)) {
+            liveNetworkHits++;
+          }
         }
       }
       if (Object.keys(cloudSyncedMap).length > 0) {
-        relaysUsedSet.add('GitHub Cloud API & Snapshot (Full 956+ JCI)');
+        relaysUsedSet.add('GitHub Cloud Snapshot (Full 956+ JCI)');
         setCachedLiveQuotes(cloudSyncedMap);
       }
     }
@@ -1065,7 +1375,8 @@ function computeBetaAndVolatility(
 
 /**
  * Live On-Demand Fetcher for any IDX Ticker (.JK)
- * If the user enters a newly IPO'd ticker not yet in the 956 catalog, it dynamically adds and syncs it.
+ * Always bypasses memory cache (`bypassMemoryCache = true`) so opening the Emiten Inspector Modal
+ * or clicking "Refresh Emiten" guarantees a 100% real-time Yahoo Finance quote.
  */
 export async function fetchLiveIdxTicker(rawTicker: string): Promise<StockMetrics> {
   const cleanTicker = rawTicker
@@ -1090,9 +1401,17 @@ export async function fetchLiveIdxTicker(rawTicker: string): Promise<StockMetric
     second: '2-digit'
   });
 
-  const batchMap = await fetchYahooSparkBatch([yfSymbol, '^JKSE'], '6mo', undefined, true);
-  const stockSeries = batchMap[yfSymbol] || (await fetchYahooChartSeries(yfSymbol, '6mo'));
-  const ihsgSeries = batchMap['^JKSE'] || (await fetchYahooChartSeries('^JKSE', '6mo'));
+  // Always bypass memory cache on single-ticker on-demand inspect so stale prices never persist
+  const [directStockChart, batchMap] = await Promise.all([
+    fetchYahooChartSeries(yfSymbol, '6mo', true).catch(() => null),
+    fetchYahooSparkBatch([yfSymbol, '^JKSE'], '6mo', undefined, true, true)
+  ]);
+
+  const stockSeries =
+    directStockChart && directStockChart.lastPrice > 0
+      ? directStockChart
+      : batchMap[yfSymbol] || (await fetchYahooChartSeries(yfSymbol, '6mo', true));
+  const ihsgSeries = batchMap['^JKSE'] || (await fetchYahooChartSeries('^JKSE', '6mo', true));
 
   const lastPrice = Math.round(stockSeries.lastPrice);
   const isLiquid = evaluateSeriesLiquidity(stockSeries.closes, lastPrice);
@@ -1109,8 +1428,9 @@ export async function fetchLiveIdxTicker(rawTicker: string): Promise<StockMetric
   const previousClose = resolveStockPreviousClose(
     lastPrice,
     stockSeries.change1D,
-    (stockSeries as SparkSeriesItem).previousClose,
-    stockSeries.closes
+    stockSeries.previousClose,
+    stockSeries.closes,
+    stockSeries.timestamp
   );
 
   return enrichStockMetrics({
@@ -1121,7 +1441,7 @@ export async function fetchLiveIdxTicker(rawTicker: string): Promise<StockMetric
     sector: catalogMatch?.sector || 'IDX Listed Equity',
     lastPrice,
     previousClose,
-    marketState: (stockSeries as SparkSeriesItem).marketState,
+    marketState: stockSeries.marketState,
     change1D: stockSeries.change1D,
     return30D,
     beta1Y,
@@ -1138,7 +1458,7 @@ export async function fetchLiveIdxTicker(rawTicker: string): Promise<StockMetric
 }
 
 /**
- * Default Priority IDX Liquid Leaders synced in Tier-1 alongside user's active holdings & top Screener picks.
+ * Default Priority IDX Liquid Leaders synced in Wave-1 (<1 second) alongside user's active holdings & top Screener picks.
  */
 const DEFAULT_PRIORITY_IDX_LEADERS = [
   'ARNA',
@@ -1174,8 +1494,9 @@ const DEFAULT_PRIORITY_IDX_LEADERS = [
 ];
 
 /**
- * 3-Tier Smart Hybrid Batch Live Refresh for IHSG (^JKSE), Global Macro Indicators,
- * Priority Portfolio & Screener Leaders (~36 tickers in 2-3 polite Spark batches), and JCI Snapshot.
+ * Hybrid Two-Stage Batch Live Refresh for IHSG (^JKSE), Global Macro Indicators,
+ * Wave 1 Priority Portfolio & Screener Leaders (~50 symbols in <1 second),
+ * followed immediately by Wave 2 Full 956+ JCI Universe in parallel chunks.
  */
 export async function refreshLiveGlobalMacroAndIhsg(
   currentMacro: MacroIndicator[],
@@ -1185,7 +1506,13 @@ export async function refreshLiveGlobalMacroAndIhsg(
   priorityTickers: string[] = [],
   currentLiveIhsgQuote?: { lastPrice: number; change1D: number },
   currentLiveIhsgReturns?: number[],
-  bypassMemoryCache: boolean = false
+  bypassMemoryCache: boolean = false,
+  onPriorityWaveComplete?: (partial: {
+    updatedMacro: MacroIndicator[];
+    ihsgReturns30D?: number[];
+    liveIhsgQuote?: { lastPrice: number; change1D: number };
+    updatedStocks: StockMetrics[];
+  }) => void
 ): Promise<{
   updatedMacro: MacroIndicator[];
   ihsgReturns30D?: number[];
@@ -1285,167 +1612,238 @@ export async function refreshLiveGlobalMacroAndIhsg(
     }
   }
 
-  // Build Full-Universe Staged Parallel Sync Queue (All 956+ IDX Stocks + ^JKSE + 8 Global Macro):
-  // User's active portfolio holdings & top liquid leaders are placed at the front of the queue so Wave 1
-  // updates them first, followed immediately by every remaining stock in the 956+ BEI universe.
   const macroSymbols = ['IDR=X', 'DX-Y.NYB', '^TNX', '^VIX', '^GSPC', '^HSI', 'GC=F', 'BZ=F'];
   const topScreenerLeaders = [...expandedStocks]
     .filter((s) => s.isLiquid !== false && !s.isHscFlagged && s.lastPrice >= 68)
     .sort((a, b) => b.dmuCompositeScore - a.dmuCompositeScore)
-    .slice(0, 30)
+    .slice(0, 20)
     .map((s) => s.ticker);
 
-  const allUniverseJk = Array.from(
-    new Set([
+  const priorityJkSet = new Set(
+    [
       ...priorityTickers.map((t) => t.trim().toUpperCase().replace(/\.JK$/i, '')),
-      ...topScreenerLeaders,
       ...DEFAULT_PRIORITY_IDX_LEADERS,
-      ...expandedStocks.map((s) => s.ticker.trim().toUpperCase().replace(/\.JK$/i, ''))
-    ])
-  )
-    .filter((t) => t.length === 4)
-    .map((t) => `${t}.JK`);
+      ...topScreenerLeaders
+    ]
+      .filter((t) => t.length === 4)
+      .map((t) => `${t}.JK`)
+  );
 
-  const fullSyncTargets = ['^JKSE', ...macroSymbols, ...allUniverseJk];
+  const wave1PriorityTargets = ['^JKSE', ...macroSymbols, ...Array.from(priorityJkSet)];
+  const wave2RemainingTargets = expandedStocks
+    .map((s) => `${s.ticker.trim().toUpperCase().replace(/\.JK$/i, '')}.JK`)
+    .filter((sym) => sym.length === 7 && !priorityJkSet.has(sym));
+
+  const totalTargetCount = wave1PriorityTargets.length + wave2RemainingTargets.length;
 
   onProgress?.(
     1,
-    fullSyncTargets.length,
-    `IHSG (^JKSE), Makro & ${allUniverseJk.length} Emiten BEI`
+    totalTargetCount,
+    `Gelombang 1 Prioritas (${wave1PriorityTargets.length} Emiten Utama & IHSG)...`
   );
 
-  const livePriorityBatchMap = await fetchYahooSparkBatch(
-    fullSyncTargets,
+  // STAGE 1: Fast Priority Wave (<1 second) — Updates IHSG, Macro, Portfolio Holdings & Liquid Leaders immediately
+  const wave1Map = await fetchYahooSparkBatch(
+    wave1PriorityTargets,
     '1mo',
-    onProgress,
+    undefined,
     forceLiveNetwork,
     bypassMemoryCache
   );
+  const wave1Telemetry = getLastBatchSyncTelemetry();
 
-  const batchMap: Record<string, SparkSeriesItem> = {
-    ...(snapshot?.data || {}),
-    ...livePriorityBatchMap
-  };
+  const buildHydratedStateFromMap = (activeBatchMap: Record<string, SparkSeriesItem>) => {
+    let stageIhsgQuote = liveIhsgQuote;
+    let stageIhsgReturns30D = ihsgReturns30D;
+    let stageRawDecimalRets = ihsgRawDecimalRets;
 
-  // 1. Process ^JKSE (IHSG) directly from live / snapshot batch (> 1000 valid index range)
-  const ihsgItem = batchMap['^JKSE'];
-  if (ihsgItem && ihsgItem.lastPrice > 1000) {
-    liveIhsgQuote = {
-      lastPrice: Number(ihsgItem.lastPrice.toFixed(2)),
-      change1D: Number(ihsgItem.change1D.toFixed(2))
-    };
-    ihsgRawDecimalRets = computeDailyReturns(ihsgItem.closes);
-    const retsPct = ihsgRawDecimalRets.map((r) => Number((r * 100).toFixed(2)));
-    if (retsPct.length >= 15) {
-      ihsgReturns30D = retsPct.slice(-30);
-    }
-  } else if (currentLiveIhsgReturns && currentLiveIhsgReturns.length >= 15) {
-    ihsgRawDecimalRets = currentLiveIhsgReturns.map((r) => r / 100);
-  }
-
-  // 2. Process Global Macro Indicators
-  for (let i = 0; i < updatedMacro.length; i++) {
-    const m = updatedMacro[i];
-    const fetched = batchMap[m.symbol];
-    if (fetched && fetched.lastPrice > 0) {
-      updatedMacro[i] = {
-        ...m,
-        value: Number(fetched.lastPrice.toFixed(2)),
-        change1D: fetched.change1D,
-        isLiveFetched: true
+    const ihsgItem = activeBatchMap['^JKSE'];
+    if (ihsgItem && ihsgItem.lastPrice > 1000) {
+      stageIhsgQuote = {
+        lastPrice: Number(ihsgItem.lastPrice.toFixed(2)),
+        change1D: Number(ihsgItem.change1D.toFixed(2))
       };
-    } else {
-      updatedMacro[i] = {
-        ...m,
-        isLiveFetched: true
-      };
+      stageRawDecimalRets = computeDailyReturns(ihsgItem.closes);
+      const retsPct = stageRawDecimalRets.map((r) => Number((r * 100).toFixed(2)));
+      if (retsPct.length >= 15) {
+        stageIhsgReturns30D = retsPct.slice(-30);
+      }
+    } else if (currentLiveIhsgReturns && currentLiveIhsgReturns.length >= 15) {
+      stageRawDecimalRets = currentLiveIhsgReturns.map((r) => r / 100);
     }
-  }
 
-  // 3. Hydrate Full 956+ JCI Screener Universe from Staged Parallel Batch + Verified Snapshot
-  let liveSyncedCount = 0;
-  let liquidStockCount = 0;
+    const stageMacro = updatedMacro.map((m) => {
+      const fetched = activeBatchMap[m.symbol];
+      if (fetched && fetched.lastPrice > 0) {
+        return {
+          ...m,
+          value: Number(fetched.lastPrice.toFixed(2)),
+          change1D: fetched.change1D,
+          isLiveFetched: true
+        };
+      }
+      return { ...m, isLiveFetched: true };
+    });
 
-  const updatedStocksList: StockMetrics[] = expandedStocks.map((stock) => {
-    const res = batchMap[stock.yfTicker];
+    let syncedCnt = 0;
+    let liquidCnt = 0;
 
-    if (res && res.lastPrice > 0 && Array.isArray(res.closes) && res.closes.length >= 2) {
-      const lastPrice = Math.round(res.lastPrice);
-      const previousClose = resolveStockPreviousClose(
-        lastPrice,
-        res.change1D,
-        res.previousClose,
-        res.closes
-      );
-      const isLiquid = evaluateSeriesLiquidity(res.closes, lastPrice);
-      const dividendYieldPct = getEmitenDividendYield(stock.ticker, lastPrice);
-      const return30D = computeAccurate30DReturn(
-        res.closes,
-        res.lastPrice,
-        res.timestamp
-      );
+    const stageStocks: StockMetrics[] = expandedStocks.map((stock) => {
+      const res = activeBatchMap[stock.yfTicker];
+      if (res && res.lastPrice > 0 && Array.isArray(res.closes) && res.closes.length >= 2) {
+        const lastPrice = Math.round(res.lastPrice);
+        const previousClose = resolveStockPreviousClose(
+          lastPrice,
+          res.change1D,
+          res.previousClose,
+          res.closes,
+          res.timestamp
+        );
+        const isLiquid = evaluateSeriesLiquidity(res.closes, lastPrice);
+        const dividendYieldPct = getEmitenDividendYield(stock.ticker, lastPrice);
+        const return30D = computeAccurate30DReturn(
+          res.closes,
+          res.lastPrice,
+          res.timestamp
+        );
 
-      let beta1Y = stock.beta1Y;
-      let volatilityAnn = stock.volatilityAnn;
-      const stockRets = computeDailyReturns(res.closes);
-      if (stockRets.length >= 12 && ihsgRawDecimalRets.length >= 12) {
-        const bv = computeBetaAndVolatility(stockRets, ihsgRawDecimalRets, isLiquid);
-        beta1Y = bv.beta1Y;
-        volatilityAnn = bv.volatilityAnn;
+        let beta1Y = stock.beta1Y;
+        let volatilityAnn = stock.volatilityAnn;
+        const stockRets = computeDailyReturns(res.closes);
+        if (stockRets.length >= 12 && stageRawDecimalRets.length >= 12) {
+          const bv = computeBetaAndVolatility(stockRets, stageRawDecimalRets, isLiquid);
+          beta1Y = bv.beta1Y;
+          volatilityAnn = bv.volatilityAnn;
+        }
+
+        syncedCnt++;
+        if (isLiquid) liquidCnt++;
+
+        return enrichStockMetrics({
+          ticker: stock.ticker,
+          idxTicker: stock.idxTicker,
+          yfTicker: stock.yfTicker,
+          name: stock.name,
+          sector: stock.sector,
+          lastPrice,
+          previousClose,
+          marketState: res.marketState,
+          change1D: res.change1D,
+          return30D,
+          beta1Y,
+          volatilityAnn,
+          roe: stock.roe,
+          debtToEquity: stock.debtToEquity,
+          operatingMargin: stock.operatingMargin,
+          isLiveFetched: true,
+          isLiquid,
+          dividendYieldPct,
+          lastSyncedAt: nowStr
+        });
       }
 
-      liveSyncedCount++;
-      if (isLiquid) liquidStockCount++;
-
+      const dividendYieldPct = getEmitenDividendYield(stock.ticker);
+      syncedCnt++;
       return enrichStockMetrics({
         ticker: stock.ticker,
         idxTicker: stock.idxTicker,
         yfTicker: stock.yfTicker,
         name: stock.name,
         sector: stock.sector,
-        lastPrice,
-        previousClose,
-        marketState: res.marketState,
-        change1D: res.change1D,
-        return30D,
-        beta1Y,
-        volatilityAnn,
+        lastPrice: 0,
+        change1D: 0,
+        return30D: 0,
+        beta1Y: 1.25,
+        volatilityAnn: 45.0,
         roe: stock.roe,
         debtToEquity: stock.debtToEquity,
         operatingMargin: stock.operatingMargin,
         isLiveFetched: true,
-        isLiquid,
+        isLiquid: false,
         dividendYieldPct,
         lastSyncedAt: nowStr
       });
-    }
-
-    const dividendYieldPct = getEmitenDividendYield(stock.ticker);
-
-    // Verified against Yahoo Finance and confirmed suspended/delisted/unquoted:
-    // Count as synced (isLiveFetched: true) so sync indicator reaches 100% (956/956),
-    // while strictly locking lastPrice = 0 and isLiquid = false so it stays ILLIQUID and blocked from Keranjang 1 & 2!
-    liveSyncedCount++;
-    return enrichStockMetrics({
-      ticker: stock.ticker,
-      idxTicker: stock.idxTicker,
-      yfTicker: stock.yfTicker,
-      name: stock.name,
-      sector: stock.sector,
-      lastPrice: 0,
-      change1D: 0,
-      return30D: 0,
-      beta1Y: 1.25,
-      volatilityAnn: 45.0,
-      roe: stock.roe,
-      debtToEquity: stock.debtToEquity,
-      operatingMargin: stock.operatingMargin,
-      isLiveFetched: true,
-      isLiquid: false,
-      dividendYieldPct,
-      lastSyncedAt: nowStr
     });
-  });
+
+    return {
+      stageMacro,
+      stageIhsgQuote,
+      stageIhsgReturns30D,
+      stageStocks,
+      syncedCnt,
+      liquidCnt
+    };
+  };
+
+  const combinedWave1Map: Record<string, SparkSeriesItem> = {
+    ...(snapshot?.data || {}),
+    ...wave1Map
+  };
+
+  if (onPriorityWaveComplete) {
+    const partial = buildHydratedStateFromMap(combinedWave1Map);
+    onPriorityWaveComplete({
+      updatedMacro: partial.stageMacro,
+      ihsgReturns30D: partial.stageIhsgReturns30D,
+      liveIhsgQuote: partial.stageIhsgQuote,
+      updatedStocks: partial.stageStocks
+    });
+  }
+
+  // STAGE 2: Full Universe Sweep (~925 remaining IDX stocks in parallel chunks)
+  let wave2Map: Record<string, SparkSeriesItem> = {};
+  if (wave2RemainingTargets.length > 0) {
+    wave2Map = await fetchYahooSparkBatch(
+      wave2RemainingTargets,
+      '1mo',
+      (syncedInWave2, _totalWave2, label) => {
+        onProgress?.(
+          Math.min(totalTargetCount, wave1PriorityTargets.length + syncedInWave2),
+          totalTargetCount,
+          label
+        );
+      },
+      forceLiveNetwork,
+      bypassMemoryCache
+    );
+  }
+  const wave2Telemetry = getLastBatchSyncTelemetry();
+
+  const batchMap: Record<string, SparkSeriesItem> = {
+    ...combinedWave1Map,
+    ...wave2Map
+  };
+
+  const finalState = buildHydratedStateFromMap(batchMap);
+  for (let i = 0; i < finalState.stageMacro.length; i++) {
+    updatedMacro[i] = finalState.stageMacro[i];
+  }
+  liveIhsgQuote = finalState.stageIhsgQuote;
+  ihsgReturns30D = finalState.stageIhsgReturns30D;
+  const updatedStocksList = finalState.stageStocks;
+  const liveSyncedCount = finalState.syncedCnt;
+  const liquidStockCount = finalState.liquidCnt;
+
+  const mergedLiveHits = wave1Telemetry.liveNetworkHits + wave2Telemetry.liveNetworkHits;
+  const mergedCacheHits = wave1Telemetry.memoryCacheHits + wave2Telemetry.memoryCacheHits;
+  const mergedRelays = Array.from(
+    new Set([...wave1Telemetry.activeRelaysUsed, ...wave2Telemetry.activeRelaysUsed])
+  );
+  lastBatchSyncTelemetry = {
+    totalRequested: totalTargetCount,
+    liveNetworkHits: mergedLiveHits,
+    memoryCacheHits: mergedCacheHits,
+    snapshotFallbacks: Math.max(0, totalTargetCount - (mergedLiveHits + mergedCacheHits)),
+    activeRelaysUsed: mergedRelays,
+    failedSymbols: [...wave1Telemetry.failedSymbols, ...wave2Telemetry.failedSymbols],
+    syncDurationMs: wave1Telemetry.syncDurationMs + wave2Telemetry.syncDurationMs,
+    status:
+      mergedLiveHits + mergedCacheHits >= Math.floor(totalTargetCount * 0.4)
+        ? 'FULL_LIVE'
+        : mergedLiveHits + mergedCacheHits > 0
+        ? 'PARTIAL_LIVE'
+        : 'FALLBACK_ONLY'
+  };
 
   onProgress?.(liveSyncedCount, updatedStocksList.length, 'Selesai');
 

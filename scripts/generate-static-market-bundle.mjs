@@ -213,6 +213,40 @@ async function discoverLiveIdxScreenerTickers() {
   return discovered;
 }
 
+function isSameJakartaTradingDay(tsA, tsB) {
+  if (
+    typeof tsA !== 'number' ||
+    typeof tsB !== 'number' ||
+    !Number.isFinite(tsA) ||
+    !Number.isFinite(tsB)
+  ) {
+    return false;
+  }
+  try {
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Jakarta',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
+    return fmt.format(new Date(tsA * 1000)) === fmt.format(new Date(tsB * 1000));
+  } catch {
+    return Math.abs(tsA - tsB) < 43200;
+  }
+}
+
+function resolveDailyPreviousCloseFromSeries(closes, timestamps) {
+  if (!Array.isArray(closes) || closes.length < 2) return 0;
+  const n = closes.length;
+  if (Array.isArray(timestamps) && timestamps.length === n && n >= 2) {
+    if (isSameJakartaTradingDay(timestamps[n - 1], timestamps[n - 2])) {
+      return n >= 3 ? closes[n - 3] : closes[n - 2];
+    }
+    return closes[n - 2];
+  }
+  return closes[n - 2];
+}
+
 async function fetchSingleChart(symbol, range = '3mo', hostIdx = 0) {
   const hosts = ['query1.finance.yahoo.com', 'query2.finance.yahoo.com'];
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -222,10 +256,20 @@ async function fetchSingleChart(symbol, range = '3mo', hostIdx = 0) {
       const data = await fetchJson(url, 6500);
       const result = data?.chart?.result?.[0];
       if (!result) continue;
+      const rawTimestamps = result?.timestamp || [];
       const rawCloses = result?.indicators?.quote?.[0]?.close || [];
-      const closes = rawCloses
-        .filter((c) => typeof c === 'number' && Number.isFinite(c) && c > 0)
-        .map((c) => Number(c));
+      const closes = [];
+      const timestamps = [];
+      for (let i = 0; i < rawCloses.length; i++) {
+        const c = rawCloses[i];
+        if (typeof c === 'number' && Number.isFinite(c) && c > 0) {
+          closes.push(Number(c.toFixed(2)));
+          const t = rawTimestamps[i];
+          if (typeof t === 'number' && Number.isFinite(t)) {
+            timestamps.push(t);
+          }
+        }
+      }
       const metaLivePrice = Number(
         result?.meta?.regularMarketPrice ??
         result?.meta?.fulldayPrice ??
@@ -234,14 +278,26 @@ async function fetchSingleChart(symbol, range = '3mo', hostIdx = 0) {
       );
       const lastPrice =
         Number.isFinite(metaLivePrice) && metaLivePrice > 0
-          ? metaLivePrice
+          ? Number(metaLivePrice.toFixed(2))
           : closes.length > 0
           ? closes[closes.length - 1]
           : 0;
       if (!lastPrice || lastPrice <= 0) continue;
 
-      if (closes.length > 0 && Math.abs(closes[closes.length - 1] - lastPrice) > 1e-6) {
-        closes[closes.length - 1] = lastPrice;
+      const rawTrailingWasNull =
+        rawCloses.length > 0 && rawCloses[rawCloses.length - 1] === null;
+      if (closes.length > 0) {
+        if (
+          rawTrailingWasNull &&
+          typeof result?.meta?.regularMarketTime === 'number' &&
+          timestamps.length > 0 &&
+          !isSameJakartaTradingDay(timestamps[timestamps.length - 1], result.meta.regularMarketTime)
+        ) {
+          closes.push(lastPrice);
+          timestamps.push(result.meta.regularMarketTime);
+        } else if (Math.abs(closes[closes.length - 1] - lastPrice) > 1e-6) {
+          closes[closes.length - 1] = lastPrice;
+        }
       }
 
       const metaChangePct = Number(
@@ -251,15 +307,11 @@ async function fetchSingleChart(symbol, range = '3mo', hostIdx = 0) {
       );
       const dailyPrevClose =
         closes.length >= 2
-          ? closes[closes.length - 2] !== lastPrice
-            ? closes[closes.length - 2]
-            : closes.length >= 3
-            ? closes[closes.length - 3]
-            : closes[closes.length - 2]
+          ? resolveDailyPreviousCloseFromSeries(closes, timestamps)
           : lastPrice;
       const metaPrevClose = Number(result?.meta?.previousClose ?? 0);
       const prevClose =
-        Number.isFinite(metaPrevClose) && metaPrevClose > 0 && metaPrevClose !== lastPrice
+        Number.isFinite(metaPrevClose) && metaPrevClose > 0
           ? metaPrevClose
           : dailyPrevClose;
       const change1D = Number.isFinite(metaChangePct)
@@ -267,12 +319,16 @@ async function fetchSingleChart(symbol, range = '3mo', hostIdx = 0) {
         : prevClose > 0
         ? Number((((lastPrice - prevClose) / prevClose) * 100).toFixed(2))
         : 0;
+      const slicedCloses = closes.length >= 2 ? closes.slice(-35) : [prevClose, lastPrice];
+      const slicedTimestamps =
+        timestamps.length === closes.length ? timestamps.slice(-35) : undefined;
       return {
         symbol,
         lastPrice,
         previousClose: Number(prevClose.toFixed(2)),
         change1D,
-        closes: closes.length >= 2 ? closes.slice(-35) : [prevClose, lastPrice],
+        closes: slicedCloses,
+        timestamp: slicedTimestamps,
         shortName: result?.meta?.longName || result?.meta?.shortName,
         marketState: result?.meta?.marketState
       };
@@ -283,8 +339,18 @@ async function fetchSingleChart(symbol, range = '3mo', hostIdx = 0) {
   return null;
 }
 
+function hasMissingWeekdayBar(timestamps) {
+  if (!Array.isArray(timestamps) || timestamps.length < 2) return false;
+  const lastTs = timestamps[timestamps.length - 1];
+  const prevTs = timestamps[timestamps.length - 2];
+  const gapSeconds = lastTs - prevTs;
+  const lastDayOfWeek = new Date(lastTs * 1000).getUTCDay(); // 1 = Monday
+  return gapSeconds > 120000 && lastDayOfWeek !== 1;
+}
+
 async function fetchSparkChunk(chunk, range = '3mo', chunkIdx = 0) {
   const resultMap = {};
+  const symbolsNeedingChartHeal = new Set();
   const host = chunkIdx % 2 === 0 ? 'query1.finance.yahoo.com' : 'query2.finance.yahoo.com';
   const joined = chunk.map((s) => encodeURIComponent(s)).join(',');
   const sparkUrl = `https://${host}/v8/finance/spark?symbols=${joined}&range=${encodeURIComponent(range)}&interval=1d`;
@@ -294,10 +360,20 @@ async function fetchSparkChunk(chunk, range = '3mo', chunkIdx = 0) {
     if (sparkData && typeof sparkData === 'object') {
       for (const sym of chunk) {
         const entry = sparkData[sym];
+        const rawTimestamps = entry?.timestamp || [];
         const rawCloses = entry?.close || [];
-        const closes = rawCloses
-          .filter((c) => typeof c === 'number' && Number.isFinite(c) && c > 0)
-          .map((c) => Number(c));
+        const closes = [];
+        const timestamps = [];
+        for (let i = 0; i < rawCloses.length; i++) {
+          const c = rawCloses[i];
+          if (typeof c === 'number' && Number.isFinite(c) && c > 0) {
+            closes.push(Number(c.toFixed(2)));
+            const t = rawTimestamps[i];
+            if (typeof t === 'number' && Number.isFinite(t)) {
+              timestamps.push(t);
+            }
+          }
+        }
         const liveFieldPrice = Number(
           entry?.regularMarketPrice ??
           entry?.fulldayPrice ??
@@ -306,15 +382,34 @@ async function fetchSparkChunk(chunk, range = '3mo', chunkIdx = 0) {
         );
         const lastPrice =
           Number.isFinite(liveFieldPrice) && liveFieldPrice > 0
-            ? liveFieldPrice
+            ? Number(liveFieldPrice.toFixed(2))
             : closes.length > 0
             ? closes[closes.length - 1]
             : 0;
 
         if (lastPrice > 0 && (closes.length >= 2 || Number.isFinite(liveFieldPrice))) {
-          if (closes.length > 0 && Math.abs(closes[closes.length - 1] - lastPrice) > 1e-6) {
+          const rawTrailingWasNull =
+            rawCloses.length > 0 && rawCloses[rawCloses.length - 1] === null;
+          if (
+            rawTrailingWasNull &&
+            rawTimestamps.length > 0 &&
+            typeof rawTimestamps[rawTimestamps.length - 1] === 'number' &&
+            timestamps.length > 0 &&
+            !isSameJakartaTradingDay(
+              timestamps[timestamps.length - 1],
+              rawTimestamps[rawTimestamps.length - 1]
+            )
+          ) {
+            closes.push(lastPrice);
+            timestamps.push(rawTimestamps[rawTimestamps.length - 1]);
+          } else if (closes.length > 0 && Math.abs(closes[closes.length - 1] - lastPrice) > 1e-6) {
             closes[closes.length - 1] = lastPrice;
           }
+
+          if (lastPrice >= 68 && hasMissingWeekdayBar(timestamps)) {
+            symbolsNeedingChartHeal.add(sym);
+          }
+
           const rawChangePct = Number(
             entry?.regularMarketChangePercent ??
             entry?.fulldayChangePercent ??
@@ -322,15 +417,11 @@ async function fetchSparkChunk(chunk, range = '3mo', chunkIdx = 0) {
           );
           const dailyPrevClose =
             closes.length >= 2
-              ? closes[closes.length - 2] !== lastPrice
-                ? closes[closes.length - 2]
-                : closes.length >= 3
-                ? closes[closes.length - 3]
-                : closes[closes.length - 2]
+              ? resolveDailyPreviousCloseFromSeries(closes, timestamps)
               : lastPrice;
           const entryPrevClose = Number(entry?.previousClose ?? 0);
           const prevClose =
-            Number.isFinite(entryPrevClose) && entryPrevClose > 0 && entryPrevClose !== lastPrice
+            Number.isFinite(entryPrevClose) && entryPrevClose > 0
               ? entryPrevClose
               : dailyPrevClose;
           const change1D = Number.isFinite(rawChangePct)
@@ -338,12 +429,16 @@ async function fetchSparkChunk(chunk, range = '3mo', chunkIdx = 0) {
             : prevClose > 0
             ? Number((((lastPrice - prevClose) / prevClose) * 100).toFixed(2))
             : 0;
+          const slicedCloses = closes.length >= 2 ? closes.slice(-35) : [prevClose, lastPrice];
+          const slicedTimestamps =
+            timestamps.length === closes.length ? timestamps.slice(-35) : undefined;
           resultMap[sym] = {
             symbol: sym,
             lastPrice,
             previousClose: Number(prevClose.toFixed(2)),
             change1D,
-            closes: closes.length >= 2 ? closes.slice(-35) : [prevClose, lastPrice],
+            closes: slicedCloses,
+            timestamp: slicedTimestamps,
             marketState: entry?.marketState
           };
         }
@@ -353,7 +448,7 @@ async function fetchSparkChunk(chunk, range = '3mo', chunkIdx = 0) {
     // fallback below
   }
 
-  const missing = chunk.filter((s) => !resultMap[s]);
+  const missing = chunk.filter((s) => !resultMap[s] || symbolsNeedingChartHeal.has(s));
   if (missing.length > 0) {
     await Promise.all(
       missing.map(async (sym, idx) => {

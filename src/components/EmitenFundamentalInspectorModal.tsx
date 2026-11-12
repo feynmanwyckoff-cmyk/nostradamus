@@ -911,12 +911,19 @@ export function EmitenFundamentalInspectorModal({
                 <MetricTooltip
                   label="HARGA PASAR LIVE (BEI)"
                   title="Kuotasi Harga Pasar Reguler BEI (.JK)"
-                  laymanExplanation="Harga transaksi terakhir saham di pasar reguler Bursa Efek Indonesia beserta persentase perubahan harian (1D) dan bulanan (30D)."
+                  laymanExplanation="Harga transaksi terakhir saham di pasar reguler Bursa Efek Indonesia beserta acuan harga penutupan sesi sebelumnya (Previous Close), persentase perubahan harian (1D), dan bulanan (30D)."
                   practicalGuide="Bandingkan harga pasar ini terhadap Nilai Intrinsik Wajar di sebelahnya untuk melihat apakah saham sedang terdiskon atau sudah mahal."
                 />
               </div>
-              <div className="text-lg font-bold font-mono text-[#111315] mt-1">
-                Rp {formatIdrPriceDisplay(activeStock.lastPrice)}
+              <div className="flex items-baseline justify-between gap-2 mt-1">
+                <div className="text-lg font-bold font-mono text-[#111315]">
+                  Rp {formatIdrPriceDisplay(activeStock.lastPrice)}
+                </div>
+                {typeof activeStock.previousClose === 'number' && activeStock.previousClose > 0 && (
+                  <span className="text-[10.5px] font-mono text-neutral-500">
+                    Prev: Rp {formatIdrPriceDisplay(activeStock.previousClose)}
+                  </span>
+                )}
               </div>
               <span
                 className={`text-[11px] font-bold font-mono ${

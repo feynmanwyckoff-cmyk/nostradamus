@@ -42,6 +42,45 @@ async function fetchYahooJsonDirect(url: string, timeoutMs = 8000): Promise<any>
   }
 }
 
+function isSameJakartaTradingDay(tsA?: number, tsB?: number): boolean {
+  if (
+    typeof tsA !== 'number' ||
+    typeof tsB !== 'number' ||
+    !Number.isFinite(tsA) ||
+    !Number.isFinite(tsB)
+  ) {
+    return false;
+  }
+  try {
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Jakarta',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
+    return fmt.format(new Date(tsA * 1000)) === fmt.format(new Date(tsB * 1000));
+  } catch {
+    return Math.abs(tsA - tsB) < 43200;
+  }
+}
+
+function resolveDailyPreviousCloseFromSeries(
+  closes: number[],
+  timestamps: number[],
+  lastPrice: number
+): number {
+  if (closes.length < 2) return 0;
+  const n = closes.length;
+  if (timestamps.length === n && n >= 2) {
+    const sameDayDuplicate = isSameJakartaTradingDay(timestamps[n - 1], timestamps[n - 2]);
+    if (sameDayDuplicate) {
+      return n >= 3 ? closes[n - 3] : closes[n - 2];
+    }
+    return closes[n - 2];
+  }
+  return closes[n - 2];
+}
+
 async function fetchSingleChartDirect(
   symbol: string,
   range: string = '3mo',
@@ -94,34 +133,35 @@ async function fetchSingleChartDirect(
       const rawTrailingWasNull =
         rawCloses.length > 0 && rawCloses[rawCloses.length - 1] === null;
       if (closes.length > 0) {
-        if (rawTrailingWasNull && closes[closes.length - 1] !== lastPrice) {
+        if (
+          rawTrailingWasNull &&
+          typeof meta.regularMarketTime === 'number' &&
+          timestamps.length > 0 &&
+          !isSameJakartaTradingDay(timestamps[timestamps.length - 1], meta.regularMarketTime)
+        ) {
           closes.push(lastPrice);
-          if (typeof meta.regularMarketTime === 'number') {
-            timestamps.push(meta.regularMarketTime);
-          }
+          timestamps.push(meta.regularMarketTime);
         } else if (closes[closes.length - 1] !== lastPrice) {
           closes[closes.length - 1] = lastPrice;
         }
       }
 
-      const dailyPrevClose =
-        closes.length >= 2
-          ? closes[closes.length - 2] !== lastPrice
-            ? closes[closes.length - 2]
-            : closes.length >= 3
-            ? closes[closes.length - 3]
-            : closes[closes.length - 2]
-          : 0;
+      const dailyPrevClose = resolveDailyPreviousCloseFromSeries(
+        closes,
+        timestamps,
+        lastPrice
+      );
 
       const prevClose =
         typeof meta.previousClose === 'number' &&
         Number.isFinite(meta.previousClose) &&
-        meta.previousClose > 0 &&
-        meta.previousClose !== lastPrice
+        meta.previousClose > 0
           ? meta.previousClose
           : dailyPrevClose > 0
           ? dailyPrevClose
-          : range === '1d' && typeof meta.chartPreviousClose === 'number' && meta.chartPreviousClose > 0
+          : range === '1d' &&
+            typeof meta.chartPreviousClose === 'number' &&
+            meta.chartPreviousClose > 0
           ? meta.chartPreviousClose
           : lastPrice;
 
@@ -171,6 +211,15 @@ async function fetchSingleChartDirect(
   return null;
 }
 
+function hasMissingWeekdayBar(timestamps: number[]): boolean {
+  if (timestamps.length < 2) return false;
+  const lastTs = timestamps[timestamps.length - 1];
+  const prevTs = timestamps[timestamps.length - 2];
+  const gapSeconds = lastTs - prevTs;
+  const lastDayOfWeek = new Date(lastTs * 1000).getUTCDay(); // 1 = Monday
+  return gapSeconds > 120000 && lastDayOfWeek !== 1;
+}
+
 async function fetchSparkBatchChunk(
   symbolsChunk: string[],
   range: string = '3mo',
@@ -178,6 +227,7 @@ async function fetchSparkBatchChunk(
   skipIndividualFallbackIfSparkAnswered: boolean = false
 ): Promise<Record<string, SparkSeriesItem>> {
   const resultMap: Record<string, SparkSeriesItem> = {};
+  const symbolsNeedingChartHeal = new Set<string>();
   if (symbolsChunk.length === 0) return resultMap;
 
   const host =
@@ -233,30 +283,43 @@ async function fetchSparkBatchChunk(
             const basePrev =
               entry.previousClose || (range === '1d' ? entry.chartPreviousClose : lastPrice) || lastPrice;
             closes.push(Number(Number(basePrev).toFixed(2)), lastPrice);
-          } else if (rawTrailingWasNull && closes[closes.length - 1] !== lastPrice) {
+          } else if (
+            rawTrailingWasNull &&
+            rawTimestamps.length > 0 &&
+            typeof rawTimestamps[rawTimestamps.length - 1] === 'number' &&
+            timestamps.length > 0 &&
+            !isSameJakartaTradingDay(
+              timestamps[timestamps.length - 1],
+              rawTimestamps[rawTimestamps.length - 1] as number
+            )
+          ) {
             closes.push(lastPrice);
+            timestamps.push(rawTimestamps[rawTimestamps.length - 1] as number);
           } else if (closes[closes.length - 1] !== lastPrice) {
             closes[closes.length - 1] = lastPrice;
           }
 
-          const dailyPrevClose =
-            closes.length >= 2
-              ? closes[closes.length - 2] !== lastPrice
-                ? closes[closes.length - 2]
-                : closes.length >= 3
-                ? closes[closes.length - 3]
-                : closes[closes.length - 2]
-              : 0;
+          // If Yahoo /v8/finance/spark dropped yesterday's bar on a weekday (e.g. ARNA.JK), schedule exact /v8/finance/chart heal
+          if (lastPrice >= 68 && hasMissingWeekdayBar(timestamps)) {
+            symbolsNeedingChartHeal.add(sym);
+          }
+
+          const dailyPrevClose = resolveDailyPreviousCloseFromSeries(
+            closes,
+            timestamps,
+            lastPrice
+          );
 
           const prevClose =
             typeof entry.previousClose === 'number' &&
             Number.isFinite(entry.previousClose) &&
-            entry.previousClose > 0 &&
-            entry.previousClose !== lastPrice
+            entry.previousClose > 0
               ? entry.previousClose
               : dailyPrevClose > 0
               ? dailyPrevClose
-              : range === '1d' && typeof entry.chartPreviousClose === 'number' && entry.chartPreviousClose > 0
+              : range === '1d' &&
+                typeof entry.chartPreviousClose === 'number' &&
+                entry.chartPreviousClose > 0
               ? entry.chartPreviousClose
               : lastPrice;
 
@@ -292,10 +355,9 @@ async function fetchSparkBatchChunk(
     // Fallback below will fetch any missing symbols via /v8/finance/chart
   }
 
-  // Fallback for any symbol in the chunk not returned by spark
-  // For massive universe sweeps, if spark responded HTTP 200 and returned valid symbols, only retry non-.JK macro symbols
-  // so suspended/delisted .JK stocks do not stall the 956-stock batch.
+  // Fallback for any symbol in the chunk not returned by spark OR where spark dropped yesterday's bar
   const missingSymbols = symbolsChunk.filter((s) => {
+    if (symbolsNeedingChartHeal.has(s)) return true;
     if (resultMap[s]) return false;
     if (skipIndividualFallbackIfSparkAnswered && sparkRespondedOk && Object.keys(resultMap).length > 0) {
       return !s.endsWith('.JK');

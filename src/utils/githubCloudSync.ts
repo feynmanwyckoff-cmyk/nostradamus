@@ -366,9 +366,10 @@ export async function pushStateToGitHubRepo(
 }
 
 /**
- * Pulls the latest `public/static-market-snapshot.json` and `data/nostradamus_cloud_state.json`
- * directly via GitHub REST API (`api.github.com`) with raw media type (`application/vnd.github.raw+json`)
- * to bypass GitHub Pages CDN cache completely and ensure `^JKSE` never reverts to a stale static quote.
+ * Pulls the latest `public/static-market-snapshot.json` directly via GitHub REST API (`api.github.com`)
+ * with raw media type (`application/vnd.github.raw+json`) to bypass GitHub Pages CDN cache completely.
+ * Strictly separates portfolio/cash state (`nostradamus_cloud_state.json`) from market prices so stale
+ * portfolio saves never overwrite live Yahoo Finance stock or IHSG (`^JKSE`) quotes.
  */
 export async function pullLiveMarketSnapshotFromGitHubApi(
   customConfig?: GitHubCloudConfig
@@ -383,10 +384,6 @@ export async function pullLiveMarketSnapshotFromGitHubApi(
   const snapUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(
     repo
   )}/contents/public/static-market-snapshot.json?ref=${encodeURIComponent(branch)}&t=${Date.now()}`;
-  const statePath = (cfg.filePath || 'data/nostradamus_cloud_state.json').trim().replace(/^\/+/, '');
-  const stateUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(
-    repo
-  )}/contents/${statePath}?ref=${encodeURIComponent(branch)}&t=${Date.now()}`;
 
   const headers: Record<string, string> = {
     Accept: 'application/vnd.github.raw+json',
@@ -396,186 +393,27 @@ export async function pullLiveMarketSnapshotFromGitHubApi(
     headers.Authorization = `Bearer ${cfg.patToken.trim()}`;
   }
 
-  const [snapPayload, cloudStatePayload] = await Promise.all([
-    (async (): Promise<any> => {
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 6500);
-        const res = await fetch(snapUrl, {
-          method: 'GET',
-          headers,
-          signal: controller.signal,
-          cache: 'no-store'
-        });
-        clearTimeout(timer);
-        if (res.ok) {
-          return await res.json();
-        }
-      } catch {
-        // ignore and fallback
-      }
-      return null;
-    })(),
-    (async (): Promise<Partial<CloudStateBundle> | null> => {
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 6500);
-        const res = await fetch(stateUrl, {
-          method: 'GET',
-          headers,
-          signal: controller.signal,
-          cache: 'no-store'
-        });
-        clearTimeout(timer);
-        if (res.ok) {
-          return (await res.json()) as Partial<CloudStateBundle>;
-        }
-      } catch {
-        // ignore and fallback
-      }
-      return null;
-    })()
-  ]);
-
-  if (!snapPayload && !cloudStatePayload) return null;
-
-  const mergedSnapshot: Record<string, any> =
-    snapPayload && typeof snapPayload === 'object'
-      ? { ...snapPayload, data: { ...(snapPayload.data || {}) } }
-      : { generatedAt: new Date().toISOString(), data: {} };
-
-  // Merge fresher liveIhsgQuote / liveIhsgReturns from cloud state JSON
-  if (cloudStatePayload?.liveIhsgQuote && cloudStatePayload.liveIhsgQuote.lastPrice > 1000) {
-    const cloudQuote = cloudStatePayload.liveIhsgQuote;
-    const existingJkse = mergedSnapshot.data['^JKSE'];
-    const isCloudNewerOrMissing =
-      !existingJkse ||
-      Math.abs(Number(existingJkse.lastPrice) - 7210.16) < 0.05 ||
-      (cloudStatePayload.updatedAt &&
-        mergedSnapshot.generatedAt &&
-        new Date(cloudStatePayload.updatedAt).getTime() >=
-          new Date(mergedSnapshot.generatedAt).getTime());
-
-    if (isCloudNewerOrMissing && Math.abs(cloudQuote.lastPrice - 7210.16) >= 0.05) {
-      const baseCloses: number[] =
-        existingJkse && Array.isArray(existingJkse.closes) && existingJkse.closes.length >= 2
-          ? [...existingJkse.closes]
-          : [];
-      if (
-        Array.isArray(cloudStatePayload.liveIhsgReturns) &&
-        cloudStatePayload.liveIhsgReturns.length >= 15
-      ) {
-        // Reconstruct recent closes from cloudStatePayload.liveIhsgReturns ending at cloudQuote.lastPrice
-        const rets = cloudStatePayload.liveIhsgReturns;
-        const reconstructed: number[] = new Array(rets.length + 1);
-        reconstructed[rets.length] = Number(cloudQuote.lastPrice.toFixed(2));
-        for (let i = rets.length - 1; i >= 0; i--) {
-          const rDec = Number(rets[i]) / 100;
-          const prev = reconstructed[i + 1] / Math.max(0.5, 1 + rDec);
-          reconstructed[i] = Number(prev.toFixed(2));
-        }
-        mergedSnapshot.data['^JKSE'] = {
-          symbol: '^JKSE',
-          lastPrice: Number(cloudQuote.lastPrice.toFixed(2)),
-          change1D: Number(cloudQuote.change1D.toFixed(2)),
-          closes: reconstructed,
-          shortName: 'IDX Composite'
-        };
-      } else {
-        if (baseCloses.length > 0) {
-          baseCloses[baseCloses.length - 1] = Number(cloudQuote.lastPrice.toFixed(2));
-        } else {
-          baseCloses.push(Number(cloudQuote.lastPrice.toFixed(2)));
-        }
-        mergedSnapshot.data['^JKSE'] = {
-          ...(existingJkse || {}),
-          symbol: '^JKSE',
-          lastPrice: Number(cloudQuote.lastPrice.toFixed(2)),
-          change1D: Number(cloudQuote.change1D.toFixed(2)),
-          closes: baseCloses,
-          shortName: 'IDX Composite'
-        };
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 6500);
+    const res = await fetch(snapUrl, {
+      method: 'GET',
+      headers,
+      signal: controller.signal,
+      cache: 'no-store'
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      const snapPayload = await res.json();
+      if (snapPayload && typeof snapPayload === 'object' && snapPayload.data) {
+        return snapPayload;
       }
     }
+  } catch {
+    // ignore and fallback
   }
 
-  // Merge fresher stock quotes and macro indicators from cloudStatePayload if available
-  const cloudTimeMs =
-    cloudStatePayload?.updatedAt
-      ? new Date(cloudStatePayload.updatedAt).getTime()
-      : (cloudStatePayload as any)?.savedAt
-      ? new Date((cloudStatePayload as any).savedAt).getTime()
-      : 0;
-  const snapTimeMs = mergedSnapshot.generatedAt
-    ? new Date(mergedSnapshot.generatedAt).getTime()
-    : 0;
-  const isCloudNewerOrEqual = !snapTimeMs || (cloudTimeMs > 0 && cloudTimeMs >= snapTimeMs);
-
-  if (Array.isArray(cloudStatePayload?.stocks)) {
-    for (const st of cloudStatePayload.stocks) {
-      if (!st || !st.ticker || typeof st.lastPrice !== 'number' || st.lastPrice <= 0) {
-        continue;
-      }
-      const cleanTicker = String(st.ticker).trim().toUpperCase().replace(/\.JK$/i, '');
-      const yfSym = `${cleanTicker}.JK`;
-      const existingItem = mergedSnapshot.data[yfSym];
-      if (!existingItem || isCloudNewerOrEqual) {
-        const lastPrice = Number(st.lastPrice);
-        const change1D = typeof st.change1D === 'number' ? Number(st.change1D) : 0;
-        const prevClose =
-          change1D !== 0 && change1D > -99
-            ? Number((lastPrice / (1 + change1D / 100)).toFixed(2))
-            : lastPrice;
-        const baseCloses: number[] =
-          existingItem && Array.isArray(existingItem.closes) && existingItem.closes.length >= 2
-            ? [...existingItem.closes]
-            : Array(21).fill(prevClose).concat([lastPrice]);
-        baseCloses[baseCloses.length - 1] = lastPrice;
-        if (baseCloses.length >= 2 && change1D !== 0) {
-          baseCloses[baseCloses.length - 2] = prevClose;
-        }
-        mergedSnapshot.data[yfSym] = {
-          ...(existingItem || {}),
-          symbol: yfSym,
-          lastPrice,
-          change1D,
-          closes: baseCloses,
-          shortName: st.name || existingItem?.shortName || cleanTicker
-        };
-      }
-    }
-  }
-
-  if (Array.isArray(cloudStatePayload?.macroIndicators)) {
-    for (const m of cloudStatePayload.macroIndicators) {
-      if (!m || !m.symbol || typeof m.value !== 'number' || m.value <= 0) {
-        continue;
-      }
-      const existingMacro = mergedSnapshot.data[m.symbol];
-      if (!existingMacro || isCloudNewerOrEqual) {
-        const lastPrice = Number(m.value);
-        const change1D = typeof m.change1D === 'number' ? Number(m.change1D) : 0;
-        const prevClose =
-          change1D !== 0 && change1D > -99
-            ? Number((lastPrice / (1 + change1D / 100)).toFixed(2))
-            : lastPrice;
-        const baseCloses: number[] =
-          existingMacro && Array.isArray(existingMacro.closes) && existingMacro.closes.length >= 2
-            ? [...existingMacro.closes]
-            : [prevClose, lastPrice];
-        baseCloses[baseCloses.length - 1] = lastPrice;
-        mergedSnapshot.data[m.symbol] = {
-          ...(existingMacro || {}),
-          symbol: m.symbol,
-          lastPrice,
-          change1D,
-          closes: baseCloses
-        };
-      }
-    }
-  }
-
-  return mergedSnapshot;
+  return null;
 }
 
 export function getActiveRepoScope(config?: GitHubCloudConfig): string {
