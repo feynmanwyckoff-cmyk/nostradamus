@@ -6,7 +6,17 @@ import {
   StockMetrics,
   StructuredAiConvictionReport
 } from '../types/quant';
-import { evaluateJoeliardiOosFundamental } from '../utils/quantEngine';
+import {
+  enrichStockMetrics,
+  evaluateJoeliardiOosFundamental
+} from '../utils/quantEngine';
+import {
+  getCustomCorporateActionOverrides,
+  resetCorporateActionOverride,
+  saveCustomCorporateActionOverride
+} from '../utils/corporateActionMiddleware';
+import { runQuantValuationInWorkerAsync } from '../utils/quantWorkerBridge';
+import { QuantWorkerOutputPayload } from '../workers/quantValuationWorker';
 import {
   fetchLiveEmitenSpecificNews,
   fetchLiveIdxTicker,
@@ -39,7 +49,9 @@ import {
   Layers,
   ImageDown,
   FileDown,
-  FastForward
+  FastForward,
+  Cpu,
+  SlidersHorizontal
 } from 'lucide-react';
 
 interface EmitenFundamentalInspectorModalProps {
@@ -138,6 +150,9 @@ function renderHighlightedFinancialNarrative(
 
   const verdictTerms = [
     'STRONG BUY: ANOMALI ASET DEFENSIF TERDISKON',
+    'BUY ON STRENGTH // CATALYST ACTIVE',
+    'BUY ON STRENGTH / CATALYST',
+    'CATALYST ACTIVE',
     'TERDISKON / MURAH',
     'MAHAL / PREMIUM',
     'UNDERCUT / DEEP DISCOUNT',
@@ -161,6 +176,13 @@ function renderHighlightedFinancialNarrative(
   ];
 
   const metricLabels = [
+    'Forward Annualized ROE',
+    'Forward ROE',
+    'Trailing ROE',
+    'Dynamic Buyback Yield',
+    'Buyback Yield',
+    'Total Shareholder Yield',
+    'TSY',
     'Implied Target Wajar PER',
     'Implied PER',
     'Wajar PER',
@@ -217,7 +239,6 @@ function renderHighlightedFinancialNarrative(
     'Margin of Safety',
     'MoS',
     'Equity Yield Spread',
-    'Total Shareholder Yield',
     'Skor Value',
     'Skor Komposit',
     'Skor Momentum',
@@ -298,32 +319,136 @@ export function EmitenFundamentalInspectorModal({
   const [isTypingComplete, setIsTypingComplete] = useState<boolean>(false);
   const [isExporting, setIsExporting] = useState<'PNG' | 'PDF' | null>(null);
 
+  // Corporate Action & Forward Annualizer Calibrator + Web Worker Telemetry States
+  const [catalystRevision, setCatalystRevision] = useState<number>(0);
+  const [showCatalystCalibrator, setShowCatalystCalibrator] = useState<boolean>(false);
+  const [splitRatioInput, setSplitRatioInput] = useState<string>('1');
+  const [buybackNominalInput, setBuybackNominalInput] = useState<string>('0');
+  const [quarterlyGrowthInput, setQuarterlyGrowthInput] = useState<string>('0');
+  const [workerTelemetry, setWorkerTelemetry] =
+    useState<QuantWorkerOutputPayload | null>(null);
+
   const typingTimerRef = useRef<number | null>(null);
 
-  // Active stock merges initial prop with on-demand live quote fetched when modal opens
+  // Active stock merges initial prop with on-demand live quote and corporate action overrides
   const activeStock = useMemo(() => {
     if (!stock) return null;
-    if (liveStockOverride && liveStockOverride.ticker === stock.ticker) {
-      return {
-        ...stock,
-        ...liveStockOverride,
-        isHscFlagged: stock.isHscFlagged,
-        hscSource: stock.hscSource,
-        hscTier: stock.hscTier,
-        hscReason: stock.hscReason,
-        kseiHscConcentrationPct: stock.kseiHscConcentrationPct,
-        kseiHscIsNew: stock.kseiHscIsNew,
-        kseiHscFootnote: stock.kseiHscFootnote,
-        kseiHscScorePenaltyPts: stock.kseiHscScorePenaltyPts
-      };
-    }
-    return stock;
-  }, [stock, liveStockOverride]);
+    const base =
+      liveStockOverride && liveStockOverride.ticker === stock.ticker
+        ? {
+            ...stock,
+            ...liveStockOverride,
+            isHscFlagged: stock.isHscFlagged,
+            hscSource: stock.hscSource,
+            hscTier: stock.hscTier,
+            hscReason: stock.hscReason,
+            kseiHscConcentrationPct: stock.kseiHscConcentrationPct,
+            kseiHscIsNew: stock.kseiHscIsNew,
+            kseiHscFootnote: stock.kseiHscFootnote,
+            kseiHscScorePenaltyPts: stock.kseiHscScorePenaltyPts
+          }
+        : stock;
+    return enrichStockMetrics(base);
+  }, [stock, liveStockOverride, catalystRevision]);
 
   const joeliardiEval = useMemo(() => {
     if (!activeStock) return null;
     return evaluateJoeliardiOosFundamental(activeStock);
-  }, [activeStock]);
+  }, [activeStock, catalystRevision]);
+
+  // Synchronize Corporate Action Calibrator inputs & trigger Web Worker offload when activeStock changes
+  useEffect(() => {
+    if (!activeStock || !joeliardiEval) return;
+    setSplitRatioInput(String(activeStock.splitRatioDivisor ?? 1));
+    const buybackBillion = activeStock.buybackNominalIdr
+      ? Math.round(activeStock.buybackNominalIdr / 1_000_000_000)
+      : 0;
+    setBuybackNominalInput(String(buybackBillion));
+    setQuarterlyGrowthInput(String(activeStock.earningsGrowthYoYPct ?? 0));
+
+    let cancelled = false;
+    const boostMult = 1 + (joeliardiEval.catalystValuationBoostPct ?? 0) / 100;
+    runQuantValuationInWorkerAsync({
+      ticker: activeStock.ticker,
+      spotPriceIdr: activeStock.lastPrice,
+      bvps0Idr: joeliardiEval.estimatedBvpsIdr,
+      forwardRoePct:
+        joeliardiEval.forwardAnnualizedRoePct ??
+        activeStock.forwardAnnualizedRoePct ??
+        activeStock.roe,
+      kePct: joeliardiEval.dynamicCostOfEquityPct ?? 12.64,
+      dprPct: joeliardiEval.historicalDpr3YPct ?? 45,
+      gpaPct:
+        joeliardiEval.grossProfitabilityToAssets ??
+        activeStock.grossProfitabilityToAssets ??
+        activeStock.roe * 0.85,
+      ocfToNi:
+        joeliardiEval.ocfToNetIncomeRatio ??
+        activeStock.ocfToNetIncomeRatio ??
+        0.92,
+      der: activeStock.debtToEquity,
+      accrualPenaltyScore: activeStock.accrualPenaltyScore ?? 0,
+      hscDiscountMultiplier: activeStock.isHscFlagged ? 0.65 : 1.0,
+      catalystValuationMultiplier: boostMult,
+      beta1Y: activeStock.beta1Y,
+      volatilityAnn: activeStock.volatilityAnn,
+      change1D: activeStock.change1D,
+      return30D: activeStock.return30D,
+      peerDefaultChange1D: 0.35,
+      peerDefaultReturn30D: 2.1,
+      peerCorrelation: joeliardiEval.statArbCorrelation ?? 0.86,
+      isHscFlagged: Boolean(activeStock.isHscFlagged),
+      sectorSpecificFairValueIdr:
+        joeliardiEval.sectorSpecificFairValueIdr ?? joeliardiEval.intrinsicValueIdr,
+      agnosticPeerFairValueIdr:
+        joeliardiEval.agnosticPeerFairValueIdr ?? joeliardiEval.intrinsicValueIdr
+    }).then((res) => {
+      if (!cancelled) {
+        setWorkerTelemetry(res);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeStock?.ticker, activeStock?.lastPrice, catalystRevision]);
+
+  const handleSaveCatalystOverride = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeStock) return;
+    const splitVal = Math.max(1, Number(splitRatioInput.replace(',', '.')) || 1);
+    const buybackVal = Math.max(0, Number(buybackNominalInput.replace(',', '.')) || 0);
+    const growthVal = Number(quarterlyGrowthInput.replace(',', '.')) || 0;
+    const trailingRoe = activeStock.trailingRoePct ?? activeStock.roe;
+    const computedForwardRoe =
+      growthVal > 0
+        ? Number(Math.min(48, trailingRoe * (1 + Math.min(0.65, growthVal / 100) * 0.55)).toFixed(2))
+        : trailingRoe;
+
+    saveCustomCorporateActionOverride({
+      ticker: activeStock.ticker,
+      splitRatioDivisor: splitVal,
+      hasActiveBuyback: buybackVal > 0,
+      buybackNominalBillionIdr: buybackVal,
+      earningsGrowthYoYPct: growthVal,
+      latestQuarterLabel: 'Manual Calibrator Override',
+      forwardAnnualizedRoePct: computedForwardRoe,
+      catalystNote: `Kalibrasi Manual (${activeStock.ticker}): Split 1:${splitVal} · Buyback Rp ${buybackVal.toLocaleString('id-ID')} Miliar · Pertumbuhan Laba Kuartal ${growthVal >= 0 ? '+' : ''}${growthVal.toFixed(1)}% YoY.`
+    });
+    setCatalystRevision((r) => r + 1);
+    if (onStockSynced) {
+      onStockSynced(enrichStockMetrics(activeStock));
+    }
+  };
+
+  const handleResetCatalystOverride = () => {
+    if (!activeStock) return;
+    resetCorporateActionOverride(activeStock.ticker);
+    setCatalystRevision((r) => r + 1);
+    if (onStockSynced) {
+      onStockSynced(enrichStockMetrics(activeStock));
+    }
+  };
 
   const thinkingStages = useMemo(() => {
     if (!activeStock || !joeliardiEval) return [];
@@ -744,6 +869,25 @@ export function EmitenFundamentalInspectorModal({
                   >
                     {joeliardiEval.convictionGrade} · SKOR {joeliardiEval.totalConvictionScore}/100
                   </span>
+                  {joeliardiEval.isCatalystActive && (
+                    <span
+                      title={
+                        joeliardiEval.catalystNarrative ||
+                        'Katalis Aktif Terdeteksi (Momentum Laba Kuartalan >20% YoY / Injeksi Buyback Aktif)'
+                      }
+                      className="inline-flex items-center gap-1 text-[10px] font-mono font-extrabold text-[#FFFFFF] bg-[#0D5C46] border border-[#059669] px-2 py-0.5 rounded-xs shadow-2xs"
+                    >
+                      <Sparkles className="w-2.5 h-2.5" />
+                      <span>
+                        {joeliardiEval.catalystBadgeLabel || 'CATALYST ACTIVE'}
+                      </span>
+                    </span>
+                  )}
+                  {(activeStock.splitRatioDivisor ?? 1) > 1 && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-[#0284C7] bg-[#0284C7]/10 border border-[#0284C7]/40 px-2 py-0.5 rounded-xs">
+                      <span>SPLIT DIVISOR 1:{activeStock.splitRatioDivisor}</span>
+                    </span>
+                  )}
                   {isSyncingOnDemand ? (
                     <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-[#0284C7] bg-[#0284C7]/10 border border-[#0284C7]/30 px-2 py-0.5 rounded-xs">
                       <RefreshCw className="w-2.5 h-2.5 animate-spin" />
@@ -778,7 +922,7 @@ export function EmitenFundamentalInspectorModal({
             </button>
           </div>
 
-          {/* Action Toolbar Row: Refresh, Export HD PNG, Export PDF, and HSC Toggle */}
+          {/* Action Toolbar Row: Refresh, Corporate Action Calibrator, Export HD PNG, Export PDF, and HSC Toggle */}
           <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[#E4E2DD]/70">
             <div className="flex flex-wrap items-center gap-2">
               <button
@@ -792,6 +936,24 @@ export function EmitenFundamentalInspectorModal({
                   className={`w-3.5 h-3.5 ${isSyncingOnDemand ? 'animate-spin' : ''}`}
                 />
                 <span>Refresh Emiten</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowCatalystCalibrator((prev) => !prev)}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold rounded-xs border transition-colors cursor-pointer ${
+                  showCatalystCalibrator || Boolean(getCustomCorporateActionOverrides()[activeStock.ticker])
+                    ? 'bg-[#0D5C46] text-white border-[#0D5C46]'
+                    : 'bg-[#FFFFFF] text-[#0D5C46] border-[#059669]/40 hover:bg-[#059669]/10'
+                }`}
+                title="Kalibrasi Corporate Action (Stock Split Divisor, Nominal Buyback, & Laba Kuartal Forward ROE)"
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+                <span>
+                  {showCatalystCalibrator
+                    ? 'Tutup Kalibrator Aksi Korporasi'
+                    : 'Kalibrasi Split / Buyback / Fwd ROE'}
+                </span>
               </button>
 
               {onToggleHscFlag && (
@@ -818,6 +980,18 @@ export function EmitenFundamentalInspectorModal({
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              {workerTelemetry && (
+                <span
+                  title="Komputasi Multi-Stage RIM & regresi StatArb dieksekusi di thread terpisah (Web Worker) agar antarmuka tetap responsif 60fps"
+                  className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-mono font-semibold text-neutral-600 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs"
+                >
+                  <Cpu className="w-3 h-3 text-[#0D5C46]" />
+                  <span>
+                    Worker 60fps · {workerTelemetry.computeDurationMs.toFixed(2)}ms
+                  </span>
+                </span>
+              )}
+
               <button
                 type="button"
                 onClick={handleExportPng}
@@ -843,6 +1017,82 @@ export function EmitenFundamentalInspectorModal({
               </button>
             </div>
           </div>
+
+          {/* Collapsible Corporate Action & Forward Annualizer Calibrator Drawer */}
+          {showCatalystCalibrator && (
+            <form
+              onSubmit={handleSaveCatalystOverride}
+              className="mt-3 p-3.5 bg-[#FFFFFF] border border-[#059669]/50 rounded-xs space-y-2.5"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#0D5C46] block">
+                    CORPORATE ACTION INTERCEPTOR &amp; FORWARD ANNUALIZER MIDDLEWARE
+                  </span>
+                  <p className="text-[11px] text-neutral-600">
+                    Koreksi instan rasio Stock Split (divisor BVPS/EPS/ADTV), injeksi Nominal Buyback ke Total Shareholder Yield (TSY), dan pertumbuhan laba kuartal berjalan (Forward ROE).
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleResetCatalystOverride}
+                  className="px-2.5 py-1 text-[11px] font-mono font-semibold text-neutral-600 hover:text-[#9E2A2B] bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs cursor-pointer"
+                >
+                  Reset ke Registry Default
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 pt-1">
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-neutral-600 mb-1">
+                    Rasio Stock Split (1 : N)
+                  </label>
+                  <input
+                    type="number"
+                    step="1"
+                    min="1"
+                    max="20"
+                    value={splitRatioInput}
+                    onChange={(e) => setSplitRatioInput(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs text-[#111315]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-neutral-600 mb-1">
+                    Nominal Buyback Aktif (Rp Miliar)
+                  </label>
+                  <input
+                    type="number"
+                    step="10"
+                    min="0"
+                    value={buybackNominalInput}
+                    onChange={(e) => setBuybackNominalInput(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs text-[#111315]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-neutral-600 mb-1">
+                    Lonjakan Laba Kuartal YoY (%)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    value={quarterlyGrowthInput}
+                    onChange={(e) => setQuarterlyGrowthInput(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs text-[#111315]"
+                  />
+                </div>
+                <div className="flex items-end">
+                  <button
+                    type="submit"
+                    className="w-full px-3 py-1.5 text-xs font-bold text-white bg-[#0D5C46] hover:bg-[#059669] rounded-xs cursor-pointer transition-colors"
+                  >
+                    Terapkan Middleware
+                  </button>
+                </div>
+              </div>
+            </form>
+          )}
         </div>
 
         {/* Scrollable Content Body with Theme-Aware Dark Scrollbar */}
@@ -924,6 +1174,39 @@ export function EmitenFundamentalInspectorModal({
             </div>
           )}
 
+          {/* Active Catalyst & Corporate Action Middleware Telemetry Banner */}
+          {joeliardiEval.isCatalystActive && (
+            <div className="p-3.5 rounded-xs bg-[#059669]/10 border border-[#059669]/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="px-2 py-0.5 text-[10px] font-mono font-extrabold bg-[#0D5C46] text-white rounded-xs">
+                    {joeliardiEval.catalystBadgeLabel || 'CATALYST ACTIVE'}
+                  </span>
+                  <span className="text-xs font-bold text-[#0D5C46]">
+                    Forward-Looking Annualizer &amp; Dynamic Decision Tree Aktif
+                  </span>
+                </div>
+                <p className="text-xs text-[#111315] leading-relaxed">
+                  {joeliardiEval.catalystNarrative}
+                </p>
+              </div>
+              <div className="shrink-0 font-mono text-[11px] bg-[#FFFFFF] border border-[#059669]/35 px-3 py-2 rounded-xs space-y-0.5">
+                <div>
+                  Trail ROE: <strong>{(joeliardiEval.trailingRoePct ?? activeStock.roe).toFixed(1)}%</strong> → Fwd ROE:{' '}
+                  <strong className="text-[#0D5C46]">
+                    {(joeliardiEval.forwardAnnualizedRoePct ?? activeStock.roe).toFixed(1)}%
+                  </strong>
+                </div>
+                <div>
+                  Buyback Yield: <strong>+{(joeliardiEval.dynamicBuybackYieldPct ?? 0).toFixed(2)}%</strong> · TSY:{' '}
+                  <strong className="text-[#0284C7]">
+                    {(joeliardiEval.totalShareholderYieldPct ?? joeliardiEval.forwardDividendYieldPct).toFixed(2)}%
+                  </strong>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Top Valuation & Intrinsic Value Bar with MetricTooltips */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="p-3.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
@@ -987,9 +1270,9 @@ export function EmitenFundamentalInspectorModal({
               <div className="text-[10px] font-bold uppercase tracking-wider text-[#D97706] bb-amber">
                 <MetricTooltip
                   label="NILAI INTRINSIK WAJAR (UTAMA)"
-                  title="Harga Wajar Utama: Quantedge Sector-Adaptive Ensemble + Pembanding Multi-Metode"
-                  laymanExplanation="Angka terbesar adalah Nilai Intrinsik Wajar paling akurat (Quantedge Ensemble yang memadukan Matriks Spesifik Sektor, Multi-Stage Residual Income Model 5-7Y, dan Relative Value Peer). Di bawahnya tertera nilai wajar dari masing-masing metode sebagai pembanding."
-                  practicalGuide="Gunakan angka utama berhuruf terbesar sebagai patokan harga wajar utama, dan cek 3 metode pembanding di bawahnya untuk melihat rentang konvergensi."
+                  title="Harga Wajar Utama: Type-Safe .reduce() Ensemble (45% Sektor + 35% RIM + 20% RelVal)"
+                  laymanExplanation="Angka terbesar dieksekusi dengan metode .reduce() murni pada array harga akhir ((Harga Sektor × 45%) + (Harga RIM × 35%) + (Harga RelVal × 20%)), sehingga 100% sinkron secara matematis dengan komponen pembanding di bawahnya."
+                  practicalGuide="Gunakan angka utama sebagai patokan nilai intrinsik dan periksa rumus .reduce() di bawahnya untuk audit transparansi kuantitatif."
                   className="text-[#D97706] bb-amber"
                 />
               </div>
@@ -997,15 +1280,15 @@ export function EmitenFundamentalInspectorModal({
                 Rp {formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)}
               </div>
               <div className="text-[10px] text-neutral-600 font-mono leading-tight mt-0.5">
-                {joeliardiEval.sectorPrimaryMetricShort ?? 'Sektor'}: Rp{' '}
+                {joeliardiEval.sectorPrimaryMetricShort ?? 'Sektor'} (45%): Rp{' '}
                 {formatIdrPriceDisplay(
                   joeliardiEval.sectorSpecificFairValueIdr ?? joeliardiEval.intrinsicValueIdr
                 )}{' '}
-                · RIM {joeliardiEval.rimFadeYears ?? 6}Y: Rp{' '}
+                · RIM (35%): Rp{' '}
                 {formatIdrPriceDisplay(
                   joeliardiEval.rimFairValueIdr ?? joeliardiEval.intrinsicValueIdr
                 )}{' '}
-                · RelVal: Rp{' '}
+                · RelVal (20%): Rp{' '}
                 {formatIdrPriceDisplay(
                   joeliardiEval.statArbImpliedTargetIdr ?? joeliardiEval.intrinsicValueIdr
                 )}
@@ -1015,15 +1298,16 @@ export function EmitenFundamentalInspectorModal({
             <div className="p-3.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
               <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
                 <MetricTooltip
-                  label="MARGIN OF SAFETY (MOS)"
-                  title="Sabuk Pengaman Valuasi / Margin of Safety (%)"
-                  laymanExplanation="Selisih diskon antara Nilai Intrinsik terhadap Harga Pasar saat ini. Semakin positif angkanya, semakin besar bantal pengaman Anda dari risiko salah beli."
-                  practicalGuide="MoS ≥ +15% = Diskon Kuat (Zona Akumulasi); 0% s/d +14% = Wajar Berkualitas; < 0% = Sudah Premium/Mahal."
+                  label="MARGIN OF SAFETY & STATE"
+                  title="Sabuk Pengaman Valuasi & Dynamic Decision Tree"
+                  laymanExplanation="Selisih diskon antara Nilai Intrinsik terhadap Harga Pasar. Jika emiten memiliki katalis aktif (Buyback atau pertumbuhan laba kuartal >20% YoY) dan MoS ≥ -10%, mesin keputusan otomatis membatalkan 'Tunggu Koreksi Wajar' menjadi 'Buy on Strength / Catalyst'."
+                  practicalGuide="MoS ≥ +15% = Diskon Kuat; MoS ≥ -10% + Katalis Aktif = Buy on Strength / Catalyst; < -10% = Tunggu Pullback."
                 />
               </div>
               <div
                 className={`text-lg font-bold font-mono mt-1 ${
-                  joeliardiEval.marginOfSafetyPct >= 10
+                  joeliardiEval.marginOfSafetyPct >= 10 ||
+                  joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST'
                     ? 'text-[#0D5C46]'
                     : joeliardiEval.marginOfSafetyPct >= 0
                     ? 'text-[#D97706]'
@@ -1033,7 +1317,13 @@ export function EmitenFundamentalInspectorModal({
                 {joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}
                 {joeliardiEval.marginOfSafetyPct.toFixed(1)}%
               </div>
-              <span className="text-[11px] font-bold text-neutral-600 block truncate">
+              <span
+                className={`text-[10.5px] font-mono font-bold block truncate ${
+                  joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST'
+                    ? 'text-[#0D5C46]'
+                    : 'text-neutral-600'
+                }`}
+              >
                 {joeliardiEval.valuationLabel}
               </span>
             </div>
@@ -1089,7 +1379,7 @@ export function EmitenFundamentalInspectorModal({
                   <strong className="text-[#0D5C46]">
                     {(joeliardiEval.grossProfitabilityToAssets ?? activeStock.grossProfitabilityToAssets ?? activeStock.roe * 0.85).toFixed(1)}%
                   </strong>{' '}
-                  (ROE {activeStock.roe.toFixed(1)}%)
+                  (Fwd ROE {(joeliardiEval.forwardAnnualizedRoePct ?? activeStock.roe).toFixed(1)}%)
                 </div>
                 <div>
                   OCF/NI (Anti-Junk):{' '}
@@ -1107,8 +1397,11 @@ export function EmitenFundamentalInspectorModal({
                     : '(Kas Riil Sehat)'}
                 </div>
                 <div>
-                  Fwd Div Yield: {joeliardiEval.forwardDividendYieldPct.toFixed(2)}% (DPR{' '}
-                  {joeliardiEval.historicalDpr3YPct.toFixed(0)}%)
+                  TSY: <strong className="text-[#0D5C46]">{(joeliardiEval.totalShareholderYieldPct ?? joeliardiEval.forwardDividendYieldPct).toFixed(2)}%</strong>{' '}
+                  (Div {joeliardiEval.forwardDividendYieldPct.toFixed(2)}%
+                  {(joeliardiEval.dynamicBuybackYieldPct ?? 0) > 0
+                    ? ` + Buyback ${(joeliardiEval.dynamicBuybackYieldPct ?? 0).toFixed(2)}%`
+                    : ''})
                 </div>
               </div>
             </div>
@@ -1169,9 +1462,9 @@ export function EmitenFundamentalInspectorModal({
               <div className="flex items-center justify-between text-xs font-bold text-[#111315] mb-1">
                 <MetricTooltip
                   label="3. Justified PBV & Kurva SBN"
-                  title="Pilar 3: Valuasi Masa Depan Damodaran (2012) & Kurva Spot SBN Fabozzi (2012)"
-                  laymanExplanation="Menghitung nilai wajar dengan rumus Justified PBV = (ROE − g) ÷ (Ke − g) di mana tingkat diskonto (Ke) ditarik secara dinamis dari bobot kombinasi Spot Rate SBN 1Y, 5Y, dan 10Y sesuai durasi arus kas ekuitas."
-                  practicalGuide="Skor ≥ 68/100 mengonfirmasi harga beli memberikan Margin of Safety di atas biaya modal dinamis."
+                  title="Pilar 3: Valuasi Masa Depan Damodaran (2012) & Forward ROE Annualizer"
+                  laymanExplanation="Menghitung nilai wajar dengan rumus Justified PBV = (Forward ROE − g) ÷ (Ke − g) di mana Forward ROE menyetahunkan momentum laba kuartal terakhir dan tingkat diskonto (Ke) ditarik dari kurva Spot SBN."
+                  practicalGuide="Skor ≥ 68/100 mengonfirmasi harga beli memberikan Margin of Safety atau didukung oleh katalis pertumbuhan laba/buyback aktif."
                 />
                 <span className="font-mono text-[#D97706]">
                   {joeliardiEval.valuationSafetyScore}/100
@@ -1192,7 +1485,20 @@ export function EmitenFundamentalInspectorModal({
                   Spot SBN Blended: {(joeliardiEval.sbnBlendedSpotRfPct ?? 6.64).toFixed(2)}% → Ke{' '}
                   {(joeliardiEval.dynamicCostOfEquityPct ?? 12.64).toFixed(2)}%
                 </div>
-                <div>Margin of Safety: {joeliardiEval.marginOfSafetyPct}%</div>
+                <div>
+                  State:{' '}
+                  <strong
+                    className={
+                      joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST'
+                        ? 'text-[#0D5C46]'
+                        : 'text-[#111315]'
+                    }
+                  >
+                    {joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST'
+                      ? 'Buy on Strength / Catalyst'
+                      : `MoS ${joeliardiEval.marginOfSafetyPct}%`}
+                  </strong>
+                </div>
               </div>
             </div>
 
@@ -1239,18 +1545,30 @@ export function EmitenFundamentalInspectorModal({
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E4E2DD] pb-2.5">
               <div>
                 <span className="text-[10px] font-bold uppercase tracking-wider text-[#0D5C46] block">
-                  QUANTEDGE MULTI-MODEL VALUATION &amp; STATISTICAL ARBITRAGE (RELATIVE VALUE)
+                  QUANTEDGE MULTI-MODEL VALUATION &amp; TYPE-SAFE .REDUCE() ENSEMBLE
                 </span>
                 <h4 className="text-xs sm:text-sm font-bold text-[#111315]">
-                  Komparasi Multi-Metode Harga Wajar (Matriks Spesifik Sektor · RIM 5–7Y · Relative Value Peer)
+                  Komparasi Multi-Metode Harga Wajar (45% Sektor · 35% RIM 5–7Y · 20% Relative Value Peer)
                 </h4>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="px-2 py-0.5 text-[10px] font-mono font-bold rounded-xs bg-[#FFFFFF] border border-[#E4E2DD] text-[#111315]">
                   Matriks Utama Sektor: {joeliardiEval.sectorPrimaryMetricLabel ?? 'Justified PBV'}
                 </span>
               </div>
             </div>
+
+            {/* Pure .reduce() Mathematical Formula Audit Strip */}
+            {joeliardiEval.ensembleFormulaAudit && (
+              <div className="px-3 py-2 bg-[#FFFFFF] border border-[#D97706]/40 rounded-xs flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono">
+                <span className="font-bold text-[#D97706] bb-amber uppercase">
+                  AUDIT RUMUS .REDUCE() ENSEMBLE:
+                </span>
+                <span className="text-[#111315] font-semibold">
+                  {joeliardiEval.ensembleFormulaAudit}
+                </span>
+              </div>
+            )}
 
             {/* 4 Valuation Methods Grid: Primary Method in Largest Font, 3 Others as Comparators */}
             {joeliardiEval.valuationMethodsComparison &&
@@ -1273,7 +1591,7 @@ export function EmitenFundamentalInspectorModal({
                               isPrimary ? 'text-[#D97706] bb-amber' : 'text-neutral-500'
                             }`}
                           >
-                            {isPrimary ? '★ ACUAN UTAMA (TERAKURAT)' : 'PEMBANDING MODEL'}
+                            {isPrimary ? '★ ACUAN UTAMA (.REDUCE)' : 'KOMPONEN ENSEMBLE'}
                           </span>
                           <span className="text-[10px] font-mono font-semibold text-neutral-500">
                             Bobot {(m.weightPct ?? 0).toFixed(0)}%

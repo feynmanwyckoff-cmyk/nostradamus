@@ -108,6 +108,44 @@ export interface StockMetrics {
   kseiHscIsNew?: boolean;
   kseiHscFootnote?: 'NONE' | 'UNREPORTED_DISTRIBUTION' | 'REPO_TRANSACTION' | 'VOLUNTARY_DELISTING';
   kseiHscScorePenaltyPts?: number;
+  // Corporate Action Interceptor & Forward-Looking Annualizer Metadata
+  trailingRoePct?: number;             // Historical/Trailing ROE (%) before Forward Annualizer
+  forwardAnnualizedRoePct?: number;    // Proportionally annualized ROE (%) from latest quarterly earnings run-rate
+  earningsGrowthYoYPct?: number;       // YoY quarterly net income / EPS momentum (%)
+  hasActiveBuyback?: boolean;          // True when issuer has an active OJK/RUPS share buyback mandate
+  buybackNominalIdr?: number;          // Total active buyback mandate allocation in IDR
+  liveMarketCapIdr?: number;           // Live or calibrated market capitalization in IDR
+  dynamicBuybackYieldPct?: number;     // (buybackNominalIdr / liveMarketCapIdr) * 100
+  splitRatioDivisor?: number;          // Stock split divisor (e.g. 5 for 1:5 split) applied to anchor BVPS/EPS/ADTV
+  isCatalystActive?: boolean;          // True when hasActiveBuyback || earningsGrowthYoYPct > 20 || splitRatioDivisor > 1
+  catalystBadgeLabel?: string;         // Short badge label e.g. "CATALYST ACTIVE · BUYBACK +4,2% / Q-EPS +34%"
+}
+
+export type RecommendationDecisionState =
+  | 'AVOID_HSC_BLOCK'
+  | 'STRONG_BUY_DEFENSIVE_ANOMALY'
+  | 'BUY_ON_STRENGTH_CATALYST'
+  | 'ACCUMULATE_DEEP_MOS'
+  | 'WAIT_FOR_PULLBACK';
+
+export interface EnsembleValuationLeg {
+  id: 'SECTOR_PRIMARY' | 'MULTI_STAGE_RIM' | 'STATARB_RELVAL';
+  label: string;
+  priceIdr: number;
+  weight: 0.45 | 0.35 | 0.2;
+}
+
+export interface CorporateActionOverrideInput {
+  ticker: string;
+  splitRatioDivisor?: number;
+  hasActiveBuyback?: boolean;
+  buybackNominalBillionIdr?: number;
+  liveMarketCapTrillionIdr?: number;
+  latestQuarterLabel?: string;
+  trailingRoePct?: number;
+  forwardAnnualizedRoePct?: number;
+  earningsGrowthYoYPct?: number;
+  catalystNote?: string;
 }
 
 export interface SyncTelemetryReport {
@@ -219,6 +257,25 @@ export interface JoeliardiOosEvaluation {
   quantedgeCompositeYieldPct?: number;
   quantedgeAlphaVerdict?: string;
   valuationMethodsComparison?: ValuationMethodComparisonItem[];
+  // Corporate Action Interceptor, Forward Annualizer, Type-Safe Ensemble & Dynamic Decision Tree
+  trailingRoePct?: number;
+  forwardAnnualizedRoePct?: number;
+  trailingEpsIdr?: number;
+  forwardAnnualizedEpsIdr?: number;
+  earningsGrowthYoYPct?: number;
+  latestQuarterLabel?: string;
+  hasActiveBuyback?: boolean;
+  buybackNominalIdr?: number;
+  liveMarketCapIdr?: number;
+  dynamicBuybackYieldPct?: number;
+  splitRatioDivisor?: number;
+  catalystValuationBoostPct?: number; // Capped at +15% per user specification
+  isCatalystActive?: boolean;
+  catalystBadgeLabel?: string;
+  catalystNarrative?: string;
+  ensembleFormulaAudit?: string; // e.g. "(Rp 1.480 × 45%) + (Rp 1.390 × 35%) + (Rp 1.320 × 20%) = Rp 1.415"
+  decisionState?: RecommendationDecisionState;
+  decisionActionLabel?: string;
   // KSEI HSC & Early Warning Suspect Telemetry
   hscTier?: 'HARD_BLOCK' | 'KSEI_DIVIDEND_PENALTY' | 'EARLY_WARNING_SUSPECT' | 'CLEAN';
   kseiHscConcentrationPct?: number;

@@ -3,6 +3,7 @@ import {
   BarbellRole,
   CandidateRecommendation,
   DeMiguelBufferZone,
+  EnsembleValuationLeg,
   EvaluatedHolding,
   HRPAllocationPosition,
   JoeliardiOosEvaluation,
@@ -28,6 +29,11 @@ import {
   formatKseiFootnoteShortLabel,
   getKseiHscEntry
 } from '../data/idxKseiHscRegistry';
+import {
+  computeTypeSafeEnsembleFairValue,
+  evaluateDynamicDecisionTree,
+  interceptCorporateActionAndAnnualize
+} from './corporateActionMiddleware';
 
 export type RawStockInput = Omit<
   StockMetrics,
@@ -1182,11 +1188,34 @@ export function enrichStockMetrics(item: RawStockInput): StockMetrics {
       ? Math.round(item.lastPrice)
       : undefined;
 
+  // Intercept Corporate Actions (Split, Buyback) & Forward Annualized ROE before factor scoring
+  const rawAnchor = resolveFundamentalAnchorPrice(item.ticker, Math.max(50, item.lastPrice || 50));
+  const intercepted = interceptCorporateActionAndAnnualize({
+    stock: {
+      ...(item as unknown as StockMetrics),
+      isLiquid,
+      dividendYieldPct
+    },
+    rawAnchorPriceIdr: rawAnchor,
+    rawAdtv20dIdr: item.adtv20dIdr || 1_500_000_000
+  });
+
   const normalizedInput: RawStockInput = {
     ...item,
+    roe: intercepted.forwardAnnualizedRoePct,
+    trailingRoePct: intercepted.trailingRoePct,
+    forwardAnnualizedRoePct: intercepted.forwardAnnualizedRoePct,
+    earningsGrowthYoYPct: intercepted.earningsGrowthYoYPct,
+    hasActiveBuyback: intercepted.hasActiveBuyback,
+    buybackNominalIdr: intercepted.buybackNominalIdr,
+    liveMarketCapIdr: intercepted.liveMarketCapIdr,
+    dynamicBuybackYieldPct: intercepted.dynamicBuybackYieldPct,
+    splitRatioDivisor: intercepted.splitRatioDivisor,
+    isCatalystActive: intercepted.isCatalystActive,
+    catalystBadgeLabel: intercepted.catalystBadgeLabel,
     previousClose: resolvedPrevClose,
     isLiquid,
-    dividendYieldPct
+    dividendYieldPct: Number((dividendYieldPct + intercepted.dynamicBuybackYieldPct * 0.5).toFixed(2))
   };
 
   const factors = computeDeMiguelFourFactors(normalizedInput);
@@ -1222,7 +1251,10 @@ export function enrichStockMetrics(item: RawStockInput): StockMetrics {
 
   return {
     ...normalizedInput,
+    dividendYieldPct,
     ...factors,
+    isCatalystActive: !factors.isHscFlagged && intercepted.isCatalystActive,
+    catalystBadgeLabel: !factors.isHscFlagged ? intercepted.catalystBadgeLabel : undefined,
     betaWeightedPropensity,
     dmuRankPct,
     dmuZone,
@@ -1449,7 +1481,8 @@ export function estimateEmitenAdtv20dIdr(stock: StockMetrics): number {
 export function calculateForwardDividend(
   stock: StockMetrics,
   estimatedEpsIdr?: number,
-  estimatedBvpsIdr?: number
+  estimatedBvpsIdr?: number,
+  dynamicBuybackYieldOverridePct?: number
 ): {
   annualizedEpsQ3Idr: number;
   historicalDpr3YPct: number;
@@ -1459,7 +1492,7 @@ export function calculateForwardDividend(
   totalShareholderYieldPct: number;
 } {
   const price = Math.max(50, stock.lastPrice);
-  const roe = Math.max(0.5, stock.roe);
+  const roe = Math.max(0.5, stock.forwardAnnualizedRoePct ?? stock.roe);
   const der = Math.max(0.05, stock.debtToEquity);
   const opMargin = Math.max(0.5, stock.operatingMargin);
   const clean = stock.ticker.trim().toUpperCase().replace(/\.JK$/i, '');
@@ -1469,15 +1502,20 @@ export function calculateForwardDividend(
       ? estimatedEpsIdr
       : Math.max(2, Math.round(((price / 1.55) * roe) / 100));
 
-  // Q3-2026 Annualized Run-Rate Adjustment Factor based on operating margin & ROE resilience
+  // Q3-2026 Annualized Run-Rate Adjustment Factor based on operating margin, ROE resilience & YoY quarterly surge
+  const earningsSurgeFactor =
+    (stock.earningsGrowthYoYPct ?? 0) > 20
+      ? Math.min(1.08, 1 + ((stock.earningsGrowthYoYPct ?? 0) - 18) * 0.0025)
+      : 1.0;
+
   const q3RunRateMultiplier =
-    roe >= 18 && opMargin >= 18 && der <= 0.65
+    (roe >= 18 && opMargin >= 18 && der <= 0.65
       ? 1.04
       : roe >= 14 && opMargin >= 12
       ? 1.01
       : roe < 8
       ? 0.92
-      : 0.98;
+      : 0.99) * earningsSurgeFactor;
 
   const annualizedEpsQ3Idr = Math.max(2, Math.round(baseEps * q3RunRateMultiplier));
 
@@ -1502,7 +1540,7 @@ export function calculateForwardDividend(
       : 0;
 
   // Net Buyback & Debt Paydown Yield (No Double Counting with Earnings Yield):
-  // Reflects organic FCF surplus allocated to net debt reduction & treasury share buybacks
+  // Combines organic FCF debt reduction + FULL PASS-THROUGH of Dynamic Share Buyback Yield (Nominal Buyback / Live Market Cap)
   const retentionRatio = Math.max(0, 1 - historicalDpr3YPct / 100);
   const fcfQualityFactor =
     roe >= 15 && der <= 0.65
@@ -1513,14 +1551,19 @@ export function calculateForwardDividend(
       ? 0.08
       : 0.03;
 
-  const netBuybackDebtPaydownYieldPct = stock.isHscFlagged
+  const organicDebtPaydownYieldPct = stock.isHscFlagged
     ? 0
-    : Number(
-        Math.max(
-          0,
-          Math.min(3.5, impliedEarningsYield * retentionRatio * fcfQualityFactor)
-        ).toFixed(2)
-      );
+    : Math.max(0, Math.min(3.5, impliedEarningsYield * retentionRatio * fcfQualityFactor));
+
+  const activeBuybackYieldPct = stock.isHscFlagged
+    ? 0
+    : typeof dynamicBuybackYieldOverridePct === 'number'
+    ? dynamicBuybackYieldOverridePct
+    : stock.dynamicBuybackYieldPct ?? 0;
+
+  const netBuybackDebtPaydownYieldPct = Number(
+    (organicDebtPaydownYieldPct + activeBuybackYieldPct).toFixed(2)
+  );
 
   const totalShareholderYieldPct = Number(
     (forwardDividendYieldPct + netBuybackDebtPaydownYieldPct).toFixed(2)
@@ -2254,21 +2297,37 @@ export function evaluateJoeliardiOosFundamental(
   macroIndicators: MacroIndicator[] = DEFAULT_GLOBAL_MACRO
 ): JoeliardiOosEvaluation {
   const price = Math.max(50, stock.lastPrice);
-  const roe = Math.max(0.5, stock.roe);
   const der = Math.max(0.05, stock.debtToEquity);
   const opMargin = Math.max(0.5, stock.operatingMargin);
   const isInst = isInstitutionalLiquidCandidate(stock.ticker);
 
-  const gpAccrual = computeGrossProfitabilityAndAccruals(stock, stock.dividendYieldPct ?? 0);
+  // 1. CORPORATE ACTION INTERCEPTOR & FORWARD-LOOKING ANNUALIZER MIDDLEWARE
+  // Intercepts stock splits, dynamic buybacks (Nominal / Market Cap), and latest quarterly earnings run-rates
+  // BEFORE computing BVPS, EPS, Justified PBV, or Multi-Stage RIM.
+  const rawAnchorPrice = resolveFundamentalAnchorPrice(stock.ticker, price);
+  const rawAdtv20dIdr = estimateEmitenAdtv20dIdr(stock);
+  const corpIntercept = interceptCorporateActionAndAnnualize({
+    stock,
+    rawAnchorPriceIdr: rawAnchorPrice,
+    rawAdtv20dIdr
+  });
+
+  const anchorPrice = corpIntercept.adjustedAnchorPriceIdr;
+  const adtv20dIdr = corpIntercept.adjustedAdtv20dIdr;
+  const trailingRoePct = corpIntercept.trailingRoePct;
+  const forwardRoePct = corpIntercept.forwardAnnualizedRoePct;
+  const roe = Math.max(0.5, forwardRoePct); // Forward ROE drives all valuation & growth (g) models
+
+  const gpAccrual = computeGrossProfitabilityAndAccruals(
+    { ...stock, roe: forwardRoePct },
+    stock.dividendYieldPct ?? 0
+  );
   const grossProfitabilityToAssets =
     stock.grossProfitabilityToAssets ?? gpAccrual.grossProfitabilityToAssets;
   const ocfToNetIncomeRatio = stock.ocfToNetIncomeRatio ?? gpAccrual.ocfToNetIncomeRatio;
   const accrualRatioToAssets = stock.accrualRatioToAssets ?? gpAccrual.accrualRatioToAssets;
   const accrualPenaltyScore = stock.accrualPenaltyScore ?? gpAccrual.accrualPenaltyScore;
   const accrualPenaltyPts = Math.round(accrualPenaltyScore * 8.5); // 0 - 20 pts on 0-100 fundamental scale
-
-  // Non-circular fundamental anchor price from 956-stock catalog + baseline anchors
-  const anchorPrice = resolveFundamentalAnchorPrice(stock.ticker, price);
 
   const baseSectorPbv =
     stock.sector === 'Financials'
@@ -2283,15 +2342,25 @@ export function evaluateJoeliardiOosFundamental(
       ? 1.55
       : 1.45;
 
-  // Fundamental BVPS & EPS anchored on fundamental anchorPrice so daily spot price jumps do NOT circularly inflate BVPS/EPS
-  const anchorFairPbvBaseline = Math.max(0.45, Math.min(7.5, baseSectorPbv * (roe / 16.5) * 0.88));
+  // Fundamental BVPS anchored on split-adjusted anchorPrice & trailing baseline so book value per share is stable,
+  // while Forward EPS pulls from Forward Annualized ROE (`roe = forwardRoePct`)
+  const anchorFairPbvBaseline = Math.max(
+    0.45,
+    Math.min(7.5, baseSectorPbv * (Math.max(10.5, trailingRoePct) / 16.5) * 0.88)
+  );
   const estimatedBvpsIdr = Math.max(25, Math.round(anchorPrice / anchorFairPbvBaseline));
+  const trailingEpsIdr = Math.max(2, Math.round((estimatedBvpsIdr * trailingRoePct) / 100));
   const estimatedEpsIdr = Math.max(2, Math.round((estimatedBvpsIdr * roe) / 100));
   const impliedPbv = Number(Math.max(0.35, Math.min(12.5, price / estimatedBvpsIdr)).toFixed(2));
   const impliedPer = Number(Math.max(2.0, Math.min(75.0, price / estimatedEpsIdr)).toFixed(2));
 
-  // Forward Dividend & Valid Total Shareholder Yield (No Double Counting)
-  const forwardDivData = calculateForwardDividend(stock, estimatedEpsIdr, estimatedBvpsIdr);
+  // Forward Dividend & Valid Total Shareholder Yield (With Full Pass-Through of Dynamic Buyback Yield)
+  const forwardDivData = calculateForwardDividend(
+    stock,
+    estimatedEpsIdr,
+    estimatedBvpsIdr,
+    corpIntercept.dynamicBuybackYieldPct
+  );
   const {
     annualizedEpsQ3Idr,
     historicalDpr3YPct,
@@ -2312,28 +2381,34 @@ export function evaluateJoeliardiOosFundamental(
     dynamicCostOfEquityPct
   } = sbnCurve;
 
-  // Damodaran (2012) Forward Valuation: Justified PBV = (ROE_sustainable - g) / (Ke - g)
-  const sustainableRoe = Math.min(28.5, roe * (grossProfitabilityToAssets >= 20 ? 1.04 : 0.98));
+  // Damodaran (2012) Forward Valuation: Justified PBV = (Forward_ROE_sustainable - g) / (Ke - g)
+  // Parameter Growth (g) strictly pulls from Forward Annualized ROE (`roe`)
+  const sustainableRoe = Math.min(30.5, roe * (grossProfitabilityToAssets >= 20 ? 1.04 : 0.99));
   const retentionRatio = Math.max(0.15, 1 - historicalDpr3YPct / 100);
-  const rawGrowth = sustainableRoe * retentionRatio * 0.45;
+  const rawGrowth = sustainableRoe * retentionRatio * 0.48;
   const sustainableGrowthRatePct = Number(
-    Math.max(2.0, Math.min(6.2, Math.min(rawGrowth, dynamicCostOfEquityPct - 2.4))).toFixed(2)
+    Math.max(2.0, Math.min(6.8, Math.min(rawGrowth, dynamicCostOfEquityPct - 2.2))).toFixed(2)
   );
 
   const damodaranJustifiedPbv = Number(
     Math.max(
       0.45,
       Math.min(
-        5.2,
-        (sustainableRoe - sustainableGrowthRatePct) /
-          Math.max(2.2, dynamicCostOfEquityPct - sustainableGrowthRatePct)
+        5.5,
+        ((sustainableRoe - sustainableGrowthRatePct) /
+          Math.max(2.1, dynamicCostOfEquityPct - sustainableGrowthRatePct)) *
+          corpIntercept.catalystValuationMultiplier
       )
     ).toFixed(2)
   );
 
   const derPenaltyMultiplier = der <= 0.6 ? 1.05 : der <= 1.2 ? 0.95 : 0.78;
   const divQualityMultiplier =
-    forwardDividendYieldPct >= 4.0 ? 1.10 : forwardDividendYieldPct > 0 ? 1.04 : 0.90;
+    totalShareholderYieldPct >= 4.5
+      ? 1.12
+      : forwardDividendYieldPct > 0 || corpIntercept.hasActiveBuyback
+      ? 1.05
+      : 0.9;
   const accrualQualityMultiplier = Math.max(0.76, 1 - accrualPenaltyScore * 0.08);
   const hscDiscountMultiplier = stock.isHscFlagged ? 0.55 : 1.0;
 
@@ -2341,7 +2416,7 @@ export function evaluateJoeliardiOosFundamental(
     Math.max(
       0.5,
       Math.min(
-        4.9,
+        5.2,
         damodaranJustifiedPbv *
           derPenaltyMultiplier *
           divQualityMultiplier *
@@ -2354,9 +2429,10 @@ export function evaluateJoeliardiOosFundamental(
     Math.max(
       5.5,
       Math.min(
-        22.5,
-        ((100 / Math.max(7.5, dynamicCostOfEquityPct - sustainableGrowthRatePct * 0.55)) +
-          forwardDividendYieldPct * 0.35) *
+        24.0,
+        (100 / Math.max(7.2, dynamicCostOfEquityPct - sustainableGrowthRatePct * 0.58) +
+          totalShareholderYieldPct * 0.35) *
+          corpIntercept.catalystValuationMultiplier *
           derPenaltyMultiplier *
           accrualQualityMultiplier *
           hscDiscountMultiplier
@@ -2364,23 +2440,23 @@ export function evaluateJoeliardiOosFundamental(
     ).toFixed(2)
   );
 
-  // METHOD 1: Multi-Stage Residual Income Model (Ohlson-Penman EBO with Dynamic 5-7Y ROE Fade)
+  // METHOD 1: Multi-Stage Residual Income Model (Ohlson-Penman EBO with Dynamic 5-7Y Forward ROE Fade)
   const rimResult = computeMultiStageResidualIncomeValue({
     bvps0: estimatedBvpsIdr,
-    roePct: roe,
+    roePct: roe, // Forward Annualized ROE
     kePct: dynamicCostOfEquityPct,
     dprPct: historicalDpr3YPct,
     gpaPct: grossProfitabilityToAssets,
     ocfToNi: ocfToNetIncomeRatio,
     der,
     accrualPenaltyScore,
-    hscDiscountMultiplier
+    hscDiscountMultiplier: hscDiscountMultiplier * corpIntercept.catalystValuationMultiplier
   });
   const { rimFairValueIdr, rimFadeYears, rimPersistenceOmega, rimTerminalRoePct } = rimResult;
 
   // METHOD 2: Sector-Specific Institutional Valuation Matrix (P/CF, EV/EBITDA, P/AFFO, Justified PBV, Quality P/E)
   const sectorValResult = computeSectorSpecificValuation({
-    stock,
+    stock: { ...stock, roe },
     price,
     estimatedEpsIdr,
     estimatedBvpsIdr,
@@ -2390,7 +2466,7 @@ export function evaluateJoeliardiOosFundamental(
     sustainableGrowthRatePct,
     standaloneFairPbv,
     standaloneFairPer,
-    derPenaltyMultiplier,
+    derPenaltyMultiplier: derPenaltyMultiplier * corpIntercept.catalystValuationMultiplier,
     accrualQualityMultiplier,
     hscDiscountMultiplier
   });
@@ -2406,15 +2482,21 @@ export function evaluateJoeliardiOosFundamental(
     sectorAcademicRationale
   } = sectorValResult;
 
-  // METHOD 3 & 4: Agnostic Cross-Sectional Peer Valuation & Quantedge Statistical Arbitrage (Relative Value)
+  // METHOD 3 & 4: Agnostic Cross-Sectional Peer Valuation & Post-Corporate Action Calibrated Statistical Arbitrage
+  // Calibrate 30D return if a stock split occurred so the Z-score never mistakes a split or buyback re-rating for a correlation breakdown
+  const splitCalibratedStock: StockMetrics =
+    corpIntercept.splitRatioDivisor > 1 && stock.return30D < -35
+      ? { ...stock, return30D: Number((stock.change1D * 3.5).toFixed(2)) }
+      : stock;
+
   const statArbResult = computeStatArbAndAgnosticPeerValuation({
-    stock,
+    stock: splitCalibratedStock,
     price,
     estimatedEpsIdr,
     estimatedBvpsIdr,
     ocfToNetIncomeRatio,
     grossProfitabilityToAssets,
-    forwardDividendYieldPct,
+    forwardDividendYieldPct: totalShareholderYieldPct,
     sectorSpecificFairValueIdr,
     rimFairValueIdr
   });
@@ -2432,16 +2514,39 @@ export function evaluateJoeliardiOosFundamental(
     statArbRationale
   } = statArbResult;
 
-  // PRIMARY ENSEMBLE (LARGEST FONT): Quantedge Sector-Adaptive Multi-Method Fair Value
-  // Weights: 45% Sector-Specific Matrix + 35% Multi-Stage Residual Income (5-7Y Fade) + 20% Relative Value / Agnostic Peer
-  const rawQuantedgeEnsemble =
-    0.45 * sectorSpecificFairValueIdr +
-    0.35 * rimFairValueIdr +
-    0.20 * ((agnosticPeerFairValueIdr + statArbImpliedTargetIdr) / 2);
-  const intrinsicValueIdr = roundToIdxTick(Math.max(50, rawQuantedgeEnsemble));
+  // PRIMARY ENSEMBLE (TYPE-SAFE .reduce() ENFORCEMENT):
+  // Strictly isolates the 3 final method prices and their exact weights (45% Sector + 35% RIM + 20% RelVal)
+  // so the printed Primary Ensemble Fair Value matches the exact mathematical weighted average on the UI card.
+  const ensembleLegs: readonly [EnsembleValuationLeg, EnsembleValuationLeg, EnsembleValuationLeg] = [
+    {
+      id: 'SECTOR_PRIMARY',
+      label: `Sektor (${sectorPrimaryMetricShort})`,
+      priceIdr: sectorSpecificFairValueIdr,
+      weight: 0.45
+    },
+    {
+      id: 'MULTI_STAGE_RIM',
+      label: `RIM ${rimFadeYears}Y Fade`,
+      priceIdr: rimFairValueIdr,
+      weight: 0.35
+    },
+    {
+      id: 'STATARB_RELVAL',
+      label: `RelVal vs ${statArbPeerTicker}`,
+      priceIdr: statArbImpliedTargetIdr,
+      weight: 0.2
+    }
+  ];
 
-  // Pegged Fair Multiples: Strictly synchronized with final Quantedge Ensemble Intrinsic Value so
-  // EPS * Wajar PER = Nilai Intrinsik Wajar and BVPS * Wajar PBV = Nilai Intrinsik Wajar
+  const ensembleAgg = computeTypeSafeEnsembleFairValue(
+    ensembleLegs,
+    1.0, // Each leg already incorporates hscDiscountMultiplier
+    roundToIdxTick
+  );
+  const intrinsicValueIdr = ensembleAgg.intrinsicValueIdr;
+  const ensembleFormulaAudit = ensembleAgg.ensembleFormulaAudit;
+
+  // Pegged Fair Multiples: Strictly synchronized with final Quantedge Ensemble Intrinsic Value
   const joeliardiFairPer = Number((intrinsicValueIdr / Math.max(1, estimatedEpsIdr)).toFixed(2));
   const joeliardiFairPbv = Number((intrinsicValueIdr / Math.max(1, estimatedBvpsIdr)).toFixed(2));
 
@@ -2458,7 +2563,7 @@ export function evaluateJoeliardiOosFundamental(
       id: 'quantedge_ensemble',
       name: 'Quantedge Sector-Adaptive Ensemble (Utama)',
       shortLabel: 'Quantedge Ensemble',
-      metricBasis: `45% ${sectorPrimaryMetricShort} Sektor + 35% RIM (${rimFadeYears}Y) + 20% Relative Peer`,
+      metricBasis: `45% ${sectorPrimaryMetricShort} + 35% RIM (${rimFadeYears}Y) + 20% RelVal (${ensembleFormulaAudit})`,
       impliedMultipleLabel: `PER ${impliedPer}x · PBV ${impliedPbv}x`,
       fairMultipleLabel: `Wajar PER ${joeliardiFairPer}x · PBV ${joeliardiFairPbv}x`,
       fairPriceIdr: intrinsicValueIdr,
@@ -2482,7 +2587,7 @@ export function evaluateJoeliardiOosFundamental(
       id: 'multistage_rim',
       name: `Multi-Stage Residual Income (Ohlson-Penman ${rimFadeYears}Y Fade)`,
       shortLabel: `RIM ${rimFadeYears}Y Fade`,
-      metricBasis: `BVPS Rp ${estimatedBvpsIdr.toLocaleString('id-ID')} · ω=${rimPersistenceOmega} → Ke ${dynamicCostOfEquityPct}%`,
+      metricBasis: `BVPS Rp ${estimatedBvpsIdr.toLocaleString('id-ID')} · Fwd ROE ${roe.toFixed(1)}% · ω=${rimPersistenceOmega}`,
       impliedMultipleLabel: `Implied PBV ${impliedPbv}x`,
       fairMultipleLabel: `Justified PBV ${damodaranJustifiedPbv}x`,
       fairPriceIdr: rimFairValueIdr,
@@ -2517,7 +2622,6 @@ export function evaluateJoeliardiOosFundamental(
   const netErpSpreadPct = Number((earningsYieldPct - dynamicCostOfEquityPct).toFixed(2));
 
   // 20-Day ADTV & 5% Daily Liquidity Cap + Beta-Weighted Position Sizing Cap (1/Beta Barbell)
-  const adtv20dIdr = estimateEmitenAdtv20dIdr(stock);
   const maxSafeAllocationIdr = Math.round(adtv20dIdr * 0.05);
   const effectiveBeta = Math.max(0.35, Number(stock.beta1Y) || 1.0);
   const betaWeightedSizingCapPct = Number(
@@ -2528,14 +2632,32 @@ export function evaluateJoeliardiOosFundamental(
   const isDefensiveDiscountAnomaly =
     !stock.isHscFlagged && stock.beta1Y < 0.5 && stock.dmuValueScore > 9.0;
 
-  // Undercut / Deep Discount Detection (Spot Price <= 85% of Intrinsic Value)
-  const intrinsicAccumCeiling = roundToIdxTick(intrinsicValueIdr * 0.85);
-  const isUndercutDeepDiscount = !stock.isHscFlagged && price <= intrinsicAccumCeiling;
+  // STATE-BASED RECOMMENDATION ENGINE (Dynamic Decision Tree)
+  const decisionTree = evaluateDynamicDecisionTree({
+    isHscFlagged: Boolean(stock.isHscFlagged),
+    isDefensiveDiscountAnomaly,
+    hasActiveBuyback: corpIntercept.hasActiveBuyback,
+    earningsGrowthYoYPct: corpIntercept.earningsGrowthYoYPct,
+    marginOfSafetyPct,
+    dmuCompositeScore: stock.dmuCompositeScore,
+    lastPriceIdr: price,
+    intrinsicValueIdr,
+    tickRounder: roundToIdxTick
+  });
 
-  // Pillar 1: Business Quality & Gross Profitability Moat (Novy-Marx GP/A + DuPont ROE - Accrual Penalty) (0 - 100)
+  // Undercut / Deep Discount Detection (Spot Price <= 85% of Intrinsic Value or Catalyst Active Buy on Strength)
+  const intrinsicAccumCeiling = roundToIdxTick(intrinsicValueIdr * 0.85);
+  const isUndercutDeepDiscount =
+    !stock.isHscFlagged &&
+    (price <= intrinsicAccumCeiling || decisionTree.decisionState === 'BUY_ON_STRENGTH_CATALYST');
+
+  // Pillar 1: Business Quality & Gross Profitability Moat (Novy-Marx GP/A + Forward ROE - Accrual Penalty) (0 - 100)
   const gpaScore = Math.min(48, (grossProfitabilityToAssets / 24) * 44);
   const roeScore = Math.min(28, (roe / 20) * 24);
-  const moatBonus = (isInst ? 14 : 4) + (forwardDividendYieldPct > 0 ? 10 : 0);
+  const moatBonus =
+    (isInst ? 14 : 4) +
+    (totalShareholderYieldPct > 0 ? 10 : 0) +
+    (corpIntercept.isCatalystActive ? 5 : 0);
   const businessQualityScore = Math.round(
     Math.max(15, Math.min(98, gpaScore + roeScore + moatBonus - accrualPenaltyPts * 0.6))
   );
@@ -2551,11 +2673,11 @@ export function evaluateJoeliardiOosFundamental(
       ? 4
       : -12;
   const cashDivScore =
-    forwardDividendYieldPct >= 5
+    totalShareholderYieldPct >= 5
       ? 22
-      : forwardDividendYieldPct >= 2
+      : totalShareholderYieldPct >= 2
       ? 16
-      : forwardDividendYieldPct > 0
+      : totalShareholderYieldPct > 0
       ? 10
       : 3;
   const kseiDividendPenaltyPts =
@@ -2580,7 +2702,13 @@ export function evaluateJoeliardiOosFundamental(
   );
 
   // Pillar 3: Multi-Method Ensemble Valuation & Sector-Specific Margin of Safety (0 - 100)
-  const mosScore = Math.max(10, Math.min(65, 38 + marginOfSafetyPct * 1.15));
+  const mosScore = Math.max(
+    10,
+    Math.min(
+      65,
+      38 + marginOfSafetyPct * 1.15 + (decisionTree.decisionState === 'BUY_ON_STRENGTH_CATALYST' ? 8 : 0)
+    )
+  );
   const valueFactorContribution = (stock.dmuValueScore / 10) * 35;
   const valuationSafetyScore = Math.round(
     Math.max(10, Math.min(98, mosScore + valueFactorContribution - (stock.isHscFlagged ? 25 : 0)))
@@ -2630,6 +2758,8 @@ export function evaluateJoeliardiOosFundamental(
   const quantedgeAlphaVerdict =
     stock.isHscFlagged
       ? 'AVOID / HSC MICROSTRUCTURE RISK'
+      : decisionTree.decisionState === 'BUY_ON_STRENGTH_CATALYST'
+      ? `BUY ON STRENGTH / CATALYST: ${corpIntercept.catalystBadgeLabel || 'MOMENTUM FUNDAMENTAL AKTIF'} (Fwd ROE ${roe.toFixed(1)}% · TSY ${totalShareholderYieldPct.toFixed(2)}%)`
       : statArbSignal === 'MEAN_REVERSION_BUY' && marginOfSafetyPct >= 8
       ? `QUANTEDGE HIGH-ALPHA: DISLOKASI STAT-ARB (${statArbZScore}σ vs ${statArbPeerTicker}) + DISKON ${sectorPrimaryMetricShort}`
       : quantedgeSystematicScore >= 78
@@ -2650,6 +2780,9 @@ export function evaluateJoeliardiOosFundamental(
   } else if (isDefensiveDiscountAnomaly) {
     valuationVerdict = 'STRONG_UNDERVALUED';
     valuationLabel = `Strong Buy: Anomali Aset Defensif Terdiskon (MoS +${marginOfSafetyPct}%)`;
+  } else if (decisionTree.decisionState === 'BUY_ON_STRENGTH_CATALYST') {
+    valuationVerdict = marginOfSafetyPct >= 8 ? 'STRONG_UNDERVALUED' : 'FAIR_QUALITY';
+    valuationLabel = `Buy on Strength / Catalyst (${corpIntercept.hasActiveBuyback ? `Buyback +${corpIntercept.dynamicBuybackYieldPct}%` : `Laba Q +${corpIntercept.earningsGrowthYoYPct}%`} · MoS ${marginOfSafetyPct >= 0 ? '+' : ''}${marginOfSafetyPct}%)`;
   } else if (statArbSignal === 'MEAN_REVERSION_BUY' && marginOfSafetyPct >= 8) {
     valuationVerdict = 'STRONG_UNDERVALUED';
     valuationLabel = `StatArb Mean-Reversion Buy vs ${statArbPeerTicker} (Z=${statArbZScore}σ · MoS +${marginOfSafetyPct}%)`;
@@ -2663,7 +2796,7 @@ export function evaluateJoeliardiOosFundamental(
 
   const convictionGrade: JoeliardiOosEvaluation['convictionGrade'] = stock.isHscFlagged
     ? 'D (AVOID / HSC)'
-    : totalConvictionScore >= 82 || isDefensiveDiscountAnomaly
+    : totalConvictionScore >= 82 || isDefensiveDiscountAnomaly || (decisionTree.decisionState === 'BUY_ON_STRENGTH_CATALYST' && totalConvictionScore >= 74)
     ? 'A+ (CORE CONVICTION)'
     : totalConvictionScore >= 72
     ? 'A (SOLID VALUE)'
@@ -2674,6 +2807,16 @@ export function evaluateJoeliardiOosFundamental(
   const keyStrengths: string[] = [];
   const keyRisks: string[] = [];
 
+  if (corpIntercept.isCatalystActive) {
+    keyStrengths.push(
+      `Katalis Fundamental & Korporasi Aktif (${corpIntercept.latestQuarterLabel}): ${corpIntercept.catalystNarrative} Forward Annualized ROE naik dari ${trailingRoePct.toFixed(1)}% (Trailing) menjadi ${forwardRoePct.toFixed(1)}% (Forward EPS Rp ${estimatedEpsIdr.toLocaleString('id-ID')}/saham).`
+    );
+  }
+  if (corpIntercept.hasActiveBuyback && corpIntercept.dynamicBuybackYieldPct > 0) {
+    keyStrengths.push(
+      `Injeksi Likuiditas Share Buyback Aktif: Mandat buyback Rp ${(corpIntercept.buybackNominalIdr / 1_000_000_000).toLocaleString('id-ID')} Miliar terhadap Market Cap Rp ${(corpIntercept.liveMarketCapIdr / 1_000_000_000_000).toFixed(2)} Triliun menyumbang Buyback Yield +${corpIntercept.dynamicBuybackYieldPct.toFixed(2)}% ke dalam Total Shareholder Yield (${totalShareholderYieldPct.toFixed(2)}%).`
+    );
+  }
   if (isDefensiveDiscountAnomaly) {
     keyStrengths.push(
       `Strong Buy — Anomali Aset Defensif Terdiskon: Kombinasi Beta sangat rendah (${stock.beta1Y.toFixed(2)}x) dan Skor Value/GP-A tinggi (${stock.dmuValueScore.toFixed(1)}/10) mengonfirmasi koreksi jangka pendek sebagai peluang akumulasi utama.`
@@ -2694,17 +2837,17 @@ export function evaluateJoeliardiOosFundamental(
   }
   if (roe >= dynamicCostOfEquityPct) {
     keyStrengths.push(
-      `ROE ${roe.toFixed(1)}% melampaui Dynamic Cost of Equity RI (${dynamicCostOfEquityPct.toFixed(2)}% dari SBN Spot Blended ${sbnBlendedSpotRfPct.toFixed(2)}%), menghasilkan Justified PBV Damodaran ${damodaranJustifiedPbv.toFixed(2)}x.`
+      `Forward ROE ${roe.toFixed(1)}% melampaui Dynamic Cost of Equity RI (${dynamicCostOfEquityPct.toFixed(2)}% dari SBN Spot Blended ${sbnBlendedSpotRfPct.toFixed(2)}%), menghasilkan Justified PBV Damodaran ${damodaranJustifiedPbv.toFixed(2)}x.`
     );
   }
-  if (forwardDividendYieldPct > 0) {
+  if (totalShareholderYieldPct > 0) {
     keyStrengths.push(
-      `Estimasi Forward Dividend Yield ${forwardDividendYieldPct.toFixed(2)}% (Annualized EPS Q3-2026 Rp ${annualizedEpsQ3Idr.toLocaleString('id-ID')} × DPR 3Y ${historicalDpr3YPct.toFixed(0)}%) & Quantedge Composite Yield ${quantedgeCompositeYieldPct}%.`
+      `Total Shareholder Yield (TSY) ${totalShareholderYieldPct.toFixed(2)}% (Forward Dividend Yield ${forwardDividendYieldPct.toFixed(2)}% + Buyback & Debt Paydown Yield ${netBuybackDebtPaydownYieldPct.toFixed(2)}%).`
     );
   }
   if (marginOfSafetyPct >= 10 && !stock.isHscFlagged) {
     keyStrengths.push(
-      `Diperdagangkan di bawah Nilai Intrinsik Wajar Quantedge Ensemble Rp ${intrinsicValueIdr.toLocaleString('id-ID')} (MoS +${marginOfSafetyPct}% · Pembanding Peer Relatif Rp ${statArbImpliedTargetIdr.toLocaleString('id-ID')}).`
+      `Diperdagangkan di bawah Nilai Intrinsik Wajar Quantedge Ensemble Rp ${intrinsicValueIdr.toLocaleString('id-ID')} (MoS +${marginOfSafetyPct}% · Audit Ensemble: ${ensembleFormulaAudit}).`
     );
   }
 
@@ -2729,7 +2872,7 @@ export function evaluateJoeliardiOosFundamental(
   }
   if (roe < dynamicCostOfEquityPct) {
     keyRisks.push(
-      `ROE (${roe.toFixed(1)}%) berada di bawah Dynamic Cost of Equity (${dynamicCostOfEquityPct.toFixed(2)}%), membatasi Residual Income dan Justified PBV (${damodaranJustifiedPbv.toFixed(2)}x).`
+      `Forward ROE (${roe.toFixed(1)}%) berada di bawah Dynamic Cost of Equity (${dynamicCostOfEquityPct.toFixed(2)}%), membatasi Residual Income dan Justified PBV (${damodaranJustifiedPbv.toFixed(2)}x).`
     );
   }
   if (der > 1.1) {
@@ -2739,7 +2882,7 @@ export function evaluateJoeliardiOosFundamental(
   }
   if (marginOfSafetyPct < 0) {
     keyRisks.push(
-      `Harga pasar saat ini berada ${Math.abs(marginOfSafetyPct).toFixed(1)}% di atas estimasi Nilai Intrinsik Wajar Quantedge Ensemble.`
+      `Harga pasar saat ini berada ${Math.abs(marginOfSafetyPct).toFixed(1)}% di atas estimasi Nilai Intrinsik Wajar Quantedge Ensemble${decisionTree.decisionState === 'BUY_ON_STRENGTH_CATALYST' ? ' (masih dalam batas toleransi ≤10% Buy on Strength/Catalyst)' : ''}.`
     );
   }
   if (adtv20dIdr < 10_000_000_000) {
@@ -2823,6 +2966,24 @@ export function evaluateJoeliardiOosFundamental(
     quantedgeCompositeYieldPct,
     quantedgeAlphaVerdict,
     valuationMethodsComparison,
+    trailingRoePct,
+    forwardAnnualizedRoePct: forwardRoePct,
+    trailingEpsIdr,
+    forwardAnnualizedEpsIdr: estimatedEpsIdr,
+    earningsGrowthYoYPct: corpIntercept.earningsGrowthYoYPct,
+    latestQuarterLabel: corpIntercept.latestQuarterLabel,
+    hasActiveBuyback: corpIntercept.hasActiveBuyback,
+    buybackNominalIdr: corpIntercept.buybackNominalIdr,
+    liveMarketCapIdr: corpIntercept.liveMarketCapIdr,
+    dynamicBuybackYieldPct: corpIntercept.dynamicBuybackYieldPct,
+    splitRatioDivisor: corpIntercept.splitRatioDivisor,
+    catalystValuationBoostPct: corpIntercept.catalystValuationBoostPct,
+    isCatalystActive: corpIntercept.isCatalystActive,
+    catalystBadgeLabel: corpIntercept.catalystBadgeLabel,
+    catalystNarrative: corpIntercept.catalystNarrative,
+    ensembleFormulaAudit,
+    decisionState: decisionTree.decisionState,
+    decisionActionLabel: decisionTree.decisionActionLabel,
     hscTier: stock.hscTier,
     kseiHscConcentrationPct: stock.kseiHscConcentrationPct,
     kseiHscIsNew: stock.kseiHscIsNew,

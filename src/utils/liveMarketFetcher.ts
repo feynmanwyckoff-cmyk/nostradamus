@@ -15,6 +15,7 @@ import {
   rankUniverseWithBuffer,
   roundToIdxTick
 } from './quantEngine';
+import { evaluateDynamicDecisionTree } from './corporateActionMiddleware';
 import {
   FULL_JCI_EMITEN_CATALOG,
   createCalibratedIdxEntry,
@@ -3394,6 +3395,26 @@ function buildDeepAnalyticalConvictionReport(params: {
     (n) => n.sentiment === 'RISK_OFF' || n.emitenCategory === 'REGULATORY_UMA_ISSUE'
   );
 
+  // State-Based Recommendation Engine (Dynamic Decision Tree)
+  const hasActiveBuyback = Boolean(joeliardiEval.hasActiveBuyback ?? stock.hasActiveBuyback);
+  const earningsGrowthYoYPct = joeliardiEval.earningsGrowthYoYPct ?? stock.earningsGrowthYoYPct ?? 0;
+  const forwardRoePct = joeliardiEval.forwardAnnualizedRoePct ?? stock.forwardAnnualizedRoePct ?? stock.roe;
+  const trailingRoePct = joeliardiEval.trailingRoePct ?? stock.trailingRoePct ?? stock.roe;
+
+  const decisionTree = evaluateDynamicDecisionTree({
+    isHscFlagged: Boolean(stock.isHscFlagged),
+    isDefensiveDiscountAnomaly,
+    hasActiveBuyback,
+    earningsGrowthYoYPct,
+    marginOfSafetyPct: joeliardiEval.marginOfSafetyPct,
+    dmuCompositeScore: stock.dmuCompositeScore,
+    lastPriceIdr: stock.lastPrice,
+    intrinsicValueIdr: joeliardiEval.intrinsicValueIdr,
+    tickRounder: roundToIdxTick
+  });
+
+  const isBuyOnStrengthCatalyst = decisionTree.decisionState === 'BUY_ON_STRENGTH_CATALYST';
+
   // Verdict determination
   let verdictBadge = 'HOLD // WAIT FOR BETTER MOS';
   let verdictTitle = `Fundamental ${stock.ticker} tergolong stabil (GP/A ${gpToAssets.toFixed(1)}% · OCF/NI ${ocfNi.toFixed(2)}x), namun harga saat ini menuntut kesabaran menunggu area beli yang lebih aman`;
@@ -3403,6 +3424,9 @@ function buildDeepAnalyticalConvictionReport(params: {
   } else if (isDefensiveDiscountAnomaly) {
     verdictBadge = 'STRONG ACCUMULATE // DEFENSIVE DISCOUNT ANOMALY';
     verdictTitle = `Strong Buy: Anomali Aset Defensif Terdiskon pada ${stock.ticker} (Beta ${stock.beta1Y.toFixed(2)}x, Cap 1/β ≤${betaCap.toFixed(1)}% & Skor Value ${stock.dmuValueScore.toFixed(1)}/10) dengan Forward Dividend Yield (Est) ${forwardDivYield.toFixed(2)}%`;
+  } else if (isBuyOnStrengthCatalyst) {
+    verdictBadge = 'BUY ON STRENGTH // CATALYST ACTIVE';
+    verdictTitle = `Buy on Strength / Catalyst pada ${stock.ticker}: ${joeliardiEval.catalystBadgeLabel || 'Momentum Laba & Buyback Aktif'} (Forward ROE ${forwardRoePct.toFixed(1)}% vs Trailing ${trailingRoePct.toFixed(1)}% · TSY ${totalShareholderYieldPct.toFixed(2)}%) membatalkan instruksi tunggu koreksi`;
   } else if (isValueTrapCandidate) {
     verdictBadge = 'CAUTION // VALUE TRAP ALERT';
     verdictTitle = isStructuralUnderperformer
@@ -3419,49 +3443,33 @@ function buildDeepAnalyticalConvictionReport(params: {
     verdictTitle = `${stock.ticker} memiliki kualitas bisnis yang solid (GP/A ${gpToAssets.toFixed(1)}% · Top ${stock.dmuRankPct}% OOS) dengan porsi 1/β Cap ≤${betaCap.toFixed(1)}%`;
   }
 
-  // Contextual Direct Analysis (Synchronized with 5 Academic Pillars)
+  // Contextual Direct Analysis (Synchronized with 5 Academic Pillars & Catalyst Engine)
   let directAnswerSummary = '';
   if (stock.isHscFlagged) {
     directAnswerSummary = `Hasil Analisis Nostradamus: Saham ${stock.ticker} TIDAK LAYAK DIAKUMULASI karena masuk dalam pantauan High Speculative Concentration (${stock.hscReason || 'pergerakan harga tidak didukung kinerja fundamental'}). Meskipun harga bergerak ${stock.change1D >= 0 ? '+' : ''}${stock.change1D}% (1D) dan ${stock.return30D >= 0 ? '+' : ''}${stock.return30D}% (30D), risiko spekulasinya terlalu tinggi bagi portofolio yang mengutamakan keamanan modal.`;
   } else if (isAskingTrapOrHsc) {
-    directAnswerSummary = isValueTrapCandidate
+    directAnswerSummary = isValueTrapCandidate && !isBuyOnStrengthCatalyst
       ? `Hasil Audit Value Trap & Anti-Junk QMJ: Meskipun ${stock.ticker} bersih dari indikasi saham gorengan (HSC) dan tampak murah di atas kertas (Implied PER ${joeliardiEval.impliedPer}x, Implied PBV ${joeliardiEval.impliedPbv}x vs Justified PBV ${justPbv}x, Margin of Safety +${joeliardiEval.marginOfSafetyPct}%), komite mencatat risiko Value Trap karena ${isStructuralUnderperformer ? `ROE (${stock.roe}%) berada di bawah Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}% (Spot Rf ${sbnBlended.toFixed(2)}%)` : `pergerakan harga 30 hari masih melemah (${stock.return30D}%) dengan rasio kas operasi OCF/NI ${ocfNi.toFixed(2)}x`}. Sebaiknya tunggu tekanan jual mereda sebelum mencicil beli.`
-      : `Hasil Audit Value Trap & Anti-Junk QMJ: Emiten ${stock.ticker} bersih dari indikasi spekulatif (HSC) dan terbukti BUKAN VALUE TRAP${isDefensiveDiscountAnomaly ? ' (Strong Buy: Anomali Aset Defensif Terdiskon)' : ''}. Diskon harga +${joeliardiEval.marginOfSafetyPct}% terhadap Nilai Intrinsik Wajar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (Justified PBV ${justPbv}x · Wajar PER ${joeliardiEval.joeliardiFairPer}x) ditopang oleh GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}%, konversi kas riil OCF/NI ${ocfNi.toFixed(2)}x (${accrualPen === 0 ? '0 Penalti Akrual' : `Penalti -${accrualPen} pts`}), neraca DER ${stock.debtToEquity}x, serta Forward Dividend Yield (Est) ${forwardDivYield.toFixed(2)}%.`;
+      : `Hasil Audit Value Trap & Anti-Junk QMJ: Emiten ${stock.ticker} bersih dari indikasi spekulatif (HSC) dan terbukti BUKAN VALUE TRAP${isDefensiveDiscountAnomaly ? ' (Strong Buy: Anomali Aset Defensif Terdiskon)' : isBuyOnStrengthCatalyst ? ' (Buy on Strength / Catalyst Active)' : ''}. Diskon harga ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}% terhadap Nilai Intrinsik Wajar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (Justified PBV ${justPbv}x · Wajar PER ${joeliardiEval.joeliardiFairPer}x) ditopang oleh Forward ROE ${forwardRoePct.toFixed(1)}% (Trailing ${trailingRoePct.toFixed(1)}%), GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}%, konversi kas riil OCF/NI ${ocfNi.toFixed(2)}x (${accrualPen === 0 ? '0 Penalti Akrual' : `Penalti -${accrualPen} pts`}), serta Total Shareholder Yield ${totalShareholderYieldPct.toFixed(2)}%.`;
   } else if (isAskingNews) {
     const topHeadlines = recentNews
       .slice(0, 2)
       .map((n) => `"${stripRawMarkdownArtifacts(n.title)}"`)
       .join(' serta ');
-    directAnswerSummary = `Hasil Evaluasi Dampak Berita & Aksi Korporasi: Sentimen utama ${stock.ticker} dalam 3 bulan terakhir berfokus pada ${topHeadlines || 'perkembangan kinerja operasional dan pembagian dividen'}. Dari kacamata fundamental kuantitatif, kabar tersebut ${cautionNews.length > positiveNews.length ? 'perlu dicermati dampaknya terhadap kestabilan margin laba ke depan' : `memperkokoh GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}% dan laba bersih (Annualized EPS Q3 ~Rp ${fwdDivCalc.annualizedEpsQ3Idr.toLocaleString('id-ID')}/saham) sehingga menjaga Earnings Yield di level ${earningsYieldPct}%`} terhadap Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}% (Kurva Spot SBN Blended ${sbnBlended.toFixed(2)}%).`;
+    directAnswerSummary = `Hasil Evaluasi Dampak Berita & Aksi Korporasi: Sentimen utama ${stock.ticker} dalam 3 bulan terakhir berfokus pada ${topHeadlines || 'perkembangan kinerja operasional dan pembagian dividen'}. ${joeliardiEval.catalystNarrative || ''} Dari kacamata fundamental kuantitatif, katalis tersebut memperkokoh Forward ROE ${forwardRoePct.toFixed(1)}% dan GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}% (Forward EPS ~Rp ${joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')}/saham) sehingga menjaga Earnings Yield di level ${earningsYieldPct}% dan Total Shareholder Yield ${totalShareholderYieldPct.toFixed(2)}% terhadap Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}%.`;
   } else if (isAskingDividendOrCash) {
-    directAnswerSummary = `Hasil Bedah Kualitas Dividen & Arus Kas Anti-Junk: Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, Forward Dividend Yield (Est) ${stock.ticker} diestimasi sebesar ${forwardDivYield.toFixed(2)}% (Annualized EPS Q3 Rp ${fwdDivCalc.annualizedEpsQ3Idr.toLocaleString('id-ID')} × DPR 3Y ${historicalDpr3Y.toFixed(0)}%) dengan Total Shareholder Yield murni ${totalShareholderYieldPct}%. Rasio arus kas operasi terhadap laba bersih (OCF/NI) tercatat ${ocfNi.toFixed(2)}x dengan GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}%. ${isDividendTrapRisk ? `Waspadai potensi Dividend Trap karena tren harga 30D masih tertekan (${stock.return30D}%)` : `Dividen ini tergolong sehat karena dibiayai dari kas operasi riil (OCF/NI ${ocfNi.toFixed(2)}x) dan posisi utang yang terjaga (DER ${stock.debtToEquity}x).`}`;
+    directAnswerSummary = `Hasil Bedah Kualitas Dividen, Buyback & Arus Kas Anti-Junk: Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, Forward Dividend Yield (Est) ${stock.ticker} diestimasi sebesar ${forwardDivYield.toFixed(2)}% (Annualized EPS Q3 Rp ${fwdDivCalc.annualizedEpsQ3Idr.toLocaleString('id-ID')} × DPR 3Y ${historicalDpr3Y.toFixed(0)}%) ditambah Buyback & Debt Paydown Yield ${buybackPaydownYield.toFixed(2)}% (Buyback Aktif +${(joeliardiEval.dynamicBuybackYieldPct ?? 0).toFixed(2)}%) menghasilkan Total Shareholder Yield murni ${totalShareholderYieldPct}%. Rasio arus kas operasi terhadap laba bersih (OCF/NI) tercatat ${ocfNi.toFixed(2)}x dengan GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}%. ${isDividendTrapRisk && !isBuyOnStrengthCatalyst ? `Waspadai potensi Dividend Trap karena tren harga 30D masih tertekan (${stock.return30D}%)` : `Aliran kas pemegang saham ini sangat sehat karena dibiayai dari kas operasi riil (OCF/NI ${ocfNi.toFixed(2)}x) dan posisi utang yang terjaga (DER ${stock.debtToEquity}x).`}`;
   } else {
-    directAnswerSummary = `Hasil Analisis Nostradamus: Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, tim riset menilai ${stock.ticker} ${isDefensiveDiscountAnomaly || (joeliardiEval.marginOfSafetyPct >= 12 && !isValueTrapCandidate) ? 'LAYAK DIAKUMULASI BERTAHAP' : joeliardiEval.marginOfSafetyPct >= 0 ? 'LAYAK KOLEKSI SELEKTIF SAAT KOREKSI' : 'LEBIH TEPAT DITUNGGU PADA AREA PULLBACK'}${isDefensiveDiscountAnomaly ? ' (Strong Buy: Anomali Aset Defensif Terdiskon)' : ''}. Pasar menghargai ${stock.ticker} pada Implied PBV ${joeliardiEval.impliedPbv}x (vs Damodaran Justified PBV ${justPbv}x) dan Implied PER ${joeliardiEval.impliedPer}x (Earnings Yield ${earningsYieldPct}% vs Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}% dari Kurva Spot SBN 1Y ${sbn1Y}%·5Y ${sbn5Y}%·10Y ${sbn10Y}%), padahal perusahaan mencetak GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}%, kualitas kas OCF/NI ${ocfNi.toFixed(2)}x, serta ROE ${stock.roe}% (DER ${stock.debtToEquity}x). Nilai Intrinsik Wajar ditetapkan pada Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (Margin of Safety ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%) dengan batas alokasi 1/β Barbell ≤${betaCap.toFixed(1)}% portofolio.`;
+    directAnswerSummary = `Hasil Analisis Nostradamus: Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, tim riset menilai ${stock.ticker} ${isDefensiveDiscountAnomaly ? 'LAYAK DIAKUMULASI BERTAHAP (Strong Buy: Anomali Aset Defensif Terdiskon)' : isBuyOnStrengthCatalyst ? `LAYAK BUY ON STRENGTH / CATALYST (${joeliardiEval.catalystBadgeLabel || 'Momentum Laba & Buyback Aktif'})` : joeliardiEval.marginOfSafetyPct >= 12 && !isValueTrapCandidate ? 'LAYAK DIAKUMULASI BERTAHAP' : joeliardiEval.marginOfSafetyPct >= 0 ? 'LAYAK KOLEKSI SELEKTIF SAAT KOREKSI' : 'LEBIH TEPAT DITUNGGU PADA AREA PULLBACK'}. Pasar menghargai ${stock.ticker} pada Implied PBV ${joeliardiEval.impliedPbv}x (vs Damodaran Justified PBV ${justPbv}x) dan Implied PER ${joeliardiEval.impliedPer}x (Earnings Yield ${earningsYieldPct}% vs Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}%), padahal perusahaan mencetak Forward Annualized ROE ${forwardRoePct.toFixed(1)}% (vs Trailing ${trailingRoePct.toFixed(1)}%, pertumbuhan laba kuartal +${earningsGrowthYoYPct.toFixed(1)}% YoY), GP/A ${gpToAssets.toFixed(1)}%, kualitas kas OCF/NI ${ocfNi.toFixed(2)}x, serta Total Shareholder Yield ${totalShareholderYieldPct.toFixed(2)}%. Nilai Intrinsik Wajar Ensemble ditetapkan pada Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (${joeliardiEval.ensembleFormulaAudit || `MoS ${joeliardiEval.marginOfSafetyPct}%`}) dengan batas alokasi 1/β Barbell ≤${betaCap.toFixed(1)}% portofolio.`;
   }
 
-  // BEI Tick-Aware Dynamic Accumulation Zone & Undercut / Deep Discount Detection
+  // BEI Tick-Aware Dynamic Accumulation Zone driven by State-Based Decision Tree
   const spotTick = roundToIdxTick(stock.lastPrice);
   const intrinsicAccumulationCeiling = roundToIdxTick(joeliardiEval.intrinsicValueIdr * 0.85);
-  const isUndercutDeepDiscount = !stock.isHscFlagged && spotTick <= intrinsicAccumulationCeiling;
-
-  const idealBuyLow = isUndercutDeepDiscount
-    ? roundToIdxTick(stock.lastPrice * 0.96)
-    : roundToIdxTick(Math.min(stock.lastPrice * 0.98, intrinsicAccumulationCeiling * 0.96));
-  const idealBuyHigh = isUndercutDeepDiscount
-    ? intrinsicAccumulationCeiling
-    : roundToIdxTick(Math.min(stock.lastPrice, intrinsicAccumulationCeiling));
+  const isUndercutDeepDiscount =
+    !stock.isHscFlagged && (spotTick <= intrinsicAccumulationCeiling || isBuyOnStrengthCatalyst);
   const riskStopPrice = roundToIdxTick(stock.lastPrice * (stock.beta1Y > 1.1 ? 0.91 : 0.93));
-
-  // Clear Range, Fair Value & Valuation Reasonableness Status for Accumulation Zone
-  const rangeLowIdr = Math.min(idealBuyLow, idealBuyHigh);
-  const rangeHighIdr = Math.max(idealBuyLow, idealBuyHigh);
-  const formattedAccumulationZone = stock.isHscFlagged
-    ? 'Tidak direkomendasikan (Blokir HSC — risiko spekulasi tinggi)'
-    : isUndercutDeepDiscount
-    ? `Rentang Beli Ideal: Rp ${rangeLowIdr.toLocaleString('id-ID')} – Rp ${rangeHighIdr.toLocaleString('id-ID')} | Nilai Wajar: Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${stock.lastPrice.toLocaleString('id-ID')}): TERDISKON / MURAH (Harga saat ini ${joeliardiEval.marginOfSafetyPct.toFixed(1)}% di bawah Nilai Wajar, sangat wajar untuk akumulasi bertahap)`
-    : joeliardiEval.marginOfSafetyPct >= 0
-    ? `Rentang Beli Ideal: Rp ${rangeLowIdr.toLocaleString('id-ID')} – Rp ${rangeHighIdr.toLocaleString('id-ID')} | Nilai Wajar: Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${stock.lastPrice.toLocaleString('id-ID')}): WAJAR (Harga saat ini masih di bawah Nilai Wajar dengan diskon +${joeliardiEval.marginOfSafetyPct.toFixed(1)}%, idealnya cicil beli di rentang akumulasi)`
-    : `Rentang Beli Ideal: Rp ${roundToIdxTick(joeliardiEval.intrinsicValueIdr * 0.8).toLocaleString('id-ID')} – Rp ${intrinsicAccumulationCeiling.toLocaleString('id-ID')} | Nilai Wajar: Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${stock.lastPrice.toLocaleString('id-ID')}): MAHAL / PREMIUM (Harga saat ini ${Math.abs(joeliardiEval.marginOfSafetyPct).toFixed(1)}% di atas Nilai Wajar, tunggu koreksi ke rentang beli ideal)`;
+  const formattedAccumulationZone = decisionTree.formattedAccumulationZone;
 
   // 20D ADTV & 5% Daily Market Liquidity Cap + 1/Beta Barbell Position Sizing Cap
   const adtv20dIdr =
@@ -3601,13 +3609,7 @@ function buildDeepAnalyticalConvictionReport(params: {
     bullishDrivers: joeliardiEval.keyStrengths.map(stripRawMarkdownArtifacts),
     bearishRisks: joeliardiEval.keyRisks.map(stripRawMarkdownArtifacts),
     executionStrategy: {
-      recommendedAction: stock.isHscFlagged
-        ? 'Hindari pembelian baru (Block Buy) & alihkan modal ke saham berfundamental sehat.'
-        : isDefensiveDiscountAnomaly
-        ? 'Strong Buy: Anomali Aset Defensif Terdiskon — Akumulasi Bertahap (Buy on Weakness 2–3 Tahap) pada harga spot yang sudah berada di zona diskon dalam.'
-        : joeliardiEval.marginOfSafetyPct >= 12 && stock.dmuCompositeScore >= 6.8
-        ? 'Akumulasi Bertahap (Buy on Weakness / Cicil 2–3 Tahap) di area diskon nilai wajar.'
-        : 'Tunggu Koreksi Wajar (Buy on Pullback) agar mendapatkan ruang Margin of Safety yang lebih aman.',
+      recommendedAction: decisionTree.recommendedActionText,
       idealEntryZone: formattedAccumulationZone,
       InvalidationOrRiskLimit: stock.isHscFlagged
         ? 'Batasi porsi maksimal 0% dari portofolio.'
@@ -3683,17 +3685,22 @@ export async function requestEmitenAiInspection(params: {
             return step;
           });
 
+          const isCatalystBuyOverride =
+            joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST';
+
           const sanitizedReport: StructuredAiConvictionReport = {
-            verdictBadge: joeliardiEval.isDefensiveDiscountAnomaly
-              ? fallbackReport.verdictBadge
-              : stripRawMarkdownArtifacts(
-                  sr.verdictBadge || fallbackReport.verdictBadge
-                ),
-            verdictTitle: joeliardiEval.isDefensiveDiscountAnomaly
-              ? fallbackReport.verdictTitle
-              : stripRawMarkdownArtifacts(
-                  sr.verdictTitle || fallbackReport.verdictTitle
-                ),
+            verdictBadge:
+              joeliardiEval.isDefensiveDiscountAnomaly || isCatalystBuyOverride
+                ? fallbackReport.verdictBadge
+                : stripRawMarkdownArtifacts(
+                    sr.verdictBadge || fallbackReport.verdictBadge
+                  ),
+            verdictTitle:
+              joeliardiEval.isDefensiveDiscountAnomaly || isCatalystBuyOverride
+                ? fallbackReport.verdictTitle
+                : stripRawMarkdownArtifacts(
+                    sr.verdictTitle || fallbackReport.verdictTitle
+                  ),
             directAnswerSummary: cleanedSummary || fallbackReport.directAnswerSummary,
             convictionScore:
               typeof sr.convictionScore === 'number'
@@ -3727,12 +3734,13 @@ export async function requestEmitenAiInspection(params: {
                 ? sr.bearishRisks.map(stripRawMarkdownArtifacts)
                 : fallbackReport.bearishRisks,
             executionStrategy: {
-              recommendedAction: joeliardiEval.isDefensiveDiscountAnomaly
-                ? fallbackReport.executionStrategy.recommendedAction
-                : stripRawMarkdownArtifacts(
-                    sr.executionStrategy?.recommendedAction ||
-                      fallbackReport.executionStrategy.recommendedAction
-                  ),
+              recommendedAction:
+                joeliardiEval.isDefensiveDiscountAnomaly || isCatalystBuyOverride
+                  ? fallbackReport.executionStrategy.recommendedAction
+                  : stripRawMarkdownArtifacts(
+                      sr.executionStrategy?.recommendedAction ||
+                        fallbackReport.executionStrategy.recommendedAction
+                    ),
               idealEntryZone: fallbackReport.executionStrategy.idealEntryZone,
               InvalidationOrRiskLimit: stripRawMarkdownArtifacts(
                 sr.executionStrategy?.InvalidationOrRiskLimit ||

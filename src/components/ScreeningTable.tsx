@@ -1723,18 +1723,35 @@ export function ScreeningTable({
                         </span>
                       </td>
 
-                      {/* Emiten, Sector, Dividend/Illiquid/HSC Badges & Dedicated New Line for σ · β · GP/A · ROE */}
+                      {/* Emiten, Sector, Dividend/Catalyst/Illiquid/HSC Badges & Dedicated New Line for σ · β · GP/A · ROE */}
                       <td className="py-2.5 px-2.5 min-w-[250px]">
                         <div className="flex flex-wrap items-center gap-1.5">
                           <span className="font-bold text-[#111315] text-xs leading-snug">
                             {stock.name}
                           </span>
+                          {stock.isCatalystActive && (
+                            <span
+                              title={
+                                stock.catalystBadgeLabel ||
+                                'Katalis Aktif (Momentum Laba Kuartalan >20% YoY / Buyback Aktif) — Angka historis terdiskon, dievaluasi dengan Forward ROE'
+                              }
+                              className="inline-flex items-center px-1.5 py-0.5 text-[9.5px] font-mono font-extrabold text-[#FFFFFF] bg-[#0D5C46] border border-[#059669] rounded-xs whitespace-nowrap"
+                            >
+                              {stock.catalystBadgeLabel || 'CATALYST ACTIVE'}
+                            </span>
+                          )}
                           {divYield > 0 && (
                             <span
-                              title={`Emiten Pembagi Dividen Tunai (Annual TTM Yield Yahoo Finance: ${divYield.toFixed(2)}%/thn)`}
+                              title={
+                                (stock.dynamicBuybackYieldPct ?? 0) > 0
+                                  ? `Total Shareholder Yield (TSY): ${(divYield + (stock.dynamicBuybackYieldPct ?? 0)).toFixed(2)}% (Dividen ${divYield.toFixed(2)}% + Buyback ${(stock.dynamicBuybackYieldPct ?? 0).toFixed(2)}%)`
+                                  : `Emiten Pembagi Dividen Tunai (Annual TTM Yield Yahoo Finance: ${divYield.toFixed(2)}%/thn)`
+                              }
                               className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-bold text-[#0D5C46] bg-[#059669]/10 border border-[#059669]/35 rounded-xs whitespace-nowrap"
                             >
-                              DIV {divYield.toFixed(2)}%
+                              {(stock.dynamicBuybackYieldPct ?? 0) > 0
+                                ? `TSY ${(divYield + (stock.dynamicBuybackYieldPct ?? 0)).toFixed(2)}%`
+                                : `DIV ${divYield.toFixed(2)}%`}
                             </span>
                           )}
                           {accrualPen > 0.3 && (
@@ -1810,7 +1827,15 @@ export function ScreeningTable({
                           <span> · </span>
                           <span className="text-[#0284C7] font-semibold">GP/A {gpToAssets.toFixed(1)}%</span>
                           <span> · </span>
-                          <span>ROE {stock.roe.toFixed(1)}%</span>
+                          {stock.isCatalystActive &&
+                          stock.forwardAnnualizedRoePct &&
+                          stock.forwardAnnualizedRoePct > stock.roe ? (
+                            <span className="text-[#0D5C46] font-semibold">
+                              Fwd ROE {stock.forwardAnnualizedRoePct.toFixed(1)}% (Trail {stock.roe.toFixed(1)}%)
+                            </span>
+                          ) : (
+                            <span>ROE {stock.roe.toFixed(1)}%</span>
+                          )}
                         </div>
                       </td>
 
