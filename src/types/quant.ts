@@ -69,6 +69,7 @@ export interface StockMetrics {
   marketState?: string;    // Yahoo Finance marketState ('REGULAR' | 'PRE' | 'POST' | 'CLOSED')
   change1D: number;        // 1-day return percentage vs previousClose
   return30D: number;       // 30-day cumulative return %
+  returnYTD?: number;      // Year-to-Date (YTD) cumulative return % from start of current year
   beta1Y: number;          // 1-year rolling historical Beta vs ^JKSE
   volatilityAnn: number;   // Annualized individual volatility %
   roe: number;             // Return on Equity (%)

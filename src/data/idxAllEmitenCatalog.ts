@@ -670,6 +670,39 @@ export function isInstitutionalLiquidCandidate(ticker: string): boolean {
   return CORE_INSTITUTIONAL_SET.has(clean);
 }
 
+const VERIFIED_EMITEN_CORPORATE_NAMES: Record<string, string> = {
+  ELIT: 'Data Sinergitama Jaya Tbk',
+  BUKA: 'Bukalapak.com Tbk',
+  BACA: 'Bank Capital Indonesia Tbk',
+  SATU: 'Kota Satu Properti Tbk',
+  UANG: 'Pakuan Tbk',
+  BOLA: 'Bali Bintang Sejahtera Tbk',
+  FILM: 'MD Entertainment Tbk',
+  WIFI: 'Solusi Sinergi Digital Tbk',
+  DATA: 'Remala Abadi Tbk',
+  FIRE: 'Alfa Energi Investama Tbk',
+  GOOD: 'Garudafood Putra Putri Jaya Tbk',
+  MAIN: 'Malindo Feedmill Tbk',
+  WOOD: 'Integra Indocabinet Tbk',
+  ZONE: 'Mega Perintis Tbk',
+  RAJA: 'Rukun Raharja Tbk',
+  ROTI: 'Nippon Indosari Corpindo Tbk',
+  TOTO: 'Surya Toto Indonesia Tbk',
+  DEWA: 'Darma Henwa Tbk',
+  BUMI: 'Bumi Resources Tbk',
+  EMAS: 'Merdeka Gold Resources Tbk',
+  DAYA: 'Duta Intidaya Tbk',
+  CARE: 'Metro Healthcare Indonesia Tbk',
+  LIFE: 'MSIG Life Insurance Indonesia Tbk',
+  LINK: 'Link Net Tbk',
+  MIDI: 'Midi Utama Indonesia Tbk',
+  PADA: 'Personel Alih Daya Tbk',
+  STAR: 'Buana Artha Anugerah Tbk',
+  TAXI: 'Express Transindo Utama Tbk',
+  TOYS: 'Sunindo Adipersada Tbk',
+  TRUE: 'Triniti Dinamik Tbk'
+};
+
 export function createCalibratedIdxEntry(ticker: string, sectorOverride?: string, customName?: string): IdxDirectoryEntry {
   const clean = ticker.trim().toUpperCase().replace(/\.JK$/i, '');
   const seed = hashTickerSeed(clean);
@@ -686,7 +719,7 @@ export function createCalibratedIdxEntry(ticker: string, sectorOverride?: string
 
   return {
     ticker: clean,
-    name: customName || `${prefix} ${clean} Indonesia Tbk`,
+    name: customName || VERIFIED_EMITEN_CORPORATE_NAMES[clean] || `${prefix} ${clean} Indonesia Tbk`,
     sector,
     defaultRoe,
     defaultDer,

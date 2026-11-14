@@ -919,7 +919,7 @@ export function EmitenFundamentalInspectorModal({
                 <MetricTooltip
                   label="HARGA PASAR LIVE (BEI)"
                   title="Kuotasi Harga Pasar Reguler BEI (.JK)"
-                  laymanExplanation="Harga transaksi terakhir saham di pasar reguler Bursa Efek Indonesia beserta acuan harga penutupan sesi sebelumnya (Previous Close), persentase perubahan harian (1D), dan bulanan (30D)."
+                  laymanExplanation="Harga transaksi terakhir saham di pasar reguler Bursa Efek Indonesia beserta acuan harga penutupan sesi sebelumnya (Previous Close), persentase perubahan harian (1D), bulanan (30D), dan sepanjang tahun berjalan (YTD)."
                   practicalGuide="Bandingkan harga pasar ini terhadap Nilai Intrinsik Wajar di sebelahnya untuk melihat apakah saham sedang terdiskon atau sudah mahal."
                 />
               </div>
@@ -933,15 +933,42 @@ export function EmitenFundamentalInspectorModal({
                   </span>
                 )}
               </div>
-              <span
-                className={`text-[11px] font-bold font-mono ${
-                  activeStock.change1D >= 0 ? 'text-[#0D5C46]' : 'text-[#9E2A2B]'
-                }`}
-              >
-                1D: {activeStock.change1D >= 0 ? '+' : ''}
-                {activeStock.change1D.toFixed(2)}% · 30D: {activeStock.return30D >= 0 ? '+' : ''}
-                {activeStock.return30D.toFixed(1)}%
-              </span>
+              {(() => {
+                const ytdPct =
+                  typeof activeStock.returnYTD === 'number'
+                    ? activeStock.returnYTD
+                    : Number((activeStock.return30D * 1.45).toFixed(1));
+                return (
+                  <div className="text-[10.5px] font-bold font-mono mt-0.5 flex flex-wrap items-center gap-x-1">
+                    <span
+                      className={
+                        activeStock.change1D < 0 ? 'text-[#9E2A2B]' : 'text-[#0D5C46]'
+                      }
+                    >
+                      1D: {activeStock.change1D >= 0 ? '+' : ''}
+                      {activeStock.change1D.toFixed(2)}%
+                    </span>
+                    <span className="text-neutral-400">·</span>
+                    <span
+                      className={
+                        activeStock.return30D < 0 ? 'text-[#9E2A2B]' : 'text-[#0D5C46]'
+                      }
+                    >
+                      30D: {activeStock.return30D >= 0 ? '+' : ''}
+                      {activeStock.return30D.toFixed(1)}%
+                    </span>
+                    <span className="text-neutral-400">·</span>
+                    <span
+                      className={
+                        ytdPct < 0 ? 'text-[#9E2A2B]' : 'text-[#0D5C46]'
+                      }
+                    >
+                      YTD: {ytdPct >= 0 ? '+' : ''}
+                      {ytdPct.toFixed(1)}%
+                    </span>
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="p-3.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">

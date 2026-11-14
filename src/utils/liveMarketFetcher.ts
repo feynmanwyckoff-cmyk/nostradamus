@@ -265,6 +265,66 @@ export function computeAccurate30DReturn(
     : 0;
 }
 
+/**
+ * Computes the Year-to-Date (YTD) percentage return from the beginning of the current calendar year.
+ * - When `timestamps` are present (e.g. from `/v8/finance/chart?range=1y`), uses the final trading day close
+ *   of the previous calendar year (or the first trading day of the current year if listed/started in Jan).
+ * - When only daily `closes` are present without timestamps, estimates the trading session index at the start of the year
+ *   (or earliest available session in the series).
+ */
+export function computeAccurateYTDReturn(
+  closes: number[],
+  lastPrice: number,
+  timestamps?: number[]
+): number {
+  if (!Array.isArray(closes) || closes.length < 2 || !Number.isFinite(lastPrice) || lastPrice <= 0) {
+    return 0;
+  }
+
+  if (
+    Array.isArray(timestamps) &&
+    timestamps.length === closes.length &&
+    timestamps.length >= 2
+  ) {
+    const lastTs = timestamps[timestamps.length - 1];
+    if (typeof lastTs === 'number' && Number.isFinite(lastTs) && lastTs > 0) {
+      const currentYear = new Date(lastTs * 1000).getUTCFullYear();
+      const jan1Ts = Math.floor(Date.UTC(currentYear, 0, 1, 0, 0, 0) / 1000);
+      let baselineClose = 0;
+      for (let i = 0; i < timestamps.length; i++) {
+        const ts = timestamps[i];
+        const c = closes[i];
+        if (typeof ts === 'number' && c > 0) {
+          if (ts < jan1Ts) {
+            baselineClose = c;
+          } else {
+            if (baselineClose <= 0) {
+              baselineClose = c;
+            }
+            break;
+          }
+        }
+      }
+      if (baselineClose > 0) {
+        return Number((((lastPrice - baselineClose) / baselineClose) * 100).toFixed(1));
+      }
+    }
+  }
+
+  const now = new Date();
+  const startOfYear = new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
+  const daysSinceJan1 = Math.max(
+    1,
+    Math.floor((now.getTime() - startOfYear.getTime()) / (24 * 60 * 60 * 1000))
+  );
+  const approxTradingDaysYtd = Math.max(2, Math.round(daysSinceJan1 * (242 / 365)));
+  const baselineIdx = Math.max(0, closes.length - 1 - approxTradingDaysYtd);
+  const closeYtdBase = closes[baselineIdx] || closes[0] || lastPrice;
+  return closeYtdBase > 0
+    ? Number((((lastPrice - closeYtdBase) / closeYtdBase) * 100).toFixed(1))
+    : 0;
+}
+
 interface StaticMarketSnapshotPayload {
   generatedAt?: string;
   liveYahooSymbolCount?: number;
@@ -447,6 +507,11 @@ export function buildIdx100StockUniverse(
         snapItem.lastPrice,
         snapItem.timestamp
       );
+      const returnYTD = computeAccurateYTDReturn(
+        snapItem.closes,
+        snapItem.lastPrice,
+        snapItem.timestamp
+      );
 
       let beta1Y = entry.approxBeta;
       let volatilityAnn = Number((entry.approxBeta * 22.0).toFixed(1));
@@ -477,6 +542,7 @@ export function buildIdx100StockUniverse(
         marketState: snapItem.marketState,
         change1D,
         return30D,
+        returnYTD,
         beta1Y,
         volatilityAnn,
         roe: entry.defaultRoe,
@@ -501,6 +567,7 @@ export function buildIdx100StockUniverse(
       lastPrice: 0,
       change1D: 0,
       return30D: 0,
+      returnYTD: 0,
       beta1Y: 1.25,
       volatilityAnn: 45.0,
       roe: entry.defaultRoe,
@@ -1414,16 +1481,16 @@ export async function fetchLiveIdxTicker(rawTicker: string): Promise<StockMetric
     second: '2-digit'
   });
 
-  // Always bypass memory cache on single-ticker on-demand inspect so stale prices never persist
+  // Always bypass memory cache on single-ticker on-demand inspect and request 1y chart so YTD return is 100% exact
   const [directStockChart, batchMap] = await Promise.all([
-    fetchYahooChartSeries(yfSymbol, '6mo', true).catch(() => null),
+    fetchYahooChartSeries(yfSymbol, '1y', true).catch(() => null),
     fetchYahooSparkBatch([yfSymbol, '^JKSE'], '6mo', undefined, true, true)
   ]);
 
   const stockSeries =
     directStockChart && directStockChart.lastPrice > 0
       ? directStockChart
-      : batchMap[yfSymbol] || (await fetchYahooChartSeries(yfSymbol, '6mo', true));
+      : batchMap[yfSymbol] || (await fetchYahooChartSeries(yfSymbol, '1y', true));
   const ihsgSeries = batchMap['^JKSE'] || (await fetchYahooChartSeries('^JKSE', '6mo', true));
 
   const lastPrice = Math.round(stockSeries.lastPrice);
@@ -1437,6 +1504,11 @@ export async function fetchLiveIdxTicker(rawTicker: string): Promise<StockMetric
     stockSeries.lastPrice,
     stockSeries.timestamp
   );
+  const returnYTD = computeAccurateYTDReturn(
+    stockSeries.closes,
+    stockSeries.lastPrice,
+    stockSeries.timestamp
+  );
 
   const previousClose = resolveStockPreviousClose(
     lastPrice,
@@ -1446,17 +1518,26 @@ export async function fetchLiveIdxTicker(rawTicker: string): Promise<StockMetric
     stockSeries.timestamp
   );
 
+  const isSyntheticCatalogName =
+    Boolean(catalogMatch?.name) &&
+    new RegExp(`\\b${cleanTicker}\\s+Indonesia\\s+Tbk$`, 'i').test(catalogMatch.name);
+  const resolvedCorporateName =
+    (isSyntheticCatalogName && stockSeries.shortName ? stockSeries.shortName : catalogMatch?.name) ||
+    stockSeries.shortName ||
+    `${cleanTicker} Tbk`;
+
   return enrichStockMetrics({
     ticker: cleanTicker,
     idxTicker: `IDX:${cleanTicker}`,
     yfTicker: yfSymbol,
-    name: catalogMatch?.name || stockSeries.shortName || `${cleanTicker} Tbk`,
+    name: resolvedCorporateName,
     sector: catalogMatch?.sector || 'IDX Listed Equity',
     lastPrice,
     previousClose,
     marketState: stockSeries.marketState,
     change1D: stockSeries.change1D,
     return30D,
+    returnYTD,
     beta1Y,
     volatilityAnn,
     roe: catalogMatch.defaultRoe,
@@ -1720,6 +1801,12 @@ export async function refreshLiveGlobalMacroAndIhsg(
           res.lastPrice,
           res.timestamp
         );
+        const returnYTD =
+          res.closes.length >= 60
+            ? computeAccurateYTDReturn(res.closes, res.lastPrice, res.timestamp)
+            : typeof stock.returnYTD === 'number'
+            ? stock.returnYTD
+            : computeAccurateYTDReturn(res.closes, res.lastPrice, res.timestamp);
 
         let beta1Y = stock.beta1Y;
         let volatilityAnn = stock.volatilityAnn;
@@ -1744,6 +1831,7 @@ export async function refreshLiveGlobalMacroAndIhsg(
           marketState: res.marketState,
           change1D: res.change1D,
           return30D,
+          returnYTD,
           beta1Y,
           volatilityAnn,
           roe: stock.roe,
@@ -2380,57 +2468,106 @@ export function isArticleStrictlyAboutEmiten(
   title: string,
   url: string,
   targetTicker: string,
-  companyName?: string
+  companyName?: string,
+  summary?: string,
+  source?: string
 ): boolean {
   const cleanTicker = targetTicker.trim().toUpperCase();
   if (!cleanTicker) return true;
 
   // Strip trailing publisher suffix like " - Kontan.co.id"
-  const headlineCore = String(title || '')
+  const rawTitle = String(title || '').trim();
+  const headlineCore = rawTitle
     .replace(/\s+[-|]\s+[^-|]+$/, '')
     .trim();
   const urlLower = String(url || '').toLowerCase();
+  const combinedContext = `${rawTitle} ${summary || ''} ${source || ''} ${urlLower}`;
 
-  // 1. Direct ticker match in headline or URL slug
-  const tickerRegex = new RegExp(`\\b${cleanTicker}\\b`, 'i');
-  const hasTickerInTitleOrUrl =
-    tickerRegex.test(headlineCore) ||
-    new RegExp(`[-/_]${cleanTicker.toLowerCase()}[-/_.]`).test(urlLower);
+  // 1. Strict CASE-SENSITIVE ALL-CAPS ticker match in headline (e.g. "ELIT", "(ELIT)", "ELIT.JK")
+  //    or explicit stock slug in URL ("saham-elit", "emiten-elit", "/elit-jk")
+  //    Never match lowercase/TitleCase common dictionary words like "elit", "Elit", "Sekolah Elit", "Trader Elit"
+  const exactUpperTickerRegex = new RegExp(`\\b${cleanTicker}\\b`);
+  const explicitStockUrlSlugRegex = new RegExp(
+    `(?:saham|emiten|kode|idx|ticker)[-_/${cleanTicker.toLowerCase()}]*[-_/]${cleanTicker.toLowerCase()}\\b|\\b${cleanTicker.toLowerCase()}-jk\\b`
+  );
+  const hasStrictUpperTicker =
+    exactUpperTickerRegex.test(headlineCore) || explicitStockUrlSlugRegex.test(urlLower);
 
-  // 2. Distinctive company name tokens match in headline or URL
-  const cleanedCompany = String(companyName || '')
-    .replace(
-      /\b(Tbk|PT|Persero|Indonesia|Internasional|Nusantara|Sejahtera|Pratama|Makmur|Sentosa|Abadi|Karya|Utama|Mandiri|Group|Grup|Investama|Corporindo|Korporindo)\b/gi,
-      ' '
-    )
-    .replace(/[^a-zA-Z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  // 2. Distinctive non-synthetic company name tokens match in headline or URL
+  const isSyntheticCompany =
+    Boolean(companyName) &&
+    new RegExp(`\\b${cleanTicker}\\s+Indonesia\\s+Tbk$`, 'i').test(String(companyName));
+
+  const cleanedCompany = isSyntheticCompany
+    ? ''
+    : String(companyName || '')
+        .replace(
+          /\b(Tbk|PT|Persero|Indonesia|Internasional|Nusantara|Sejahtera|Pratama|Makmur|Sentosa|Abadi|Karya|Utama|Mandiri|Group|Grup|Investama|Corporindo|Korporindo|Teknologi|Digital|Solusi|Data|Siber|Komputasi|Inovasi|Sistem|Logistik|Armada|Pelayaran|Samudera|Ekspres|Properti|Kawasan|Persada|Industri|Teknik|Traktor|Menara|Telekom|Energi|Sumber|Tambang|Mineral|Logam|Semen|Kertas|Pangan|Sawit|Nabati|Retail|Media|Medika|Farma|Husada|Klinik|Kapital|Sentral|Mitra|Prima|Cipta|Graha|Bumi|Bina|Jasa|Multi|Surya|Mega|Megah|Dana|Artha|Bank|Sinergi|Global|Nasional|Jaya)\b/gi,
+          ' '
+        )
+        .replace(/[^a-zA-Z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
 
   const companyTokens = cleanedCompany
     .split(' ')
     .map((w) => w.trim().toLowerCase())
-    .filter((w) => w.length >= 4);
+    .filter((w) => w.length >= 4 && w !== cleanTicker.toLowerCase());
 
   const primaryTwoWords = companyTokens.slice(0, 2).join(' ');
   const hasCompanyInTitleOrUrl =
-    (primaryTwoWords.length >= 5 &&
+    (primaryTwoWords.length >= 6 &&
       (headlineCore.toLowerCase().includes(primaryTwoWords) ||
         urlLower.includes(primaryTwoWords.replace(/\s+/g, '-')))) ||
     companyTokens.some(
       (tok) =>
-        tok.length >= 6 &&
+        tok.length >= 7 &&
         (new RegExp(`\\b${tok}\\b`, 'i').test(headlineCore) || urlLower.includes(tok))
     );
 
-  // 3. Guard against articles primarily about ANOTHER 4-letter IDX ticker (e.g. "Profil Emiten TOBA" matching MPMX via inline "Baca Juga")
+  // 3. Reject common-word false positives (e.g. "Sekolah Elit", "Trader Elit", "Green List elit", crypto articles)
+  const commonWordFalsePositiveRegex = new RegExp(
+    `\\b(?:sekolah|kampus|universitas|pesantren|kawasan|perumahan|hunian|apartemen|kompleks|kaum|kelompok|kalangan|golongan|pasukan|unit|tim|klub|liga|divisi|atlet|pemain|pejabat|politisi|partai|kuliner|restoran|hotel|gaya\\s+hidup|trader|investor\\s+kripto|green\\s+list)\\s+${cleanTicker}\\b|\\b${cleanTicker}\\s+(?:politik|global|jepang|dunia|eropa|amerika|asia|lokal|nasional|kripto|crypto)\\b`,
+    'i'
+  );
+  if (commonWordFalsePositiveRegex.test(headlineCore)) {
+    return false;
+  }
+
+  // Reject pure crypto/Web3 articles that don't explicitly mention IDX/BEI stock context
+  if (
+    /\b(shiba\s+inu|bitcoin|ethereum|dogecoin|solana|kripto|crypto|blockchain|web3|memecoin|altcoin)\b/i.test(
+      combinedContext
+    ) &&
+    !/\b(emiten|bei|bursa\s+efek\s+indonesia|ihsg|tbk)\b/i.test(combinedContext)
+  ) {
+    return false;
+  }
+
+  // 4. Mandatory IDX / Stock Market Context check
+  const hasIdxMarketContext =
+    /\b(saham|emiten|bei|idx|ihsg|bursa|tbk|dividen|rups|rupst|rupslb|laba|rugi|pendapatan|kinerja|kuartal|semester|laporan\s+keuangan|direksi|komisaris|akuisisi|right\s+issue|rights\s+issue|hmetd|pmthmetd|private\s+placement|buyback|obligasi|sukuk|stock\s+split|ipo|uma|suspensi|delisting|ksei|ojk|sekuritas|portofolio|analis|rekomendasi|target\s+harga|valuasi|pbv|per|roe|ebitda|capex|belanja\s+modal|kontrak\s+baru|aksi\s+korporasi)\b/i.test(
+      combinedContext
+    ) ||
+    new RegExp(`(\\(${cleanTicker}\\)|\\[${cleanTicker}\\]|\\b${cleanTicker}\\.JK\\b|\\bIDX:${cleanTicker}\\b)`).test(
+      rawTitle
+    ) ||
+    new RegExp(`\\b[A-Z]{4},\\s*${cleanTicker}\\b|\\b${cleanTicker}\\s+hingga\\s+[A-Z]{4}\\b`).test(
+      headlineCore
+    );
+
+  if (!hasIdxMarketContext) {
+    return false;
+  }
+
+  // 5. Guard against articles primarily about ANOTHER 4-letter IDX ticker (e.g. "Profil Emiten TOBA" matching MPMX via inline "Baca Juga")
   const foreignEmitenInTitle = headlineCore.match(
     /\b(?:emiten|saham|dividen|laba|kinerja|prospek|profil|direksi)\s+([A-Z]{4})\b/
   );
   if (
     foreignEmitenInTitle &&
     foreignEmitenInTitle[1].toUpperCase() !== cleanTicker &&
-    !tickerRegex.test(headlineCore)
+    !exactUpperTickerRegex.test(headlineCore)
   ) {
     return false;
   }
@@ -2439,12 +2576,12 @@ export function isArticleStrictlyAboutEmiten(
   if (
     foreignEmitenInUrl &&
     foreignEmitenInUrl[1].toUpperCase() !== cleanTicker &&
-    !tickerRegex.test(headlineCore)
+    !exactUpperTickerRegex.test(headlineCore)
   ) {
     return false;
   }
 
-  return hasTickerInTitleOrUrl || hasCompanyInTitleOrUrl;
+  return hasStrictUpperTicker || hasCompanyInTitleOrUrl;
 }
 
 /**
@@ -2957,7 +3094,14 @@ export async function fetchLiveEmitenSpecificNews(
             }
             if (
               !String(raw.source || '').includes('Yahoo Finance') &&
-              !isArticleStrictlyAboutEmiten(cleanTitle, rawUrl, cleanTicker, resolvedName)
+              !isArticleStrictlyAboutEmiten(
+                cleanTitle,
+                rawUrl,
+                cleanTicker,
+                resolvedName,
+                cleanSummary,
+                raw.source
+              )
             ) {
               continue;
             }
@@ -2988,25 +3132,30 @@ export async function fetchLiveEmitenSpecificNews(
     }
   }
 
-  // 2. If running on static GitHub Pages or server returned empty, query rss2json on Google News Indonesia RSS with intitle: & when:90d
+  // 2. If running on static GitHub Pages or server returned empty, query rss2json on Google News Indonesia RSS with strict IDX stock context & when:90d
   if (liveFetchedItems.length === 0) {
     try {
-      const cleanShort = resolvedName
-        .replace(
-          /\b(Tbk|PT|Persero|Indonesia|Internasional|Nusantara|Sejahtera|Pratama|Makmur|Sentosa|Abadi|Karya|Utama|Mandiri|Group|Grup)\b/gi,
-          ' '
-        )
-        .replace(/\s+/g, ' ')
-        .trim();
+      const isSyntheticName = new RegExp(`\\b${cleanTicker}\\s+Indonesia\\s+Tbk$`, 'i').test(
+        resolvedName
+      );
+      const cleanShort = isSyntheticName
+        ? ''
+        : resolvedName
+            .replace(
+              /\b(Tbk|PT|Persero|Indonesia|Internasional|Nusantara|Sejahtera|Pratama|Makmur|Sentosa|Abadi|Karya|Utama|Mandiri|Group|Grup|Investama|Corporindo|Korporindo)\b/gi,
+              ' '
+            )
+            .replace(/\s+/g, ' ')
+            .trim();
       const primaryWords = cleanShort
         .split(' ')
-        .filter((w) => w.length >= 3)
+        .filter((w) => w.length >= 3 && w.toUpperCase() !== cleanTicker)
         .slice(0, 2)
         .join(' ');
       const query =
-        primaryWords && primaryWords.length >= 4
-          ? `(intitle:"${cleanTicker}" OR intitle:"${primaryWords}") saham when:90d`
-          : `intitle:"${cleanTicker}" saham when:90d`;
+        primaryWords && primaryWords.length >= 5
+          ? `(intitle:"${cleanTicker}" OR intitle:"${primaryWords}") (saham OR emiten OR BEI OR IDX OR Tbk OR dividen OR laba) when:90d`
+          : `intitle:"${cleanTicker}" (saham OR emiten OR BEI OR IDX OR Tbk OR dividen OR laba) when:90d`;
       const gNewsUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(
         query
       )}&hl=id&gl=ID&ceid=ID:id`;
@@ -3014,13 +3163,22 @@ export async function fetchLiveEmitenSpecificNews(
         gNewsUrl,
         `Google News BEI (${cleanTicker})`,
         'DOMESTIC',
-        8
+        10
       );
       for (const item of rssItems) {
         if (!isNewsItemFreshWithin3Months(item.publishedAt, item.title, item.summary)) {
           continue;
         }
-        if (!isArticleStrictlyAboutEmiten(item.title, item.url, cleanTicker, resolvedName)) {
+        if (
+          !isArticleStrictlyAboutEmiten(
+            item.title,
+            item.url,
+            cleanTicker,
+            resolvedName,
+            item.summary,
+            item.source
+          )
+        ) {
           continue;
         }
         liveFetchedItems.push({

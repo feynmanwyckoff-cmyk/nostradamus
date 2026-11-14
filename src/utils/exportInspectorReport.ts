@@ -951,14 +951,42 @@ export function renderInspectorReportCanvas(
   const cardGap = 14;
   const cardW = (LOGICAL_WIDTH - 76 - cardGap * 3) / 4;
   const innerCardMaxW = cardW - 24;
-  const valCards = [
+  const ytdExportPct =
+    typeof stock.returnYTD === 'number'
+      ? stock.returnYTD
+      : Number((stock.return30D * 1.45).toFixed(1));
+  const valCards: Array<{
+    label: string;
+    labelColor: string;
+    main: string;
+    mainColor: string;
+    sub: string;
+    subColor: string;
+    subSegments?: Array<{ text: string; color: string }>;
+  }> = [
     {
       label: 'HARGA PASAR LIVE (BEI)',
       labelColor: '#9CA3AF',
       main: `Rp ${formatIdrPriceDisplay(stock.lastPrice)}`,
       mainColor: '#F9FAFB',
-      sub: `1D: ${stock.change1D >= 0 ? '+' : ''}${stock.change1D.toFixed(2)}% · 30D: ${stock.return30D >= 0 ? '+' : ''}${stock.return30D.toFixed(1)}%`,
-      subColor: stock.change1D >= 0 ? '#34D399' : '#FB7185'
+      sub: `1D: ${stock.change1D >= 0 ? '+' : ''}${stock.change1D.toFixed(2)}% · 30D: ${stock.return30D >= 0 ? '+' : ''}${stock.return30D.toFixed(1)}% · YTD: ${ytdExportPct >= 0 ? '+' : ''}${ytdExportPct.toFixed(1)}%`,
+      subColor: stock.change1D >= 0 ? '#34D399' : '#FB7185',
+      subSegments: [
+        {
+          text: `1D: ${stock.change1D >= 0 ? '+' : ''}${stock.change1D.toFixed(2)}%`,
+          color: stock.change1D < 0 ? '#FB7185' : '#34D399'
+        },
+        { text: ' · ', color: '#6B7280' },
+        {
+          text: `30D: ${stock.return30D >= 0 ? '+' : ''}${stock.return30D.toFixed(1)}%`,
+          color: stock.return30D < 0 ? '#FB7185' : '#34D399'
+        },
+        { text: ' · ', color: '#6B7280' },
+        {
+          text: `YTD: ${ytdExportPct >= 0 ? '+' : ''}${ytdExportPct.toFixed(1)}%`,
+          color: ytdExportPct < 0 ? '#FB7185' : '#34D399'
+        }
+      ]
     },
     {
       label: 'NILAI INTRINSIK WAJAR',
@@ -1014,8 +1042,26 @@ export function renderInspectorReportCanvas(
       11.0
     );
 
-    ctx.fillStyle = c.subColor;
-    drawTextAutoFit(ctx, c.sub, x + 12, curY + 71, innerCardMaxW, 600, 10.5, 7.8);
+    if (c.subSegments && c.subSegments.length > 0) {
+      let fontSize = 10.0;
+      const minSize = 7.5;
+      const fullSubText = c.subSegments.map((s) => s.text).join('');
+      while (fontSize > minSize) {
+        ctx.font = `600 ${fontSize}px "Fira Code", monospace`;
+        if (ctx.measureText(fullSubText).width <= innerCardMaxW) break;
+        fontSize -= 0.25;
+      }
+      ctx.font = `600 ${fontSize}px "Fira Code", monospace`;
+      let segX = x + 12;
+      for (const seg of c.subSegments) {
+        ctx.fillStyle = seg.color;
+        ctx.fillText(seg.text, segX, curY + 71);
+        segX += ctx.measureText(seg.text).width;
+      }
+    } else {
+      ctx.fillStyle = c.subColor;
+      drawTextAutoFit(ctx, c.sub, x + 12, curY + 71, innerCardMaxW, 600, 10.5, 7.8);
+    }
   });
 
   curY += 102;

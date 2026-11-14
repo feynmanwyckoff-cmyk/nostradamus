@@ -447,57 +447,105 @@ function isArticleStrictlyAboutEmitenServer(
   title: string,
   url: string,
   targetTicker: string,
-  companyName: string
+  companyName: string,
+  summary?: string,
+  source?: string
 ): boolean {
   const cleanTicker = targetTicker.trim().toUpperCase();
   if (!cleanTicker) return true;
 
   // Strip publisher suffix like " - Kontan.co.id" or " - CNBC Indonesia"
-  const headlineCore = String(title || '')
+  const rawTitle = String(title || '').trim();
+  const headlineCore = rawTitle
     .replace(/\s+[-|]\s+[^-|]+$/, '')
     .trim();
   const urlLower = String(url || '').toLowerCase();
+  const combinedContext = `${rawTitle} ${summary || ''} ${source || ''} ${urlLower}`;
 
-  // 1. Direct ticker match in headline or URL slug
-  const tickerRegex = new RegExp(`\\b${cleanTicker}\\b`, 'i');
-  const hasTickerInTitleOrUrl =
-    tickerRegex.test(headlineCore) ||
-    new RegExp(`[-/_]${cleanTicker.toLowerCase()}[-/_.]`).test(urlLower);
+  // 1. Strict CASE-SENSITIVE ALL-CAPS ticker match in headline (e.g. "ELIT", "(ELIT)", "ELIT.JK")
+  //    or explicit stock slug in URL ("saham-elit", "emiten-elit", "/elit-jk")
+  //    Never match lowercase/TitleCase common dictionary words like "elit", "Elit", "Sekolah Elit", "Trader Elit"
+  const exactUpperTickerRegex = new RegExp(`\\b${cleanTicker}\\b`);
+  const explicitStockUrlSlugRegex = new RegExp(
+    `(?:saham|emiten|kode|idx|ticker)[-_/${cleanTicker.toLowerCase()}]*[-_/]${cleanTicker.toLowerCase()}\\b|\\b${cleanTicker.toLowerCase()}-jk\\b`
+  );
+  const hasStrictUpperTicker =
+    exactUpperTickerRegex.test(headlineCore) || explicitStockUrlSlugRegex.test(urlLower);
 
-  // 2. Distinctive company name tokens match in headline or URL
-  const cleanedCompany = String(companyName || '')
-    .replace(
-      /\b(Tbk|PT|Persero|Indonesia|Internasional|Nusantara|Sejahtera|Pratama|Makmur|Sentosa|Abadi|Karya|Utama|Mandiri|Group|Grup|Investama|Corporindo|Korporindo)\b/gi,
-      ' '
-    )
-    .replace(/[^a-zA-Z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  // 2. Distinctive non-synthetic company name tokens match in headline or URL
+  const isSyntheticCompany =
+    Boolean(companyName) &&
+    new RegExp(`\\b${cleanTicker}\\s+Indonesia\\s+Tbk$`, 'i').test(String(companyName));
+
+  const cleanedCompany = isSyntheticCompany
+    ? ''
+    : String(companyName || '')
+        .replace(
+          /\b(Tbk|PT|Persero|Indonesia|Internasional|Nusantara|Sejahtera|Pratama|Makmur|Sentosa|Abadi|Karya|Utama|Mandiri|Group|Grup|Investama|Corporindo|Korporindo|Teknologi|Digital|Solusi|Data|Siber|Komputasi|Inovasi|Sistem|Logistik|Armada|Pelayaran|Samudera|Ekspres|Properti|Kawasan|Persada|Industri|Teknik|Traktor|Menara|Telekom|Energi|Sumber|Tambang|Mineral|Logam|Semen|Kertas|Pangan|Sawit|Nabati|Retail|Media|Medika|Farma|Husada|Klinik|Kapital|Sentral|Mitra|Prima|Cipta|Graha|Bumi|Bina|Jasa|Multi|Surya|Mega|Megah|Dana|Artha|Bank|Sinergi|Global|Nasional|Jaya)\b/gi,
+          ' '
+        )
+        .replace(/[^a-zA-Z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
 
   const companyTokens = cleanedCompany
     .split(' ')
     .map((w) => w.trim().toLowerCase())
-    .filter((w) => w.length >= 4);
+    .filter((w) => w.length >= 4 && w !== cleanTicker.toLowerCase());
 
   const primaryTwoWords = companyTokens.slice(0, 2).join(' ');
   const hasCompanyInTitleOrUrl =
-    (primaryTwoWords.length >= 5 &&
+    (primaryTwoWords.length >= 6 &&
       (headlineCore.toLowerCase().includes(primaryTwoWords) ||
         urlLower.includes(primaryTwoWords.replace(/\s+/g, '-')))) ||
     companyTokens.some(
       (tok) =>
-        tok.length >= 6 &&
+        tok.length >= 7 &&
         (new RegExp(`\\b${tok}\\b`, 'i').test(headlineCore) || urlLower.includes(tok))
     );
 
-  // 3. Guard against articles primarily about ANOTHER 4-letter IDX ticker (e.g., "Profil Emiten TOBA" matching MPMX via inline "Baca Juga")
+  // 3. Reject common-word false positives (e.g. "Sekolah Elit", "Trader Elit", "Green List elit", crypto articles)
+  const commonWordFalsePositiveRegex = new RegExp(
+    `\\b(?:sekolah|kampus|universitas|pesantren|kawasan|perumahan|hunian|apartemen|kompleks|kaum|kelompok|kalangan|golongan|pasukan|unit|tim|klub|liga|divisi|atlet|pemain|pejabat|politisi|partai|kuliner|restoran|hotel|gaya\\s+hidup|trader|investor\\s+kripto|green\\s+list)\\s+${cleanTicker}\\b|\\b${cleanTicker}\\s+(?:politik|global|jepang|dunia|eropa|amerika|asia|lokal|nasional|kripto|crypto)\\b`,
+    'i'
+  );
+  if (commonWordFalsePositiveRegex.test(headlineCore)) {
+    return false;
+  }
+
+  if (
+    /\b(shiba\s+inu|bitcoin|ethereum|dogecoin|solana|kripto|crypto|blockchain|web3|memecoin|altcoin)\b/i.test(
+      combinedContext
+    ) &&
+    !/\b(emiten|bei|bursa\s+efek\s+indonesia|ihsg|tbk)\b/i.test(combinedContext)
+  ) {
+    return false;
+  }
+
+  // 4. Mandatory IDX / Stock Market Context check
+  const hasIdxMarketContext =
+    /\b(saham|emiten|bei|idx|ihsg|bursa|tbk|dividen|rups|rupst|rupslb|laba|rugi|pendapatan|kinerja|kuartal|semester|laporan\s+keuangan|direksi|komisaris|akuisisi|right\s+issue|rights\s+issue|hmetd|pmthmetd|private\s+placement|buyback|obligasi|sukuk|stock\s+split|ipo|uma|suspensi|delisting|ksei|ojk|sekuritas|portofolio|analis|rekomendasi|target\s+harga|valuasi|pbv|per|roe|ebitda|capex|belanja\s+modal|kontrak\s+baru|aksi\s+korporasi)\b/i.test(
+      combinedContext
+    ) ||
+    new RegExp(`(\\(${cleanTicker}\\)|\\[${cleanTicker}\\]|\\b${cleanTicker}\\.JK\\b|\\bIDX:${cleanTicker}\\b)`).test(
+      rawTitle
+    ) ||
+    new RegExp(`\\b[A-Z]{4},\\s*${cleanTicker}\\b|\\b${cleanTicker}\\s+hingga\\s+[A-Z]{4}\\b`).test(
+      headlineCore
+    );
+
+  if (!hasIdxMarketContext) {
+    return false;
+  }
+
+  // 5. Guard against articles primarily about ANOTHER 4-letter IDX ticker (e.g., "Profil Emiten TOBA" matching MPMX via inline "Baca Juga")
   const foreignEmitenInTitle = headlineCore.match(
     /\b(?:emiten|saham|dividen|laba|kinerja|prospek|profil|direksi)\s+([A-Z]{4})\b/
   );
   if (
     foreignEmitenInTitle &&
     foreignEmitenInTitle[1].toUpperCase() !== cleanTicker &&
-    !tickerRegex.test(headlineCore)
+    !exactUpperTickerRegex.test(headlineCore)
   ) {
     return false;
   }
@@ -508,13 +556,13 @@ function isArticleStrictlyAboutEmitenServer(
   if (
     foreignEmitenInUrl &&
     foreignEmitenInUrl[1].toUpperCase() !== cleanTicker &&
-    !tickerRegex.test(headlineCore)
+    !exactUpperTickerRegex.test(headlineCore)
   ) {
     return false;
   }
 
-  // Require the headline or URL slug itself to reference the target ticker or distinctive company name
-  return hasTickerInTitleOrUrl || hasCompanyInTitleOrUrl;
+  // Require the headline or URL slug itself to reference the target ticker (in ALL-CAPS) or distinctive company name
+  return hasStrictUpperTicker || hasCompanyInTitleOrUrl;
 }
 
 function isNewsItemWithin90DaysServer(pubDateRaw: string, title: string, desc: string): boolean {
@@ -764,24 +812,29 @@ async function startServer() {
         return;
       }
 
-      const cleanCompanyShort = rawName
-        .replace(
-          /\b(Tbk|PT|Persero|Indonesia|Internasional|Nusantara|Sejahtera|Pratama|Makmur|Sentosa|Abadi|Karya|Utama|Mandiri|Group|Grup)\b/gi,
-          ' '
-        )
-        .replace(/\s+/g, ' ')
-        .trim();
+      const isSyntheticName = new RegExp(`\\b${rawTicker}\\s+Indonesia\\s+Tbk$`, 'i').test(
+        rawName
+      );
+      const cleanCompanyShort = isSyntheticName
+        ? ''
+        : rawName
+            .replace(
+              /\b(Tbk|PT|Persero|Indonesia|Internasional|Nusantara|Sejahtera|Pratama|Makmur|Sentosa|Abadi|Karya|Utama|Mandiri|Group|Grup|Investama|Corporindo|Korporindo)\b/gi,
+              ' '
+            )
+            .replace(/\s+/g, ' ')
+            .trim();
       const primaryWords = cleanCompanyShort
         .split(' ')
-        .filter((w) => w.length >= 3)
+        .filter((w) => w.length >= 3 && w.toUpperCase() !== rawTicker)
         .slice(0, 2)
         .join(' ');
 
-      // Use intitle: to prevent matching inline "Baca Juga: ..." links inside articles about other stocks
+      // Use intitle: with explicit IDX capital market context to prevent matching common words or inline "Baca Juga" links
       const queryTerm =
-        primaryWords && primaryWords.length >= 4
-          ? `(intitle:"${rawTicker}" OR intitle:"${primaryWords}") saham when:90d`
-          : `intitle:"${rawTicker}" saham when:90d`;
+        primaryWords && primaryWords.length >= 5
+          ? `(intitle:"${rawTicker}" OR intitle:"${primaryWords}") (saham OR emiten OR BEI OR IDX OR Tbk OR dividen OR laba) when:90d`
+          : `intitle:"${rawTicker}" (saham OR emiten OR BEI OR IDX OR Tbk OR dividen OR laba) when:90d`;
 
       const googleNewsRssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(
         queryTerm
@@ -791,12 +844,19 @@ async function startServer() {
       )}&region=US&lang=en-US`;
 
       const [gNewsItems, yfItems] = await Promise.all([
-        fetchRssXmlDirect(googleNewsRssUrl, `Radar Emiten ${rawTicker} (ID)`, 'DOMESTIC', 10),
+        fetchRssXmlDirect(googleNewsRssUrl, `Radar Emiten ${rawTicker} (ID)`, 'DOMESTIC', 12),
         fetchRssXmlDirect(yahooTickerRssUrl, `Yahoo Finance ${rawTicker}.JK`, 'DOMESTIC', 4)
       ]);
 
       const verifiedGNews = gNewsItems.filter((item) =>
-        isArticleStrictlyAboutEmitenServer(item.title, item.url, rawTicker, rawName)
+        isArticleStrictlyAboutEmitenServer(
+          item.title,
+          item.url,
+          rawTicker,
+          rawName,
+          item.summary,
+          item.source
+        )
       );
 
       const merged = [...verifiedGNews, ...yfItems]
