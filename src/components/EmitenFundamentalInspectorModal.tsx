@@ -2552,22 +2552,22 @@ export function EmitenFundamentalInspectorModal({
                         const basketLabel =
                           activeStock.beta1Y <= 0.85 ? 'Keranjang 1 (Core Defensif)' : 'Keranjang 2 (Tactical Alpha)';
                         const actionBadge = activeStock.isHscFlagged
-                          ? { label: 'BLOKIR HSC / HINDARI', cls: 'bg-[#E11D48]/15 text-[#9E2A2B] border-[#E11D48]/40' }
+                          ? { label: 'AVOID', cls: 'bg-[#E11D48]/15 text-[#9E2A2B] border-[#E11D48]/40' }
                           : joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST'
-                          ? { label: 'BUY ON STRENGTH // CATALYST', cls: 'bg-[#059669]/15 text-[#0D5C46] border-[#059669]/40' }
+                          ? { label: 'BUY ON STRENGTH', cls: 'bg-[#059669]/15 text-[#0D5C46] border-[#059669]/40' }
                           : mosVal >= 10
-                          ? { label: 'AKUMULASI BERTAHAP (BOW)', cls: 'bg-[#059669]/15 text-[#0D5C46] border-[#059669]/40' }
+                          ? { label: 'BUY ON WEAKNESS', cls: 'bg-[#059669]/15 text-[#0D5C46] border-[#059669]/40' }
                           : mosVal >= -5
-                          ? { label: 'CICIL SELEKTIF / HOLD', cls: 'bg-[#D97706]/15 text-[#D97706] bb-amber border-[#D97706]/40' }
-                          : { label: 'TUNGGU KOREKSI WAJAR', cls: 'bg-[#D97706]/15 text-[#D97706] bb-amber border-[#D97706]/40' };
+                          ? { label: 'HOLD', cls: 'bg-[#D97706]/15 text-[#D97706] bb-amber border-[#D97706]/40' }
+                          : { label: 'WAIT', cls: 'bg-[#D97706]/15 text-[#D97706] bb-amber border-[#D97706]/40' };
 
                         const zoneStatusBadge = activeStock.isHscFlagged
-                          ? { label: 'RISIKO SPEKULASI', cls: 'bg-[#E11D48]/15 text-[#9E2A2B] border-[#E11D48]/40' }
+                          ? { label: 'SPEKULATIF', cls: 'bg-[#E11D48]/15 text-[#9E2A2B] border-[#E11D48]/40' }
                           : ex.isUndercutDeepDiscount || mosVal >= 10
-                          ? { label: 'TERDISKON / MURAH', cls: 'bg-[#059669]/15 text-[#0D5C46] border-[#059669]/40' }
+                          ? { label: 'DISKON', cls: 'bg-[#059669]/15 text-[#0D5C46] border-[#059669]/40' }
                           : mosVal >= 0
-                          ? { label: 'AREA WAJAR', cls: 'bg-[#0284C7]/15 text-[#0284C7] bb-cyan border-[#0284C7]/40' }
-                          : { label: 'PREMIUM / ATAS WAJAR', cls: 'bg-[#D97706]/15 text-[#D97706] bb-amber border-[#D97706]/40' };
+                          ? { label: 'WAJAR', cls: 'bg-[#0284C7]/15 text-[#0284C7] bb-cyan border-[#0284C7]/40' }
+                          : { label: 'PREMIUM', cls: 'bg-[#D97706]/15 text-[#D97706] bb-amber border-[#D97706]/40' };
 
                         const safeAdtvMillionsStr =
                           joeliardiEval.maxSafeAllocationIdr >= 1_000_000
@@ -2579,13 +2579,13 @@ export function EmitenFundamentalInspectorModal({
                         return (
                           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
                             {/* Card 1: Tindakan Utama */}
-                            <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2">
-                              <div className="space-y-2">
-                                <div className="flex items-center justify-between gap-1 border-b border-[#E4E2DD]/80 pb-1.5">
-                                  <span className="text-[9px] tracking-tight font-bold uppercase text-neutral-500 whitespace-nowrap shrink-0">
+                            <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2 min-w-0 overflow-hidden">
+                              <div className="space-y-2 min-w-0">
+                                <div className="flex items-center justify-between gap-1 border-b border-[#E4E2DD]/80 pb-1.5 min-w-0">
+                                  <span className="text-[8.5px] tracking-tight font-bold uppercase text-neutral-500 whitespace-nowrap truncate min-w-0">
                                     1. Tindakan Utama
                                   </span>
-                                  <span className={`px-1.5 py-0.5 text-[8px] font-mono font-bold uppercase border rounded-xs whitespace-nowrap shrink-0 ${actionBadge.cls}`}>
+                                  <span className={`px-1 py-0.5 text-[7.5px] tracking-tighter font-mono font-bold uppercase border rounded-xs whitespace-nowrap shrink-0 ${actionBadge.cls}`}>
                                     {actionBadge.label}
                                   </span>
                                 </div>
@@ -2608,13 +2608,13 @@ export function EmitenFundamentalInspectorModal({
                             </div>
 
                             {/* Card 2: Zona Akumulasi Ideal */}
-                            <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2">
-                              <div className="space-y-2">
-                                <div className="flex items-center justify-between gap-1 border-b border-[#E4E2DD]/80 pb-1.5">
-                                  <span className="text-[9px] tracking-tight font-bold uppercase text-[#0D5C46] whitespace-nowrap shrink-0">
+                            <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2 min-w-0 overflow-hidden">
+                              <div className="space-y-2 min-w-0">
+                                <div className="flex items-center justify-between gap-1 border-b border-[#E4E2DD]/80 pb-1.5 min-w-0">
+                                  <span className="text-[8.5px] tracking-tight font-bold uppercase text-[#0D5C46] whitespace-nowrap truncate min-w-0">
                                     2. Zona Akumulasi Ideal
                                   </span>
-                                  <span className={`px-1.5 py-0.5 text-[8px] font-mono font-bold uppercase border rounded-xs whitespace-nowrap shrink-0 ${zoneStatusBadge.cls}`}>
+                                  <span className={`px-1 py-0.5 text-[7.5px] tracking-tighter font-mono font-bold uppercase border rounded-xs whitespace-nowrap shrink-0 ${zoneStatusBadge.cls}`}>
                                     {zoneStatusBadge.label}
                                   </span>
                                 </div>
@@ -2647,13 +2647,13 @@ export function EmitenFundamentalInspectorModal({
                             </div>
 
                             {/* Card 3: Batas Invalidation / Risiko */}
-                            <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2">
-                              <div className="space-y-2">
-                                <div className="flex items-center justify-between gap-1 border-b border-[#E4E2DD]/80 pb-1.5">
-                                  <span className="text-[9px] tracking-tight font-bold uppercase text-[#9E2A2B] whitespace-nowrap shrink-0">
+                            <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2 min-w-0 overflow-hidden">
+                              <div className="space-y-2 min-w-0">
+                                <div className="flex items-center justify-between gap-1 border-b border-[#E4E2DD]/80 pb-1.5 min-w-0">
+                                  <span className="text-[8.5px] tracking-tight font-bold uppercase text-[#9E2A2B] whitespace-nowrap truncate min-w-0">
                                     3. Batas Invalidation
                                   </span>
-                                  <span className="px-1.5 py-0.5 text-[8px] font-mono font-bold uppercase bg-[#E11D48]/15 text-[#9E2A2B] border border-[#E11D48]/40 rounded-xs whitespace-nowrap shrink-0">
+                                  <span className="px-1 py-0.5 text-[7.5px] tracking-tighter font-mono font-bold uppercase bg-[#E11D48]/15 text-[#9E2A2B] border border-[#E11D48]/40 rounded-xs whitespace-nowrap shrink-0">
                                     STOP &lt; {extractedStop}
                                   </span>
                                 </div>
@@ -2686,13 +2686,13 @@ export function EmitenFundamentalInspectorModal({
                             </div>
 
                             {/* Card 4: Panduan Porsi Keranjang & Batas ADTV */}
-                            <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2">
-                              <div className="space-y-2">
-                                <div className="flex items-center justify-between gap-1 border-b border-[#E4E2DD]/80 pb-1.5">
-                                  <span className="text-[9px] tracking-tight font-bold uppercase text-[#0284C7] bb-cyan whitespace-nowrap shrink-0">
+                            <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2 min-w-0 overflow-hidden">
+                              <div className="space-y-2 min-w-0">
+                                <div className="flex items-center justify-between gap-1 border-b border-[#E4E2DD]/80 pb-1.5 min-w-0">
+                                  <span className="text-[8.5px] tracking-tight font-bold uppercase text-[#0284C7] bb-cyan whitespace-nowrap truncate min-w-0">
                                     4. Porsi 1/β &amp; ADTV
                                   </span>
-                                  <span className="px-1.5 py-0.5 text-[8px] font-mono font-bold uppercase bg-[#0284C7]/15 text-[#0284C7] bb-cyan border border-[#0284C7]/40 rounded-xs whitespace-nowrap shrink-0">
+                                  <span className="px-1 py-0.5 text-[7.5px] tracking-tighter font-mono font-bold uppercase bg-[#0284C7]/15 text-[#0284C7] bb-cyan border border-[#0284C7]/40 rounded-xs whitespace-nowrap shrink-0">
                                     1/β Cap ≤{betaCapPct.toFixed(1)}%
                                   </span>
                                 </div>

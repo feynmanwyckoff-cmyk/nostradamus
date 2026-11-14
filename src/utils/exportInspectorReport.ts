@@ -743,13 +743,19 @@ export function renderInspectorReportCanvas(
         {
           label: '1. TINDAKAN UTAMA',
           badge: stock.isHscFlagged
-            ? 'BLOKIR HSC'
+            ? 'AVOID'
             : joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST'
             ? 'BUY ON STRENGTH'
             : mosVal >= 10
-            ? 'AKUMULASI BOW'
-            : 'SELEKTIF / HOLD',
-          badgeColor: stock.isHscFlagged ? '#FB7185' : mosVal >= 0 ? '#34D399' : '#FBBF24',
+            ? 'BUY ON WEAKNESS'
+            : mosVal >= -5
+            ? 'HOLD'
+            : 'WAIT',
+          badgeColor: stock.isHscFlagged
+            ? '#FB7185'
+            : joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST' || mosVal >= 10
+            ? '#34D399'
+            : '#FBBF24',
           lines: [
             ex.recommendedAction.replace(/^Strong\s+Buy\s*[:—-]\s*/i, ''),
             stock.isHscFlagged
@@ -765,11 +771,17 @@ export function renderInspectorReportCanvas(
           badge: stock.isHscFlagged
             ? 'SPEKULATIF'
             : ex.isUndercutDeepDiscount || mosVal >= 10
-            ? 'TERDISKON / MURAH'
+            ? 'DISKON'
             : mosVal >= 0
-            ? 'AREA WAJAR'
+            ? 'WAJAR'
             : 'PREMIUM',
-          badgeColor: stock.isHscFlagged ? '#FB7185' : mosVal >= 10 ? '#34D399' : mosVal >= 0 ? '#38BDF8' : '#FBBF24',
+          badgeColor: stock.isHscFlagged
+            ? '#FB7185'
+            : ex.isUndercutDeepDiscount || mosVal >= 10
+            ? '#34D399'
+            : mosVal >= 0
+            ? '#38BDF8'
+            : '#FBBF24',
           lines: [
             `▸ Rentang Ideal: ${extractedRange}`,
             `▸ Nilai Wajar: Rp ${formatIdrPriceDisplay(fairIdr)}`,
