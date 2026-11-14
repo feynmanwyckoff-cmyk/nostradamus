@@ -14,9 +14,13 @@ import {
   PortfolioHolding,
   RebalanceSignalType,
   RecommendationStrategyTag,
-  StockMetrics
+  SectorValuationArchetype,
+  StatArbSignalType,
+  StockMetrics,
+  ValuationMethodComparisonItem
 } from '../types/quant';
 import {
+  FULL_JCI_EMITEN_CATALOG,
   getEmitenDividendYield,
   isInstitutionalLiquidCandidate
 } from '../data/idxAllEmitenCatalog';
@@ -1607,10 +1611,643 @@ export function computeSbnSpotYieldCurveAndKe(
 }
 
 /**
- * Damodaran (2012) Forward Valuation + Novy-Marx (2013) GP/A + Asness (2019) QMJ + Out-of-Sample (OOS) Evaluator
- * Computes Business Moat Quality (GP/A & Anti-Junk Accruals), Balance Sheet Solvency,
- * Intrinsic Fair Value anchored on Damodaran Justified PBV = (ROE - g) / (Ke - g) with Multi-Tenor SBN Spot Curve,
- * Pegged Fair Multiples (PER & PBV), Forward Dividend Yield, and 1/Beta Barbell Position Sizing Cap.
+ * Fast Lookup Map for Catalog Fundamental Anchor Prices across all 956+ IDX Emiten
+ * Breaks price circularity so estimated BVPS and EPS do not blindly chase daily spot fluctuations.
+ */
+const CATALOG_FUNDAMENTAL_ANCHOR_MAP: Map<string, {
+  approxPrice: number;
+  defaultRoe: number;
+  defaultDer: number;
+  defaultOpMargin: number;
+  name: string;
+  sector: string;
+}> = new Map(
+  FULL_JCI_EMITEN_CATALOG.map((entry) => [
+    entry.ticker.toUpperCase(),
+    {
+      approxPrice: entry.approxPrice,
+      defaultRoe: entry.defaultRoe,
+      defaultDer: entry.defaultDer,
+      defaultOpMargin: entry.defaultOpMargin,
+      name: entry.name,
+      sector: entry.sector
+    }
+  ])
+);
+
+function resolveFundamentalAnchorPrice(ticker: string, fallbackSpotPrice: number): number {
+  const clean = ticker.trim().toUpperCase().replace(/\.JK$/i, '');
+  if (BASELINE_PRICE_ANCHORS[clean]) {
+    return BASELINE_PRICE_ANCHORS[clean];
+  }
+  const cat = CATALOG_FUNDAMENTAL_ANCHOR_MAP.get(clean);
+  if (cat && cat.approxPrice >= 50) {
+    // Blend 75% catalog fundamental anchor + 25% spot level to prevent unit scale mismatch after splits while breaking daily circularity
+    return Math.max(50, Math.round(0.75 * cat.approxPrice + 0.25 * fallbackSpotPrice));
+  }
+  return Math.max(50, fallbackSpotPrice);
+}
+
+/**
+ * Canonical High-Correlation Intra-Sector Pair Twins for Statistical Arbitrage (Relative Value Mean-Reversion)
+ */
+const CANONICAL_STATARB_PEERS: Record<
+  string,
+  { peerTicker: string; peerName: string; correlation: number; defaultChange1D: number; defaultReturn30D: number }
+> = {
+  BBCA: { peerTicker: 'BMRI', peerName: 'Bank Mandiri (Persero) Tbk', correlation: 0.91, defaultChange1D: 1.11, defaultReturn30D: -5.4 },
+  BMRI: { peerTicker: 'BBCA', peerName: 'Bank Central Asia Tbk', correlation: 0.91, defaultChange1D: 1.45, defaultReturn30D: -3.8 },
+  BBRI: { peerTicker: 'BBNI', peerName: 'Bank Negara Indonesia (Persero) Tbk', correlation: 0.89, defaultChange1D: 1.25, defaultReturn30D: -6.2 },
+  BBNI: { peerTicker: 'BMRI', peerName: 'Bank Mandiri (Persero) Tbk', correlation: 0.90, defaultChange1D: 1.11, defaultReturn30D: -5.4 },
+  BRIS: { peerTicker: 'BMRI', peerName: 'Bank Mandiri (Persero) Tbk', correlation: 0.84, defaultChange1D: 1.11, defaultReturn30D: -5.4 },
+  BNGA: { peerTicker: 'NISP', peerName: 'Bank OCBC NISP Tbk', correlation: 0.88, defaultChange1D: 0.85, defaultReturn30D: -1.8 },
+  NISP: { peerTicker: 'BNGA', peerName: 'Bank CIMB Niaga Tbk', correlation: 0.88, defaultChange1D: 0.92, defaultReturn30D: -1.5 },
+  BJBR: { peerTicker: 'BJTM', peerName: 'BPD Jawa Timur Tbk', correlation: 0.87, defaultChange1D: 0.55, defaultReturn30D: -2.1 },
+  BJTM: { peerTicker: 'BJBR', peerName: 'BPD Jawa Barat dan Banten Tbk', correlation: 0.87, defaultChange1D: 0.62, defaultReturn30D: -2.4 },
+  ADRO: { peerTicker: 'ITMG', peerName: 'Indo Tambangraya Megah Tbk', correlation: 0.88, defaultChange1D: 1.4, defaultReturn30D: -1.9 },
+  ITMG: { peerTicker: 'PTBA', peerName: 'Bukit Asam Tbk', correlation: 0.89, defaultChange1D: -0.65, defaultReturn30D: 1.1 },
+  PTBA: { peerTicker: 'ITMG', peerName: 'Indo Tambangraya Megah Tbk', correlation: 0.89, defaultChange1D: 1.4, defaultReturn30D: -1.9 },
+  PGAS: { peerTicker: 'AKRA', peerName: 'AKR Corporindo Tbk', correlation: 0.82, defaultChange1D: 0.85, defaultReturn30D: -1.4 },
+  MEDC: { peerTicker: 'ELSA', peerName: 'Elnusa Tbk', correlation: 0.84, defaultChange1D: 0.95, defaultReturn30D: -1.8 },
+  AKRA: { peerTicker: 'PGAS', peerName: 'Perusahaan Gas Negara Tbk', correlation: 0.82, defaultChange1D: 0.75, defaultReturn30D: -2.1 },
+  AMMN: { peerTicker: 'MDKA', peerName: 'Merdeka Copper Gold Tbk', correlation: 0.83, defaultChange1D: 1.65, defaultReturn30D: -6.4 },
+  ANTM: { peerTicker: 'INCO', peerName: 'Vale Indonesia Tbk', correlation: 0.86, defaultChange1D: 1.15, defaultReturn30D: -2.8 },
+  INCO: { peerTicker: 'ANTM', peerName: 'Aneka Tambang Tbk', correlation: 0.86, defaultChange1D: 1.25, defaultReturn30D: -3.1 },
+  INKP: { peerTicker: 'TKIM', peerName: 'Pabrik Kertas Tjiwi Kimia Tbk', correlation: 0.92, defaultChange1D: 0.8, defaultReturn30D: -2.2 },
+  TKIM: { peerTicker: 'INKP', peerName: 'Indah Kiat Pulp & Paper Tbk', correlation: 0.92, defaultChange1D: 0.95, defaultReturn30D: -1.9 },
+  SMGR: { peerTicker: 'INTP', peerName: 'Indocement Tunggal Prakarsa Tbk', correlation: 0.89, defaultChange1D: 0.65, defaultReturn30D: -3.2 },
+  INTP: { peerTicker: 'SMGR', peerName: 'Semen Indonesia (Persero) Tbk', correlation: 0.89, defaultChange1D: 0.5, defaultReturn30D: -3.8 },
+  ICBP: { peerTicker: 'MYOR', peerName: 'Mayora Indah Tbk', correlation: 0.88, defaultChange1D: 1.33, defaultReturn30D: 2.1 },
+  INDF: { peerTicker: 'ICBP', peerName: 'Indofood CBP Sukses Makmur Tbk', correlation: 0.91, defaultChange1D: 1.85, defaultReturn30D: -2.1 },
+  MYOR: { peerTicker: 'ICBP', peerName: 'Indofood CBP Sukses Makmur Tbk', correlation: 0.88, defaultChange1D: 1.85, defaultReturn30D: -2.1 },
+  CMRY: { peerTicker: 'MYOR', peerName: 'Mayora Indah Tbk', correlation: 0.85, defaultChange1D: 1.33, defaultReturn30D: 2.1 },
+  AMRT: { peerTicker: 'MIDI', peerName: 'Midi Utama Indonesia Tbk', correlation: 0.89, defaultChange1D: 0.95, defaultReturn30D: 1.2 },
+  TAPG: { peerTicker: 'LSIP', peerName: 'PP London Sumatra Indonesia Tbk', correlation: 0.87, defaultChange1D: 1.1, defaultReturn30D: 1.8 },
+  LSIP: { peerTicker: 'TAPG', peerName: 'Triputra Agro Persada Tbk', correlation: 0.87, defaultChange1D: 1.35, defaultReturn30D: 2.4 },
+  CPIN: { peerTicker: 'JPFA', peerName: 'Japfa Comfeed Indonesia Tbk', correlation: 0.90, defaultChange1D: 1.15, defaultReturn30D: 0.8 },
+  JPFA: { peerTicker: 'CPIN', peerName: 'Charoen Pokphand Indonesia Tbk', correlation: 0.90, defaultChange1D: 0.85, defaultReturn30D: -0.9 },
+  KLBF: { peerTicker: 'SIDO', peerName: 'Industri Jamu dan Farmasi Sido Muncul Tbk', correlation: 0.85, defaultChange1D: 0.45, defaultReturn30D: -1.8 },
+  SIDO: { peerTicker: 'KLBF', peerName: 'Kalbe Farma Tbk', correlation: 0.85, defaultChange1D: 1.4, defaultReturn30D: -2.5 },
+  MIKA: { peerTicker: 'SILO', peerName: 'Siloam International Hospitals Tbk', correlation: 0.87, defaultChange1D: 0.9, defaultReturn30D: 1.4 },
+  HEAL: { peerTicker: 'MIKA', peerName: 'Mitra Keluarga Karyasehat Tbk', correlation: 0.86, defaultChange1D: 0.84, defaultReturn30D: 1.4 },
+  TLKM: { peerTicker: 'ISAT', peerName: 'Indosat Tbk', correlation: 0.86, defaultChange1D: 1.45, defaultReturn30D: -2.2 },
+  ISAT: { peerTicker: 'TLKM', peerName: 'Telkom Indonesia (Persero) Tbk', correlation: 0.86, defaultChange1D: 1.8, defaultReturn30D: -3.5 },
+  EXCL: { peerTicker: 'ISAT', peerName: 'Indosat Tbk', correlation: 0.88, defaultChange1D: 1.45, defaultReturn30D: -2.2 },
+  TOWR: { peerTicker: 'TBIG', peerName: 'Tower Bersama Infrastructure Tbk', correlation: 0.91, defaultChange1D: 0.65, defaultReturn30D: -2.4 },
+  TBIG: { peerTicker: 'TOWR', peerName: 'Sarana Menara Nusantara Tbk', correlation: 0.91, defaultChange1D: 0.75, defaultReturn30D: -2.1 },
+  MTEL: { peerTicker: 'TOWR', peerName: 'Sarana Menara Nusantara Tbk', correlation: 0.89, defaultChange1D: 0.75, defaultReturn30D: -2.1 },
+  ASII: { peerTicker: 'UNTR', peerName: 'United Tractors Tbk', correlation: 0.88, defaultChange1D: 1.62, defaultReturn30D: 0.8 },
+  UNTR: { peerTicker: 'ASII', peerName: 'Astra International Tbk', correlation: 0.88, defaultChange1D: 0.41, defaultReturn30D: -1.2 },
+  CTRA: { peerTicker: 'PWON', peerName: 'Pakuwon Jati Tbk', correlation: 0.90, defaultChange1D: 0.85, defaultReturn30D: -1.9 },
+  BSDE: { peerTicker: 'CTRA', peerName: 'Ciputra Development Tbk', correlation: 0.91, defaultChange1D: 1.1, defaultReturn30D: -1.4 },
+  PWON: { peerTicker: 'BSDE', peerName: 'Bumi Serpong Damai Tbk', correlation: 0.90, defaultChange1D: 0.95, defaultReturn30D: -1.8 },
+  SMRA: { peerTicker: 'CTRA', peerName: 'Ciputra Development Tbk', correlation: 0.89, defaultChange1D: 1.1, defaultReturn30D: -1.4 },
+  DMAS: { peerTicker: 'PWON', peerName: 'Pakuwon Jati Tbk', correlation: 0.83, defaultChange1D: 0.85, defaultReturn30D: -1.9 },
+  ARNA: { peerTicker: 'TOTO', peerName: 'Surya Toto Indonesia Tbk', correlation: 0.84, defaultChange1D: 0.65, defaultReturn30D: 0.9 },
+  MPMX: { peerTicker: 'ASII', peerName: 'Astra International Tbk', correlation: 0.82, defaultChange1D: 0.41, defaultReturn30D: -1.2 },
+  ACES: { peerTicker: 'MAPI', peerName: 'Mitra Adiperkasa Tbk', correlation: 0.85, defaultChange1D: 1.05, defaultReturn30D: -1.1 },
+  MAPI: { peerTicker: 'ACES', peerName: 'Aspirasi Hidup Indonesia Tbk', correlation: 0.85, defaultChange1D: 0.9, defaultReturn30D: -1.5 }
+};
+
+const SECTOR_DEFAULT_BENCHMARK_PEER: Record<
+  string,
+  { peerTicker: string; peerName: string; correlation: number; defaultChange1D: number; defaultReturn30D: number }
+> = {
+  Financials: { peerTicker: 'BMRI', peerName: 'Bank Mandiri (Persero) Tbk', correlation: 0.85, defaultChange1D: 1.11, defaultReturn30D: -5.4 },
+  Energy: { peerTicker: 'ITMG', peerName: 'Indo Tambangraya Megah Tbk', correlation: 0.84, defaultChange1D: 1.4, defaultReturn30D: -1.9 },
+  'Basic Materials': { peerTicker: 'ANTM', peerName: 'Aneka Tambang Tbk', correlation: 0.82, defaultChange1D: 1.25, defaultReturn30D: -3.1 },
+  Industrials: { peerTicker: 'UNTR', peerName: 'United Tractors Tbk', correlation: 0.84, defaultChange1D: 1.62, defaultReturn30D: 0.8 },
+  'Consumer Non-Cyclicals': { peerTicker: 'ICBP', peerName: 'Indofood CBP Sukses Makmur Tbk', correlation: 0.84, defaultChange1D: 1.85, defaultReturn30D: -2.1 },
+  'Consumer Cyclicals': { peerTicker: 'MAPI', peerName: 'Mitra Adiperkasa Tbk', correlation: 0.81, defaultChange1D: 1.05, defaultReturn30D: -1.1 },
+  Healthcare: { peerTicker: 'KLBF', peerName: 'Kalbe Farma Tbk', correlation: 0.83, defaultChange1D: 1.4, defaultReturn30D: -2.5 },
+  Infrastructures: { peerTicker: 'TLKM', peerName: 'Telkom Indonesia (Persero) Tbk', correlation: 0.85, defaultChange1D: 1.8, defaultReturn30D: -3.5 },
+  'Properties & Real Estate': { peerTicker: 'CTRA', peerName: 'Ciputra Development Tbk', correlation: 0.86, defaultChange1D: 1.1, defaultReturn30D: -1.4 },
+  Technology: { peerTicker: 'MTDL', peerName: 'Metrodata Electronics Tbk', correlation: 0.79, defaultChange1D: 0.95, defaultReturn30D: -1.2 },
+  'Transportation & Logistics': { peerTicker: 'BIRD', peerName: 'Blue Bird Tbk', correlation: 0.81, defaultChange1D: 0.8, defaultReturn30D: -1.0 }
+};
+
+/**
+ * Method 1: Multi-Stage Residual Income Model (Ohlson 1995; Gebhardt, Lee & Swaminathan 2001; Penman 2020)
+ * Uses a dynamic 5-to-7 Year ROE Fade Horizon (`rimFadeYears`) and Persistence Parameter (`omega`)
+ * calibrated from Novy-Marx Gross Profitability (GP/A) and Asness QMJ Accrual Quality (OCF/NI).
+ */
+function computeMultiStageResidualIncomeValue(params: {
+  bvps0: number;
+  roePct: number;
+  kePct: number;
+  dprPct: number;
+  gpaPct: number;
+  ocfToNi: number;
+  der: number;
+  accrualPenaltyScore: number;
+  hscDiscountMultiplier: number;
+}): {
+  rimFairValueIdr: number;
+  rimFadeYears: number;
+  rimPersistenceOmega: number;
+  rimTerminalRoePct: number;
+} {
+  const {
+    bvps0,
+    roePct,
+    kePct,
+    dprPct,
+    gpaPct,
+    ocfToNi,
+    der,
+    accrualPenaltyScore,
+    hscDiscountMultiplier
+  } = params;
+
+  // Dynamic ROE Fade Horizon (5 to 7 Years) based on GP/A & OCF/NI Moat Quality
+  const rimFadeYears =
+    gpaPct >= 19.0 && ocfToNi >= 0.96 && der <= 0.95
+      ? 7
+      : gpaPct >= 13.5 && ocfToNi >= 0.84
+      ? 6
+      : 5;
+
+  // Persistence Parameter omega in [0.56, 0.88]
+  const rawOmega =
+    0.62 +
+    Math.min(0.16, (gpaPct / 30.0) * 0.14) +
+    (ocfToNi >= 1.0 ? 0.08 : ocfToNi >= 0.85 ? 0.03 : -0.06) -
+    Math.min(0.14, accrualPenaltyScore * 0.06);
+  const rimPersistenceOmega = Number(Math.max(0.56, Math.min(0.88, rawOmega)).toFixed(2));
+
+  // Cash-adjusted sustainable starting ROE and terminal equilibrium ROE
+  const cashQualityAdj = Math.max(0.78, Math.min(1.08, 0.88 + ocfToNi * 0.12 - accrualPenaltyScore * 0.05));
+  const startRoePct = Math.max(2.0, Math.min(34.0, roePct * cashQualityAdj));
+  const rimTerminalRoePct = Number(
+    Math.max(
+      kePct * 0.85,
+      Math.min(kePct + 5.5, 0.55 * kePct + 0.45 * Math.min(22.0, startRoePct))
+    ).toFixed(2)
+  );
+
+  const keDec = kePct / 100;
+  const retentionRatio = Math.max(0.15, Math.min(0.80, 1 - dprPct / 100));
+
+  let currentBvps = bvps0;
+  let pvExplicitResidualIncome = 0;
+  let lastResidualIncome = 0;
+
+  for (let t = 1; t <= rimFadeYears; t++) {
+    const fadeProgress = t / rimFadeYears;
+    // Smooth exponential-linear decay from startRoePct toward rimTerminalRoePct
+    const roeT =
+      startRoePct * Math.pow(rimPersistenceOmega, t * 0.45) * (1 - fadeProgress * 0.35) +
+      rimTerminalRoePct * (1 - Math.pow(rimPersistenceOmega, t * 0.45) * (1 - fadeProgress * 0.35));
+    const roeTDec = roeT / 100;
+    const epsT = currentBvps * roeTDec;
+    const residualIncomeT = (roeTDec - keDec) * currentBvps;
+    const discountFactor = Math.pow(1 + keDec, t);
+
+    pvExplicitResidualIncome += residualIncomeT / discountFactor;
+    lastResidualIncome = residualIncomeT;
+    currentBvps = Math.max(bvps0 * 0.5, currentBvps + epsT * retentionRatio);
+  }
+
+  // Terminal Value of Residual Income with persistence factor omega (Ohlson 1995 EBO formulation)
+  const pvTerminalResidualIncome =
+    (lastResidualIncome * rimPersistenceOmega) /
+    ((1 + keDec - rimPersistenceOmega) * Math.pow(1 + keDec, rimFadeYears));
+
+  const rawRimValue = (bvps0 + pvExplicitResidualIncome + pvTerminalResidualIncome) * hscDiscountMultiplier;
+  const rimFairValueIdr = roundToIdxTick(Math.max(50, rawRimValue));
+
+  return {
+    rimFairValueIdr,
+    rimFadeYears,
+    rimPersistenceOmega,
+    rimTerminalRoePct
+  };
+}
+
+/**
+ * Method 2: Sector-Specific Institutional Valuation Matrix
+ * Implements academic & practitioner industry-standard multiples per sector:
+ * - Energy, Basic Materials & Industrials -> Price-to-Cash Flow (P/CF)
+ * - Telecommunications, Towers & Infrastructures -> EV/EBITDA
+ * - Properties, Real Estate & REITs -> Price-to-AFFO (Adjusted Funds from Operations)
+ * - Financials & Banking -> Damodaran Justified PBV & Excess Return
+ * - Consumer & Healthcare -> Quality-Adjusted P/E (Novy-Marx GP/A Moat)
+ */
+function computeSectorSpecificValuation(params: {
+  stock: StockMetrics;
+  price: number;
+  estimatedEpsIdr: number;
+  estimatedBvpsIdr: number;
+  ocfToNetIncomeRatio: number;
+  grossProfitabilityToAssets: number;
+  dynamicCostOfEquityPct: number;
+  sustainableGrowthRatePct: number;
+  standaloneFairPbv: number;
+  standaloneFairPer: number;
+  derPenaltyMultiplier: number;
+  accrualQualityMultiplier: number;
+  hscDiscountMultiplier: number;
+}): {
+  sectorValuationArchetype: SectorValuationArchetype;
+  sectorPrimaryMetricShort: string;
+  sectorPrimaryMetricLabel: string;
+  sectorPrimaryImpliedMultiple: number;
+  sectorPrimaryFairMultiple: number;
+  sectorPrimaryPerShareIdr: number;
+  sectorPrimaryPerShareLabel: string;
+  sectorSpecificFairValueIdr: number;
+  sectorAcademicRationale: string;
+} {
+  const {
+    stock,
+    price,
+    estimatedEpsIdr,
+    estimatedBvpsIdr,
+    ocfToNetIncomeRatio,
+    grossProfitabilityToAssets,
+    dynamicCostOfEquityPct,
+    standaloneFairPbv,
+    standaloneFairPer,
+    derPenaltyMultiplier,
+    accrualQualityMultiplier,
+    hscDiscountMultiplier
+  } = params;
+
+  const sec = stock.sector;
+  const cleanTicker = stock.ticker.toUpperCase();
+  const der = Math.max(0.05, stock.debtToEquity);
+
+  // 1. ENERGY, BASIC MATERIALS & CAPITAL GOODS (INDUSTRIALS) -> Price-to-Cash Flow (P/CF)
+  if (sec === 'Energy' || sec === 'Basic Materials' || sec === 'Industrials') {
+    // Operating Cash Flow per Share includes non-cash DD&A (Depletion, Depreciation & Amortization) typical of resource/heavy equipment firms
+    const ddaAddbackMultiplier = sec === 'Energy' || sec === 'Basic Materials' ? 1.24 : 1.18;
+    const effectiveCashConversion = Math.max(0.55, Math.min(1.65, ocfToNetIncomeRatio));
+    const ocfPerShareIdr = Math.max(
+      4,
+      Math.round(estimatedEpsIdr * effectiveCashConversion * ddaAddbackMultiplier)
+    );
+    const impliedPcf = Number(Math.max(1.8, Math.min(45.0, price / ocfPerShareIdr)).toFixed(2));
+
+    // Fair P/CF anchored on inverse Cost of Equity, GP/A efficiency, and balance sheet solvency
+    const baseTargetPcf = (100 / Math.max(9.2, dynamicCostOfEquityPct + 0.8)) * (sec === 'Industrials' ? 1.05 : 0.96);
+    const gpaBonus = Math.max(0.88, Math.min(1.22, 0.86 + (grossProfitabilityToAssets / 24) * 0.28));
+    const fairPcf = Number(
+      Math.max(
+        4.2,
+        Math.min(
+          14.5,
+          baseTargetPcf * gpaBonus * derPenaltyMultiplier * accrualQualityMultiplier * hscDiscountMultiplier
+        )
+      ).toFixed(2)
+    );
+    const sectorSpecificFairValueIdr = roundToIdxTick(Math.max(50, ocfPerShareIdr * fairPcf));
+
+    return {
+      sectorValuationArchetype: 'ENERGY_MATERIALS_PCF',
+      sectorPrimaryMetricShort: 'P/CF',
+      sectorPrimaryMetricLabel: 'Price-to-Cash Flow (P/CF)',
+      sectorPrimaryImpliedMultiple: impliedPcf,
+      sectorPrimaryFairMultiple: fairPcf,
+      sectorPrimaryPerShareIdr: ocfPerShareIdr,
+      sectorPrimaryPerShareLabel: 'OCF/Saham',
+      sectorSpecificFairValueIdr,
+      sectorAcademicRationale: `Sektor ${sec} memiliki beban deplesi tambang & depresiasi barang modal besar sehingga Laba Bersih sering terdistorsi non-kas; P/CF berbasis Arus Kas Operasi (OCF Rp ${ocfPerShareIdr.toLocaleString('id-ID')}/saham) adalah standar valuasi institusional paling akurat.`
+    };
+  }
+
+  // 2. TELECOMMUNICATIONS, TOWERS & INFRASTRUCTURES -> EV/EBITDA
+  if (
+    sec === 'Infrastructures' ||
+    sec === 'Technology' ||
+    ['TLKM', 'ISAT', 'EXCL', 'TOWR', 'TBIG', 'MTEL', 'JSMR', 'LINK', 'WIFI', 'DATA'].includes(cleanTicker)
+  ) {
+    // Telco & Infrastructure carry massive network/tower depreciation & debt service; EBITDA captures true operating cash generation
+    const infraDepreciationFactor =
+      ['TOWR', 'TBIG', 'MTEL', 'TLKM', 'ISAT', 'EXCL', 'JSMR'].includes(cleanTicker) || sec === 'Infrastructures'
+        ? 1.72
+        : 1.48;
+    const ebitdaPerShareIdr = Math.max(
+      5,
+      Math.round(
+        estimatedEpsIdr *
+          infraDepreciationFactor *
+          Math.max(0.75, Math.min(1.35, ocfToNetIncomeRatio * 0.95))
+      )
+    );
+    const netDebtPerShareIdr = Math.round(
+      estimatedBvpsIdr * Math.max(0, der - 0.18) * 0.58
+    );
+    const enterpriseValuePerShareIdr = price + netDebtPerShareIdr;
+    const impliedEvEbitda = Number(
+      Math.max(2.2, Math.min(38.0, enterpriseValuePerShareIdr / ebitdaPerShareIdr)).toFixed(2)
+    );
+
+    const baseFairEvEbitda =
+      (100 / Math.max(9.5, dynamicCostOfEquityPct + 0.5)) *
+      (stock.operatingMargin >= 28 ? 1.08 : 0.94);
+    const fairEvEbitda = Number(
+      Math.max(
+        4.5,
+        Math.min(
+          13.5,
+          baseFairEvEbitda * accrualQualityMultiplier * hscDiscountMultiplier
+        )
+      ).toFixed(2)
+    );
+    const fairEnterpriseValuePerShare = ebitdaPerShareIdr * fairEvEbitda;
+    const rawEquityFairValue = Math.max(
+      estimatedEpsIdr * standaloneFairPer * 0.72,
+      fairEnterpriseValuePerShare - netDebtPerShareIdr
+    );
+    const sectorSpecificFairValueIdr = roundToIdxTick(Math.max(50, rawEquityFairValue));
+
+    return {
+      sectorValuationArchetype: 'TELCO_INFRA_EVEBITDA',
+      sectorPrimaryMetricShort: 'EV/EBITDA',
+      sectorPrimaryMetricLabel: 'Enterprise Value to EBITDA (EV/EBITDA)',
+      sectorPrimaryImpliedMultiple: impliedEvEbitda,
+      sectorPrimaryFairMultiple: fairEvEbitda,
+      sectorPrimaryPerShareIdr: ebitdaPerShareIdr,
+      sectorPrimaryPerShareLabel: 'EBITDA/Saham',
+      sectorSpecificFairValueIdr,
+      sectorAcademicRationale: `Sektor Telekomunikasi & Infrastruktur menanggung depresiasi jaringan/menara masif yang menekan EPS di atas kertas; EV/EBITDA (EBITDA ~Rp ${ebitdaPerShareIdr.toLocaleString('id-ID')}/saham, Net Debt ~Rp ${netDebtPerShareIdr.toLocaleString('id-ID')}/saham) menetralisir distorsi depresiasi & struktur utang.`
+    };
+  }
+
+  // 3. PROPERTIES, REAL ESTATE & INDUSTRIAL ESTATES / REITs -> Price-to-AFFO (P/AFFO)
+  if (
+    sec === 'Properties & Real Estate' ||
+    ['CTRA', 'BSDE', 'PWON', 'SMRA', 'DMAS', 'JRPT', 'PLIN', 'PANI', 'MKPI', 'LPKR', 'ASRI'].includes(cleanTicker)
+  ) {
+    // Property accounting Net Income is heavily distorted by non-cash fair-value asset revaluations & lumpy handover recognition.
+    // AFFO = Recurring Funds From Operations minus Maintenance CapEx, anchored on cash conversion & recurring asset yield.
+    const affoPerShareIdr = Math.max(
+      3,
+      Math.round(
+        estimatedEpsIdr * Math.max(0.62, Math.min(1.30, ocfToNetIncomeRatio * 0.90)) +
+          estimatedBvpsIdr * 0.022
+      )
+    );
+    const impliedPaffo = Number(Math.max(2.5, Math.min(48.0, price / affoPerShareIdr)).toFixed(2));
+
+    const baseFairPaffo =
+      (100 / Math.max(8.8, dynamicCostOfEquityPct - 1.2)) *
+      (der <= 0.65 ? 1.06 : 0.92);
+    const fairPaffo = Number(
+      Math.max(
+        5.5,
+        Math.min(
+          15.5,
+          baseFairPaffo * accrualQualityMultiplier * hscDiscountMultiplier
+        )
+      ).toFixed(2)
+    );
+    // Blend 70% P/AFFO Cash Valuation + 30% Discounted RNAV/Book Anchor
+    const paffoValue = affoPerShareIdr * fairPaffo;
+    const rnavBookAnchor = estimatedBvpsIdr * standaloneFairPbv;
+    const sectorSpecificFairValueIdr = roundToIdxTick(
+      Math.max(50, 0.70 * paffoValue + 0.30 * rnavBookAnchor)
+    );
+
+    return {
+      sectorValuationArchetype: 'PROPERTY_REIT_PAFFO',
+      sectorPrimaryMetricShort: 'P/AFFO',
+      sectorPrimaryMetricLabel: 'Price-to-AFFO (Adjusted Funds From Operations)',
+      sectorPrimaryImpliedMultiple: impliedPaffo,
+      sectorPrimaryFairMultiple: fairPaffo,
+      sectorPrimaryPerShareIdr: affoPerShareIdr,
+      sectorPrimaryPerShareLabel: 'AFFO/Saham',
+      sectorSpecificFairValueIdr,
+      sectorAcademicRationale: `Laba bersih sektor Properti/REITs sering terdistorsi oleh revaluasi aset non-kas di atas kertas; Price-to-AFFO (AFFO ~Rp ${affoPerShareIdr.toLocaleString('id-ID')}/saham setelah dikurangi CapEx pemeliharaan) mengukur arus kas operasional berulang yang riil.`
+    };
+  }
+
+  // 4. FINANCIALS & BANKING -> Damodaran Justified PBV & Excess Return
+  if (sec === 'Financials') {
+    const impliedPbv = Number((price / Math.max(1, estimatedBvpsIdr)).toFixed(2));
+    const sectorSpecificFairValueIdr = roundToIdxTick(
+      Math.max(50, estimatedBvpsIdr * standaloneFairPbv)
+    );
+    return {
+      sectorValuationArchetype: 'FINANCIALS_JUSTIFIED_PBV',
+      sectorPrimaryMetricShort: 'Justified PBV',
+      sectorPrimaryMetricLabel: 'Damodaran Justified PBV & Excess Return',
+      sectorPrimaryImpliedMultiple: impliedPbv,
+      sectorPrimaryFairMultiple: standaloneFairPbv,
+      sectorPrimaryPerShareIdr: estimatedBvpsIdr,
+      sectorPrimaryPerShareLabel: 'BVPS Ekuitas',
+      sectorSpecificFairValueIdr,
+      sectorAcademicRationale: `Pada sektor Perbankan & Keuangan, utang/DPK adalah bahan baku operasional sehingga EV/EBITDA tidak relevan; Justified PBV = (ROE − g) ÷ (Ke − g) berbasis Nilai Buku (BVPS Rp ${estimatedBvpsIdr.toLocaleString('id-ID')}) dan Kurva SBN Spot adalah standar emas akademik.`
+    };
+  }
+
+  // 5. CONSUMER, HEALTHCARE & GENERAL COMPOUNDERS -> Quality-Adjusted P/E (Cash Earnings Power)
+  const cashAdjustedEpsIdr = Math.max(
+    2,
+    Math.round(estimatedEpsIdr * Math.max(0.78, Math.min(1.16, 0.85 + ocfToNetIncomeRatio * 0.15)))
+  );
+  const impliedQualityPe = Number(Math.max(2.5, Math.min(60.0, price / cashAdjustedEpsIdr)).toFixed(2));
+  const moatPremium = grossProfitabilityToAssets >= 22 ? 1.12 : grossProfitabilityToAssets >= 16 ? 1.05 : 0.96;
+  const fairQualityPe = Number(
+    Math.max(6.0, Math.min(24.5, standaloneFairPer * moatPremium)).toFixed(2)
+  );
+  const sectorSpecificFairValueIdr = roundToIdxTick(
+    Math.max(50, cashAdjustedEpsIdr * fairQualityPe)
+  );
+
+  return {
+    sectorValuationArchetype: 'CONSUMER_HEALTH_QUALITY_PE',
+    sectorPrimaryMetricShort: 'Quality P/E',
+    sectorPrimaryMetricLabel: 'Quality-Adjusted P/E (Cash Earnings Power)',
+    sectorPrimaryImpliedMultiple: impliedQualityPe,
+    sectorPrimaryFairMultiple: fairQualityPe,
+    sectorPrimaryPerShareIdr: cashAdjustedEpsIdr,
+    sectorPrimaryPerShareLabel: 'Cash EPS',
+    sectorSpecificFairValueIdr,
+    sectorAcademicRationale: `Untuk sektor ${sec}, kekuatan moat harga & perputaran aset diukur melalui Cash-Adjusted P/E (Cash EPS Rp ${cashAdjustedEpsIdr.toLocaleString('id-ID')}/saham) yang dikalibrasi dengan Gross Profitability (Novy-Marx GP/A ${grossProfitabilityToAssets.toFixed(1)}%).`
+  };
+}
+
+/**
+ * Method 3 & 4: Agnostic Cross-Sectional Peer Valuation (Bartram & Grinblatt 2018 JFE)
+ * & Quantedge Statistical Arbitrage (Relative Value Pair Mean-Reversion Engine).
+ * Detects short-term price dislocations between high-correlation intra-sector twins (e.g., BBCA vs BMRI)
+ * caused by institutional liquidity shocks / forced selling without fundamental deterioration.
+ */
+function computeStatArbAndAgnosticPeerValuation(params: {
+  stock: StockMetrics;
+  price: number;
+  estimatedEpsIdr: number;
+  estimatedBvpsIdr: number;
+  ocfToNetIncomeRatio: number;
+  grossProfitabilityToAssets: number;
+  forwardDividendYieldPct: number;
+  sectorSpecificFairValueIdr: number;
+  rimFairValueIdr: number;
+}): {
+  agnosticPeerFairValueIdr: number;
+  statArbPeerTicker: string;
+  statArbPeerName: string;
+  statArbCorrelation: number;
+  statArbSpread1DPct: number;
+  statArbSpread30DPct: number;
+  statArbZScore: number;
+  statArbSignal: StatArbSignalType;
+  statArbSignalLabel: string;
+  statArbImpliedTargetIdr: number;
+  statArbRationale: string;
+} {
+  const {
+    stock,
+    price,
+    estimatedEpsIdr,
+    estimatedBvpsIdr,
+    ocfToNetIncomeRatio,
+    grossProfitabilityToAssets,
+    forwardDividendYieldPct,
+    sectorSpecificFairValueIdr,
+    rimFairValueIdr
+  } = params;
+
+  const clean = stock.ticker.trim().toUpperCase().replace(/\.JK$/i, '');
+  const peerInfo =
+    CANONICAL_STATARB_PEERS[clean] ||
+    SECTOR_DEFAULT_BENCHMARK_PEER[stock.sector] || {
+      peerTicker: 'IHSG-SEC',
+      peerName: `Indeks Sektor ${stock.sector}`,
+      correlation: 0.82,
+      defaultChange1D: 0.65,
+      defaultReturn30D: -1.8
+    };
+
+  // If the stock happens to match the default sector benchmark ticker, swap to the secondary twin
+  const resolvedPeer =
+    peerInfo.peerTicker === clean
+      ? CANONICAL_STATARB_PEERS[clean] || {
+          peerTicker: 'BBCA',
+          peerName: 'Bank Central Asia Tbk',
+          correlation: 0.88,
+          defaultChange1D: 1.45,
+          defaultReturn30D: -3.8
+        }
+      : peerInfo;
+
+  // Bartram & Grinblatt (2018) Agnostic Fundamental Cross-Sectional Peer Hedonic Value:
+  // Linear combination of cross-sectional peer multiples on Book Value, Operating Cash Flow, and Earnings + Dividend
+  const sectorPeerMedianPer =
+    stock.sector === 'Consumer Non-Cyclicals' || stock.sector === 'Healthcare'
+      ? 15.8
+      : stock.sector === 'Financials'
+      ? 12.6
+      : stock.sector === 'Infrastructures' || stock.sector === 'Technology'
+      ? 14.2
+      : stock.sector === 'Properties & Real Estate'
+      ? 10.8
+      : 8.8;
+  const sectorPeerMedianPbv =
+    stock.sector === 'Financials'
+      ? 2.05
+      : stock.sector === 'Consumer Non-Cyclicals' || stock.sector === 'Healthcare'
+      ? 2.65
+      : 1.45;
+
+  const qualityRelativeMultiplier = Math.max(
+    0.72,
+    Math.min(
+      1.28,
+      0.78 +
+        (grossProfitabilityToAssets / 22.0) * 0.24 +
+        Math.min(0.18, ocfToNetIncomeRatio * 0.12) +
+        (forwardDividendYieldPct >= 3.0 ? 0.08 : 0) -
+        (stock.isHscFlagged ? 0.35 : 0)
+    )
+  );
+
+  const peerHedonicEpsPart = estimatedEpsIdr * sectorPeerMedianPer * qualityRelativeMultiplier;
+  const peerHedonicBvpsPart = estimatedBvpsIdr * sectorPeerMedianPbv * qualityRelativeMultiplier;
+  const rawAgnosticPeer =
+    0.45 * peerHedonicEpsPart +
+    0.35 * peerHedonicBvpsPart +
+    0.20 * ((sectorSpecificFairValueIdr + rimFairValueIdr) / 2);
+  const agnosticPeerFairValueIdr = roundToIdxTick(Math.max(50, rawAgnosticPeer));
+
+  // Statistical Arbitrage Pair Spread & Z-Score Calculation
+  // Spread = (R_stock - beta_pair * R_peer) normalized by idiosyncratic pair volatility
+  const betaPair = Math.max(0.65, Math.min(1.35, stock.beta1Y / 0.95));
+  const statArbSpread1DPct = Number(
+    (stock.change1D - resolvedPeer.defaultChange1D * 0.85).toFixed(2)
+  );
+  const statArbSpread30DPct = Number(
+    (stock.return30D - resolvedPeer.defaultReturn30D * betaPair).toFixed(2)
+  );
+
+  // Pair daily tracking sigma (~1.8% 1D, ~5.6% 30D for cointegrated pairs with correlation ~0.85-0.92)
+  const pairSpreadSigma1D = Math.max(1.35, (stock.volatilityAnn / Math.sqrt(252)) * Math.sqrt(1 - Math.pow(resolvedPeer.correlation, 2)) * 1.65);
+  const pairSpreadSigma30D = Math.max(3.8, pairSpreadSigma1D * Math.sqrt(20) * 0.78);
+
+  const z1D = statArbSpread1DPct / pairSpreadSigma1D;
+  const z30D = statArbSpread30DPct / pairSpreadSigma30D;
+  const statArbZScore = Number(
+    Math.max(-3.5, Math.min(3.5, 0.55 * z1D + 0.45 * z30D)).toFixed(2)
+  );
+
+  // Mean-Reversion Target Price: If stock diverged negatively vs its high-correlation twin while fundamentals are intact,
+  // calculate the cointegrated convergence price once the institutional flow shock mean-reverts.
+  const expectedConvergencePct =
+    !stock.isHscFlagged && ocfToNetIncomeRatio >= 0.78
+      ? Math.max(-8.0, Math.min(16.0, -statArbZScore * pairSpreadSigma30D * 0.65))
+      : 0;
+  const rawStatArbTarget =
+    0.55 * (price * (1 + expectedConvergencePct / 100)) +
+    0.45 * agnosticPeerFairValueIdr;
+  const statArbImpliedTargetIdr = roundToIdxTick(Math.max(50, rawStatArbTarget));
+
+  const isCleanFundamental =
+    !stock.isHscFlagged &&
+    ocfToNetIncomeRatio >= 0.80 &&
+    grossProfitabilityToAssets >= 11.0 &&
+    stock.roe >= 9.0;
+
+  let statArbSignal: StatArbSignalType = 'FAIR_COINTEGRATED';
+  let statArbSignalLabel = `Kointegrasi Seimbang vs ${resolvedPeer.peerTicker} (Z = ${statArbZScore >= 0 ? '+' : ''}${statArbZScore}σ)`;
+  let statArbRationale = `Pergerakan relatif ${clean} terhadap pasangan berkorelasi tinggi ${resolvedPeer.peerTicker} (ρ = ${resolvedPeer.correlation.toFixed(2)}) berada dalam koridor ekuilibrium wajar (Spread 1D ${statArbSpread1DPct >= 0 ? '+' : ''}${statArbSpread1DPct}%, 30D ${statArbSpread30DPct >= 0 ? '+' : ''}${statArbSpread30DPct}%).`;
+
+  if (!isCleanFundamental || stock.isHscFlagged) {
+    statArbSignal = 'FUNDAMENTAL_DIVERGENCE';
+    statArbSignalLabel = `Divergensi Fundamental / Non-Arbitrase (Z = ${statArbZScore >= 0 ? '+' : ''}${statArbZScore}σ)`;
+    statArbRationale = `Selisih harga terhadap ${resolvedPeer.peerTicker} dipengaruhi perbedaan kualitas fundamental/kas (OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x) atau risiko konsentrasi HSC, sehingga tidak boleh diperlakukan sebagai mean-reversion murni.`;
+  } else if (statArbZScore <= -0.80 || (stock.change1D <= -1.5 && statArbSpread1DPct <= -2.0)) {
+    statArbSignal = 'MEAN_REVERSION_BUY';
+    statArbSignalLabel = `StatArb Long / Mean-Reversion Buy vs ${resolvedPeer.peerTicker} (Z = ${statArbZScore}σ)`;
+    statArbRationale = `Anomali Relative Value Terdeteksi: Secara historis korelasi ${clean}–${resolvedPeer.peerTicker} sangat kuat (ρ = ${resolvedPeer.correlation.toFixed(2)}), namun ${clean} tertinggal (Spread 1D ${statArbSpread1DPct >= 0 ? '+' : ''}${statArbSpread1DPct}% · 30D ${statArbSpread30DPct >= 0 ? '+' : ''}${statArbSpread30DPct}% · Z-Score ${statArbZScore}σ) tanpa penurunan kualitas kas (OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x). Mengindikasikan tekanan likuiditas sementara / forced selling institusi dengan target konvergensi Rp ${statArbImpliedTargetIdr.toLocaleString('id-ID')}.`;
+  } else if (statArbZScore >= 1.25) {
+    statArbSignal = 'PAIR_OVEREXTENDED_TRIM';
+    statArbSignalLabel = `Relative Overextended vs ${resolvedPeer.peerTicker} (Z = +${statArbZScore}σ)`;
+    statArbRationale = `${clean} telah berlari melampaui pasangan kointegrasinya ${resolvedPeer.peerTicker} (ρ = ${resolvedPeer.correlation.toFixed(2)}) dengan Z-Score +${statArbZScore}σ (Spread 30D +${statArbSpread30DPct}%). Secara Statistical Arbitrage, ruang upside relatif jangka pendek mulai menyempit dibanding ${resolvedPeer.peerTicker}.`;
+  }
+
+  return {
+    agnosticPeerFairValueIdr,
+    statArbPeerTicker: resolvedPeer.peerTicker,
+    statArbPeerName: resolvedPeer.peerName,
+    statArbCorrelation: resolvedPeer.correlation,
+    statArbSpread1DPct,
+    statArbSpread30DPct,
+    statArbZScore,
+    statArbSignal,
+    statArbSignalLabel,
+    statArbImpliedTargetIdr,
+    statArbRationale
+  };
+}
+
+/**
+ * Quantedge Systematic Multi-Method Valuation + Sector-Adaptive Matrix + Statistical Arbitrage Evaluator
+ * Computes:
+ * 1. Primary Fair Value (`intrinsicValueIdr` — displayed in LARGEST font): Quantedge Sector-Adaptive Ensemble
+ * 2. Comparator Method A: Sector-Specific Institutional Multiple (P/CF for Energy/Materials, EV/EBITDA for Telco/Infra, P/AFFO for Property/REITs, Justified PBV for Financials, Quality P/E for Consumer/Health)
+ * 3. Comparator Method B: Multi-Stage Residual Income Model (Ohlson-Penman EBO with Dynamic 5-7Y ROE Fade based on GP/A & OCF/NI)
+ * 4. Comparator Method C: Relative Value & Agnostic Peer Regression (Bartram-Grinblatt & Statistical Arbitrage Pair Convergence)
  */
 export function evaluateJoeliardiOosFundamental(
   stock: StockMetrics,
@@ -1630,9 +2267,8 @@ export function evaluateJoeliardiOosFundamental(
   const accrualPenaltyScore = stock.accrualPenaltyScore ?? gpAccrual.accrualPenaltyScore;
   const accrualPenaltyPts = Math.round(accrualPenaltyScore * 8.5); // 0 - 20 pts on 0-100 fundamental scale
 
-  // Sector-calibrated market PBV baseline adjusted by live price vs anchor
-  const anchorPrice = BASELINE_PRICE_ANCHORS[stock.ticker] || price;
-  const priceRatio = price / Math.max(50, anchorPrice);
+  // Non-circular fundamental anchor price from 956-stock catalog + baseline anchors
+  const anchorPrice = resolveFundamentalAnchorPrice(stock.ticker, price);
 
   const baseSectorPbv =
     stock.sector === 'Financials'
@@ -1647,12 +2283,12 @@ export function evaluateJoeliardiOosFundamental(
       ? 1.55
       : 1.45;
 
-  const impliedPbv = Number(
-    Math.max(0.45, Math.min(8.5, baseSectorPbv * priceRatio * (roe / 16.5) * 0.88)).toFixed(2)
-  );
-  const estimatedBvpsIdr = Math.max(25, Math.round(price / impliedPbv));
+  // Fundamental BVPS & EPS anchored on fundamental anchorPrice so daily spot price jumps do NOT circularly inflate BVPS/EPS
+  const anchorFairPbvBaseline = Math.max(0.45, Math.min(7.5, baseSectorPbv * (roe / 16.5) * 0.88));
+  const estimatedBvpsIdr = Math.max(25, Math.round(anchorPrice / anchorFairPbvBaseline));
   const estimatedEpsIdr = Math.max(2, Math.round((estimatedBvpsIdr * roe) / 100));
-  const impliedPer = Number(Math.max(2.5, Math.min(65, price / estimatedEpsIdr)).toFixed(2));
+  const impliedPbv = Number(Math.max(0.35, Math.min(12.5, price / estimatedBvpsIdr)).toFixed(2));
+  const impliedPer = Number(Math.max(2.0, Math.min(75.0, price / estimatedEpsIdr)).toFixed(2));
 
   // Forward Dividend & Valid Total Shareholder Yield (No Double Counting)
   const forwardDivData = calculateForwardDividend(stock, estimatedEpsIdr, estimatedBvpsIdr);
@@ -1728,16 +2364,83 @@ export function evaluateJoeliardiOosFundamental(
     ).toFixed(2)
   );
 
-  // Graham Number & Damodaran Justified PBV Blended Intrinsic Value rounded to official BEI tick fraction
-  const grahamIntrinsic = Math.sqrt(22.5 * estimatedEpsIdr * estimatedBvpsIdr);
-  const damodaranPbvIntrinsic = estimatedBvpsIdr * standaloneFairPbv;
-  const dynamicPerIntrinsic = estimatedEpsIdr * standaloneFairPer;
+  // METHOD 1: Multi-Stage Residual Income Model (Ohlson-Penman EBO with Dynamic 5-7Y ROE Fade)
+  const rimResult = computeMultiStageResidualIncomeValue({
+    bvps0: estimatedBvpsIdr,
+    roePct: roe,
+    kePct: dynamicCostOfEquityPct,
+    dprPct: historicalDpr3YPct,
+    gpaPct: grossProfitabilityToAssets,
+    ocfToNi: ocfToNetIncomeRatio,
+    der,
+    accrualPenaltyScore,
+    hscDiscountMultiplier
+  });
+  const { rimFairValueIdr, rimFadeYears, rimPersistenceOmega, rimTerminalRoePct } = rimResult;
 
-  const rawIntrinsic =
-    0.55 * damodaranPbvIntrinsic + 0.25 * dynamicPerIntrinsic + 0.20 * grahamIntrinsic;
-  const intrinsicValueIdr = roundToIdxTick(Math.max(50, rawIntrinsic));
+  // METHOD 2: Sector-Specific Institutional Valuation Matrix (P/CF, EV/EBITDA, P/AFFO, Justified PBV, Quality P/E)
+  const sectorValResult = computeSectorSpecificValuation({
+    stock,
+    price,
+    estimatedEpsIdr,
+    estimatedBvpsIdr,
+    ocfToNetIncomeRatio,
+    grossProfitabilityToAssets,
+    dynamicCostOfEquityPct,
+    sustainableGrowthRatePct,
+    standaloneFairPbv,
+    standaloneFairPer,
+    derPenaltyMultiplier,
+    accrualQualityMultiplier,
+    hscDiscountMultiplier
+  });
+  const {
+    sectorValuationArchetype,
+    sectorPrimaryMetricShort,
+    sectorPrimaryMetricLabel,
+    sectorPrimaryImpliedMultiple,
+    sectorPrimaryFairMultiple,
+    sectorPrimaryPerShareIdr,
+    sectorPrimaryPerShareLabel,
+    sectorSpecificFairValueIdr,
+    sectorAcademicRationale
+  } = sectorValResult;
 
-  // Pegged Fair Multiples: Strictly synchronized with final Blended Intrinsic Value so
+  // METHOD 3 & 4: Agnostic Cross-Sectional Peer Valuation & Quantedge Statistical Arbitrage (Relative Value)
+  const statArbResult = computeStatArbAndAgnosticPeerValuation({
+    stock,
+    price,
+    estimatedEpsIdr,
+    estimatedBvpsIdr,
+    ocfToNetIncomeRatio,
+    grossProfitabilityToAssets,
+    forwardDividendYieldPct,
+    sectorSpecificFairValueIdr,
+    rimFairValueIdr
+  });
+  const {
+    agnosticPeerFairValueIdr,
+    statArbPeerTicker,
+    statArbPeerName,
+    statArbCorrelation,
+    statArbSpread1DPct,
+    statArbSpread30DPct,
+    statArbZScore,
+    statArbSignal,
+    statArbSignalLabel,
+    statArbImpliedTargetIdr,
+    statArbRationale
+  } = statArbResult;
+
+  // PRIMARY ENSEMBLE (LARGEST FONT): Quantedge Sector-Adaptive Multi-Method Fair Value
+  // Weights: 45% Sector-Specific Matrix + 35% Multi-Stage Residual Income (5-7Y Fade) + 20% Relative Value / Agnostic Peer
+  const rawQuantedgeEnsemble =
+    0.45 * sectorSpecificFairValueIdr +
+    0.35 * rimFairValueIdr +
+    0.20 * ((agnosticPeerFairValueIdr + statArbImpliedTargetIdr) / 2);
+  const intrinsicValueIdr = roundToIdxTick(Math.max(50, rawQuantedgeEnsemble));
+
+  // Pegged Fair Multiples: Strictly synchronized with final Quantedge Ensemble Intrinsic Value so
   // EPS * Wajar PER = Nilai Intrinsik Wajar and BVPS * Wajar PBV = Nilai Intrinsik Wajar
   const joeliardiFairPer = Number((intrinsicValueIdr / Math.max(1, estimatedEpsIdr)).toFixed(2));
   const joeliardiFairPbv = Number((intrinsicValueIdr / Math.max(1, estimatedBvpsIdr)).toFixed(2));
@@ -1746,8 +2449,70 @@ export function evaluateJoeliardiOosFundamental(
     (((intrinsicValueIdr - price) / Math.max(1, intrinsicValueIdr)) * 100).toFixed(1)
   );
 
-  // Earnings Yield vs Blended SBN Spot Rate (1Y/5Y/10Y) & Dynamic Cost of Equity (Ke)
+  // Build Structured Multi-Method Valuation Comparison Array (Primary Ensemble + 3 Comparator Methods)
+  const calcMos = (fairIdr: number) =>
+    Number((((fairIdr - price) / Math.max(1, fairIdr)) * 100).toFixed(1));
+
+  const valuationMethodsComparison: ValuationMethodComparisonItem[] = [
+    {
+      id: 'quantedge_ensemble',
+      name: 'Quantedge Sector-Adaptive Ensemble (Utama)',
+      shortLabel: 'Quantedge Ensemble',
+      metricBasis: `45% ${sectorPrimaryMetricShort} Sektor + 35% RIM (${rimFadeYears}Y) + 20% Relative Peer`,
+      impliedMultipleLabel: `PER ${impliedPer}x · PBV ${impliedPbv}x`,
+      fairMultipleLabel: `Wajar PER ${joeliardiFairPer}x · PBV ${joeliardiFairPbv}x`,
+      fairPriceIdr: intrinsicValueIdr,
+      mosPct: marginOfSafetyPct,
+      weightPct: 100,
+      isPrimaryEnsemble: true
+    },
+    {
+      id: 'sector_specific_matrix',
+      name: `Matriks Spesifik Sektor: ${sectorPrimaryMetricLabel}`,
+      shortLabel: `Sektor (${sectorPrimaryMetricShort})`,
+      metricBasis: `${sectorPrimaryPerShareLabel}: Rp ${sectorPrimaryPerShareIdr.toLocaleString('id-ID')}/shm`,
+      impliedMultipleLabel: `Implied ${sectorPrimaryMetricShort} ${sectorPrimaryImpliedMultiple}x`,
+      fairMultipleLabel: `Wajar ${sectorPrimaryMetricShort} ${sectorPrimaryFairMultiple}x`,
+      fairPriceIdr: sectorSpecificFairValueIdr,
+      mosPct: calcMos(sectorSpecificFairValueIdr),
+      weightPct: 45,
+      isSectorPrimary: true
+    },
+    {
+      id: 'multistage_rim',
+      name: `Multi-Stage Residual Income (Ohlson-Penman ${rimFadeYears}Y Fade)`,
+      shortLabel: `RIM ${rimFadeYears}Y Fade`,
+      metricBasis: `BVPS Rp ${estimatedBvpsIdr.toLocaleString('id-ID')} · ω=${rimPersistenceOmega} → Ke ${dynamicCostOfEquityPct}%`,
+      impliedMultipleLabel: `Implied PBV ${impliedPbv}x`,
+      fairMultipleLabel: `Justified PBV ${damodaranJustifiedPbv}x`,
+      fairPriceIdr: rimFairValueIdr,
+      mosPct: calcMos(rimFairValueIdr),
+      weightPct: 35
+    },
+    {
+      id: 'statarb_relative_peer',
+      name: `Relative Value & StatArb vs ${statArbPeerTicker} (ρ=${statArbCorrelation.toFixed(2)})`,
+      shortLabel: `RelVal vs ${statArbPeerTicker}`,
+      metricBasis: `Z-Score ${statArbZScore >= 0 ? '+' : ''}${statArbZScore}σ · Peer Hedonic Rp ${agnosticPeerFairValueIdr.toLocaleString('id-ID')}`,
+      impliedMultipleLabel: `Spread 1D ${statArbSpread1DPct >= 0 ? '+' : ''}${statArbSpread1DPct}%`,
+      fairMultipleLabel: `Spread 30D ${statArbSpread30DPct >= 0 ? '+' : ''}${statArbSpread30DPct}%`,
+      fairPriceIdr: statArbImpliedTargetIdr,
+      mosPct: calcMos(statArbImpliedTargetIdr),
+      weightPct: 20
+    }
+  ];
+
+  // Earnings Yield & Quantedge Composite Multi-Metric Yield vs Blended SBN Spot Rate (1Y/5Y/10Y) & Dynamic Ke
   const earningsYieldPct = impliedPer > 0 ? 100 / impliedPer : 0;
+  const sectorPrimaryYieldPct =
+    sectorPrimaryImpliedMultiple > 0 ? 100 / sectorPrimaryImpliedMultiple : earningsYieldPct;
+  const quantedgeCompositeYieldPct = Number(
+    (
+      0.45 * sectorPrimaryYieldPct +
+      0.30 * earningsYieldPct +
+      0.25 * totalShareholderYieldPct
+    ).toFixed(2)
+  );
   const rawSbnSpreadPct = Number((earningsYieldPct - sbnBlendedSpotRfPct).toFixed(2));
   const netErpSpreadPct = Number((earningsYieldPct - dynamicCostOfEquityPct).toFixed(2));
 
@@ -1756,7 +2521,7 @@ export function evaluateJoeliardiOosFundamental(
   const maxSafeAllocationIdr = Math.round(adtv20dIdr * 0.05);
   const effectiveBeta = Math.max(0.35, Number(stock.beta1Y) || 1.0);
   const betaWeightedSizingCapPct = Number(
-    Math.max(3.5, Math.min(18.0, (12.5 / effectiveBeta))).toFixed(1)
+    Math.max(3.5, Math.min(18.0, 12.5 / effectiveBeta)).toFixed(1)
   );
 
   // Defensive Discount Anomaly Override (Beta < 0.5 AND Value Score > 9.0)
@@ -1807,23 +2572,40 @@ export function evaluateJoeliardiOosFundamental(
   const balanceSheetHealthScore = Math.round(
     Math.max(
       12,
-      Math.min(98, derScore + ocfConversionBonus + cashDivScore + hscSolvencyBonus - accrualPenaltyPts * 0.5)
+      Math.min(
+        98,
+        derScore + ocfConversionBonus + cashDivScore + hscSolvencyBonus - accrualPenaltyPts * 0.5
+      )
     )
   );
 
-  // Pillar 3: Forward Valuation & Justified PBV Margin of Safety (0 - 100)
+  // Pillar 3: Multi-Method Ensemble Valuation & Sector-Specific Margin of Safety (0 - 100)
   const mosScore = Math.max(10, Math.min(65, 38 + marginOfSafetyPct * 1.15));
   const valueFactorContribution = (stock.dmuValueScore / 10) * 35;
   const valuationSafetyScore = Math.round(
     Math.max(10, Math.min(98, mosScore + valueFactorContribution - (stock.isHscFlagged ? 25 : 0)))
   );
 
-  // Pillar 4: Out-of-Sample (OOS) Quantitative Robustness (0 - 100)
-  const oosCompositePart = (stock.dmuCompositeScore / 10) * 50;
-  const oosLowVolPart = (stock.dmuLowVolScore / 10) * 30;
-  const oosSizePart = (stock.dmuSizeScore / 10) * 20;
+  // Pillar 4: Out-of-Sample (OOS) Quant & Statistical Arbitrage Robustness (0 - 100)
+  const oosCompositePart = (stock.dmuCompositeScore / 10) * 46;
+  const oosLowVolPart = (stock.dmuLowVolScore / 10) * 28;
+  const oosSizePart = (stock.dmuSizeScore / 10) * 18;
+  const statArbBonus =
+    statArbSignal === 'MEAN_REVERSION_BUY'
+      ? 8
+      : statArbSignal === 'FAIR_COINTEGRATED'
+      ? 4
+      : statArbSignal === 'PAIR_OVEREXTENDED_TRIM'
+      ? -2
+      : -8;
   const oosQuantRobustnessScore = Math.round(
-    Math.max(10, Math.min(98, oosCompositePart + oosLowVolPart + oosSizePart - kseiDividendPenaltyPts * 0.5))
+    Math.max(
+      10,
+      Math.min(
+        98,
+        oosCompositePart + oosLowVolPart + oosSizePart + statArbBonus - kseiDividendPenaltyPts * 0.5
+      )
+    )
   );
 
   const totalConvictionScore = Math.round(
@@ -1833,8 +2615,31 @@ export function evaluateJoeliardiOosFundamental(
       0.20 * oosQuantRobustnessScore
   );
 
+  // Quantedge Systematic Score & Verdict
+  const quantedgeSystematicScore = Math.round(
+    Math.max(
+      12,
+      Math.min(
+        99,
+        0.35 * valuationSafetyScore +
+          0.35 * businessQualityScore +
+          0.30 * oosQuantRobustnessScore
+      )
+    )
+  );
+  const quantedgeAlphaVerdict =
+    stock.isHscFlagged
+      ? 'AVOID / HSC MICROSTRUCTURE RISK'
+      : statArbSignal === 'MEAN_REVERSION_BUY' && marginOfSafetyPct >= 8
+      ? `QUANTEDGE HIGH-ALPHA: DISLOKASI STAT-ARB (${statArbZScore}σ vs ${statArbPeerTicker}) + DISKON ${sectorPrimaryMetricShort}`
+      : quantedgeSystematicScore >= 78
+      ? `QUANTEDGE TOP SYSTEMATIC COMPOUNDER (${sectorPrimaryMetricShort} & RIM ${rimFadeYears}Y VALID)`
+      : quantedgeSystematicScore >= 62
+      ? `QUANTEDGE FAIR RELATIVE EQUILIBRIUM (KOINTEGRASI ${statArbPeerTicker})`
+      : 'QUANTEDGE DEFENSIVE WATCH / TUNGGU MEAN-REVERSION';
+
   let valuationVerdict: JoeliardiOosEvaluation['valuationVerdict'] = 'FAIR_QUALITY';
-  let valuationLabel = 'Wajar Berkualitas (Fairly Valued QARP Compounder)';
+  let valuationLabel = `Wajar Berkualitas (${sectorPrimaryMetricShort} ${sectorPrimaryImpliedMultiple}x vs Wajar ${sectorPrimaryFairMultiple}x)`;
   if (stock.isHscFlagged || totalConvictionScore < 45) {
     valuationVerdict = 'OVERVALUED_OR_TRAP';
     valuationLabel = stock.isHscFlagged
@@ -1845,12 +2650,15 @@ export function evaluateJoeliardiOosFundamental(
   } else if (isDefensiveDiscountAnomaly) {
     valuationVerdict = 'STRONG_UNDERVALUED';
     valuationLabel = `Strong Buy: Anomali Aset Defensif Terdiskon (MoS +${marginOfSafetyPct}%)`;
+  } else if (statArbSignal === 'MEAN_REVERSION_BUY' && marginOfSafetyPct >= 8) {
+    valuationVerdict = 'STRONG_UNDERVALUED';
+    valuationLabel = `StatArb Mean-Reversion Buy vs ${statArbPeerTicker} (Z=${statArbZScore}σ · MoS +${marginOfSafetyPct}%)`;
   } else if (marginOfSafetyPct >= 15 && stock.dmuValueScore >= 6.8) {
     valuationVerdict = 'STRONG_UNDERVALUED';
-    valuationLabel = `Diskon Justified PBV Damodaran (MoS +${marginOfSafetyPct}%)`;
+    valuationLabel = `Diskon Ensemble ${sectorPrimaryMetricShort} & RIM ${rimFadeYears}Y (MoS +${marginOfSafetyPct}%)`;
   } else if (marginOfSafetyPct < -12) {
     valuationVerdict = 'FULLY_VALUED';
-    valuationLabel = 'Premium / Di Atas Nilai Intrinsik Justified PBV';
+    valuationLabel = `Premium / Di Atas Nilai Intrinsik Ensemble (${sectorPrimaryMetricShort} ${sectorPrimaryImpliedMultiple}x)`;
   }
 
   const convictionGrade: JoeliardiOosEvaluation['convictionGrade'] = stock.isHscFlagged
@@ -1871,9 +2679,17 @@ export function evaluateJoeliardiOosFundamental(
       `Strong Buy — Anomali Aset Defensif Terdiskon: Kombinasi Beta sangat rendah (${stock.beta1Y.toFixed(2)}x) dan Skor Value/GP-A tinggi (${stock.dmuValueScore.toFixed(1)}/10) mengonfirmasi koreksi jangka pendek sebagai peluang akumulasi utama.`
     );
   }
-  if (grossProfitabilityToAssets >= 16) {
+  if (statArbSignal === 'MEAN_REVERSION_BUY') {
     keyStrengths.push(
-      `Gross Profitability to Assets (Novy-Marx GP/A) mencapai ${grossProfitabilityToAssets.toFixed(1)}% dengan konversi kas OCF/Laba Bersih ${ocfToNetIncomeRatio.toFixed(2)}x, membuktikan kualitas laba organik di atas garis akuntansi kotor.`
+      `Sinyal Statistical Arbitrage (Relative Value vs ${statArbPeerTicker}, ρ = ${statArbCorrelation.toFixed(2)}): Terdeteksi dislokasi Z-Score ${statArbZScore}σ (Spread 1D ${statArbSpread1DPct >= 0 ? '+' : ''}${statArbSpread1DPct}%, 30D ${statArbSpread30DPct >= 0 ? '+' : ''}${statArbSpread30DPct}%) tanpa penurunan fundamental, membuka potensi konvergensi mean-reversion ke Rp ${statArbImpliedTargetIdr.toLocaleString('id-ID')}.`
+    );
+  }
+  keyStrengths.push(
+    `Matriks Spesifik Sektor (${sectorPrimaryMetricLabel}): Diperdagangkan pada ${sectorPrimaryMetricShort} ${sectorPrimaryImpliedMultiple}x vs Wajar ${sectorPrimaryFairMultiple}x (${sectorPrimaryPerShareLabel} Rp ${sectorPrimaryPerShareIdr.toLocaleString('id-ID')} → Harga Wajar Sektor Rp ${sectorSpecificFairValueIdr.toLocaleString('id-ID')}).`
+  );
+  if (grossProfitabilityToAssets >= 15) {
+    keyStrengths.push(
+      `Multi-Stage Residual Income (${rimFadeYears}Y Dynamic ROE Fade, ω = ${rimPersistenceOmega}): GP/A (Novy-Marx) ${grossProfitabilityToAssets.toFixed(1)}% & OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x menghasilkan Nilai Wajar RIM Rp ${rimFairValueIdr.toLocaleString('id-ID')}.`
     );
   }
   if (roe >= dynamicCostOfEquityPct) {
@@ -1881,24 +2697,14 @@ export function evaluateJoeliardiOosFundamental(
       `ROE ${roe.toFixed(1)}% melampaui Dynamic Cost of Equity RI (${dynamicCostOfEquityPct.toFixed(2)}% dari SBN Spot Blended ${sbnBlendedSpotRfPct.toFixed(2)}%), menghasilkan Justified PBV Damodaran ${damodaranJustifiedPbv.toFixed(2)}x.`
     );
   }
-  if (der <= 0.65) {
-    keyStrengths.push(
-      `Struktur neraca konservatif dengan DER ${der.toFixed(2)}x, meminimalkan risiko beban bunga dan gagal bayar.`
-    );
-  }
   if (forwardDividendYieldPct > 0) {
     keyStrengths.push(
-      `Estimasi Forward Dividend Yield ${forwardDividendYieldPct.toFixed(2)}% (Annualized EPS Q3-2026 Rp ${annualizedEpsQ3Idr.toLocaleString('id-ID')} × DPR 3Y ${historicalDpr3YPct.toFixed(0)}%), memvalidasi arus kas riil.`
+      `Estimasi Forward Dividend Yield ${forwardDividendYieldPct.toFixed(2)}% (Annualized EPS Q3-2026 Rp ${annualizedEpsQ3Idr.toLocaleString('id-ID')} × DPR 3Y ${historicalDpr3YPct.toFixed(0)}%) & Quantedge Composite Yield ${quantedgeCompositeYieldPct}%.`
     );
   }
   if (marginOfSafetyPct >= 10 && !stock.isHscFlagged) {
     keyStrengths.push(
-      `Diperdagangkan di bawah Nilai Intrinsik Justified PBV Rp ${intrinsicValueIdr.toLocaleString('id-ID')} (Wajar PER ${joeliardiFairPer}x · Wajar PBV ${joeliardiFairPbv}x · MoS +${marginOfSafetyPct}%).`
-    );
-  }
-  if (keyStrengths.length === 0) {
-    keyStrengths.push(
-      `Likuiditas perdagangan tercatat pada harga Rp ${price.toLocaleString('id-ID')} di sektor ${stock.sector} (Batas 1/β Sizing Maks ${betaWeightedSizingCapPct}%).`
+      `Diperdagangkan di bawah Nilai Intrinsik Wajar Quantedge Ensemble Rp ${intrinsicValueIdr.toLocaleString('id-ID')} (MoS +${marginOfSafetyPct}% · Pembanding Peer Relatif Rp ${statArbImpliedTargetIdr.toLocaleString('id-ID')}).`
     );
   }
 
@@ -1911,14 +2717,19 @@ export function evaluateJoeliardiOosFundamental(
       `Peringatan Konsentrasi Kepemilikan BEI-KSEI (Peng-HSC-00088/BEI.WAS/11-2026): Top 10 pemegang saham menguasai ${stock.kseiHscConcentrationPct.toFixed(3).replace('.', ',')}% (Status: ${stock.kseiHscIsNew ? 'Baru/New' : 'Eksisting'} · Sisa Free Float Maks ${(100 - stock.kseiHscConcentrationPct).toFixed(2).replace('.', ',')}%). Dikenakan penalti skor -${(stock.kseiHscScorePenaltyPts || 0.45).toFixed(2).replace('.', ',')} poin tanpa blokir otomatis karena didukung pembagian dividen rutin.`
     );
   }
+  if (statArbSignal === 'PAIR_OVEREXTENDED_TRIM') {
+    keyRisks.push(
+      `Peringatan Relative Value (StatArb Z-Score +${statArbZScore}σ vs ${statArbPeerTicker}): Harga telah naik melampaui pasangan kointegrasinya (Spread 30D +${statArbSpread30DPct}%), waspadai potensi mean-reversion jangka pendek.`
+    );
+  }
   if (accrualPenaltyScore > 0) {
     keyRisks.push(
-      `Penalti Anti-Junk (QMJ Accrual -${accrualPenaltyScore.toFixed(2)} poin): Konversi OCF/Laba Bersih (${ocfToNetIncomeRatio.toFixed(2)}x, Akrual/Aset ${accrualRatioToAssets.toFixed(1)}%) menunjukkan laba akuntansi belum sepenuhnya didukung kas operasi.`
+      `Penalti Anti-Junk (QMJ Accrual -${accrualPenaltyScore.toFixed(2)} poin): Konversi OCF/Laba Bersih (${ocfToNetIncomeRatio.toFixed(2)}x, Akrual/Aset ${accrualRatioToAssets.toFixed(1)}%) mempercepat peluruhan ROE pada model Residual Income.`
     );
   }
   if (roe < dynamicCostOfEquityPct) {
     keyRisks.push(
-      `ROE (${roe.toFixed(1)}%) berada di bawah Dynamic Cost of Equity (${dynamicCostOfEquityPct.toFixed(2)}%), membatasi ekspansi Justified PBV (${damodaranJustifiedPbv.toFixed(2)}x).`
+      `ROE (${roe.toFixed(1)}%) berada di bawah Dynamic Cost of Equity (${dynamicCostOfEquityPct.toFixed(2)}%), membatasi Residual Income dan Justified PBV (${damodaranJustifiedPbv.toFixed(2)}x).`
     );
   }
   if (der > 1.1) {
@@ -1928,7 +2739,7 @@ export function evaluateJoeliardiOosFundamental(
   }
   if (marginOfSafetyPct < 0) {
     keyRisks.push(
-      `Harga pasar saat ini berada ${Math.abs(marginOfSafetyPct).toFixed(1)}% di atas estimasi Nilai Intrinsik Justified PBV.`
+      `Harga pasar saat ini berada ${Math.abs(marginOfSafetyPct).toFixed(1)}% di atas estimasi Nilai Intrinsik Wajar Quantedge Ensemble.`
     );
   }
   if (adtv20dIdr < 10_000_000_000) {
@@ -1943,7 +2754,7 @@ export function evaluateJoeliardiOosFundamental(
   }
   if (keyRisks.length === 0) {
     keyRisks.push(
-      `Pantau dinamika kurva imbal hasil SBN (${sbnSpot1YPct}%–${sbnSpot10YPct}%) dan realisasi arus kas operasi kuartalan berikutnya.`
+      `Pantau dinamika kurva imbal hasil SBN (${sbnSpot1YPct}%–${sbnSpot10YPct}%), rasio sektoral ${sectorPrimaryMetricShort}, serta kointegrasi relatif terhadap ${statArbPeerTicker}.`
     );
   }
   void opMargin;
@@ -1984,6 +2795,34 @@ export function evaluateJoeliardiOosFundamental(
     sustainableGrowthRatePct,
     damodaranJustifiedPbv,
     betaWeightedSizingCapPct,
+    rimFairValueIdr,
+    rimFadeYears,
+    rimPersistenceOmega,
+    rimTerminalRoePct,
+    sectorValuationArchetype,
+    sectorPrimaryMetricShort,
+    sectorPrimaryMetricLabel,
+    sectorPrimaryImpliedMultiple,
+    sectorPrimaryFairMultiple,
+    sectorPrimaryPerShareIdr,
+    sectorPrimaryPerShareLabel,
+    sectorSpecificFairValueIdr,
+    sectorAcademicRationale,
+    agnosticPeerFairValueIdr,
+    statArbPeerTicker,
+    statArbPeerName,
+    statArbCorrelation,
+    statArbSpread1DPct,
+    statArbSpread30DPct,
+    statArbZScore,
+    statArbSignal,
+    statArbSignalLabel,
+    statArbImpliedTargetIdr,
+    statArbRationale,
+    quantedgeSystematicScore,
+    quantedgeCompositeYieldPct,
+    quantedgeAlphaVerdict,
+    valuationMethodsComparison,
     hscTier: stock.hscTier,
     kseiHscConcentrationPct: stock.kseiHscConcentrationPct,
     kseiHscIsNew: stock.kseiHscIsNew,

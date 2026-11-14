@@ -54,6 +54,10 @@ const METRIC_LABELS = [
   'Implied PER',
   'Wajar PER',
   'Fair PER',
+  'Quality P/E',
+  'P/AFFO',
+  'EV/EBITDA',
+  'P/CF',
   'PER',
   'Justified PBV',
   'PBV Wajar',
@@ -61,6 +65,9 @@ const METRIC_LABELS = [
   'Wajar PBV',
   'Fair PBV',
   'PBV',
+  'StatArb Z-Score',
+  'Z-Score',
+  'Korelasi',
   'Kepemilikan Top-10 KSEI',
   'Top-10 KSEI',
   'KSEI Top-10',
@@ -785,7 +792,8 @@ export function renderInspectorReportCanvas(
     (hasHscBanner ? 68 : 0) +
     102 +
     132 +
-    80 + // Row 3 Academic Strip (slightly taller for clean 2-line / fitted metrics)
+    80 + // Row 3 Academic Strip
+    84 + // Row 3B Multi-Method Fair Value & Quantedge Statistical Arbitrage Strip
     aiBoxH +
     18 +
     totalNewsSectionH +
@@ -989,11 +997,17 @@ export function renderInspectorReportCanvas(
       ]
     },
     {
-      label: 'NILAI INTRINSIK WAJAR',
+      label: 'NILAI INTRINSIK WAJAR (UTAMA)',
       labelColor: '#F59E0B',
       main: `Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)}`,
       mainColor: '#F9FAFB',
-      sub: `EPS ~Rp ${joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')} · BVPS ~Rp ${joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')}`,
+      sub: `${joeliardiEval.sectorPrimaryMetricShort ?? 'Sektor'}: Rp ${formatIdrPriceDisplay(
+        joeliardiEval.sectorSpecificFairValueIdr ?? joeliardiEval.intrinsicValueIdr
+      )} · RIM ${joeliardiEval.rimFadeYears ?? 6}Y: Rp ${formatIdrPriceDisplay(
+        joeliardiEval.rimFairValueIdr ?? joeliardiEval.intrinsicValueIdr
+      )} · RelVal: Rp ${formatIdrPriceDisplay(
+        joeliardiEval.statArbImpliedTargetIdr ?? joeliardiEval.intrinsicValueIdr
+      )}`,
       subColor: '#9CA3AF'
     },
     {
@@ -1010,11 +1024,13 @@ export function renderInspectorReportCanvas(
       subColor: '#D1D5DB'
     },
     {
-      label: 'JUSTIFIED PBV & PER (DAMODARAN)',
+      label: `MATRIKS SEKTOR (${joeliardiEval.sectorPrimaryMetricShort ?? 'PBV'}) & PBV`,
       labelColor: '#9CA3AF',
-      main: `PBV ${joeliardiEval.impliedPbv}x (Justified ${justPbv}x)`,
+      main: `${joeliardiEval.sectorPrimaryMetricShort ?? 'PBV'} ${
+        joeliardiEval.sectorPrimaryImpliedMultiple ?? joeliardiEval.impliedPbv
+      }x (Wajar ${joeliardiEval.sectorPrimaryFairMultiple ?? justPbv}x)`,
       mainColor: '#F9FAFB',
-      sub: `PER ${joeliardiEval.impliedPer}x (Wajar ${joeliardiEval.joeliardiFairPer}x · Ke ${dynKe.toFixed(2)}%)`,
+      sub: `PBV ${joeliardiEval.impliedPbv}x (Just. ${justPbv}x) · PER ${joeliardiEval.impliedPer}x · Ke ${dynKe.toFixed(2)}%`,
       subColor: '#38BDF8'
     }
   ];
@@ -1222,6 +1238,82 @@ export function renderInspectorReportCanvas(
   });
 
   curY += 80;
+
+  // 7B. Row 3B: Multi-Method Fair Value Comparison & Quantedge Statistical Arbitrage Strip
+  const secShortLabel = joeliardiEval.sectorPrimaryMetricShort ?? 'PBV';
+  const secFairIdr = joeliardiEval.sectorSpecificFairValueIdr ?? joeliardiEval.intrinsicValueIdr;
+  const rimFairIdr = joeliardiEval.rimFairValueIdr ?? joeliardiEval.intrinsicValueIdr;
+  const statArbFairIdr = joeliardiEval.statArbImpliedTargetIdr ?? joeliardiEval.intrinsicValueIdr;
+  const peerTkr = joeliardiEval.statArbPeerTicker ?? 'PEER';
+  const zScoreVal = joeliardiEval.statArbZScore ?? 0;
+  const rhoVal = joeliardiEval.statArbCorrelation ?? 0.85;
+
+  const multiMethodStrip = [
+    {
+      label: '★ HARGA WAJAR UTAMA (QUANTEDGE)',
+      main: `Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)}`,
+      sub: `Acuan Terakurat (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct.toFixed(1)}%)`,
+      color: '#FBBF24',
+      isPrimary: true
+    },
+    {
+      label: `PEMBANDING 1: MATRIKS SEKTOR (${secShortLabel})`,
+      main: `Rp ${formatIdrPriceDisplay(secFairIdr)}`,
+      sub: `${secShortLabel} ${joeliardiEval.sectorPrimaryImpliedMultiple ?? joeliardiEval.impliedPbv}x vs Wajar ${joeliardiEval.sectorPrimaryFairMultiple ?? justPbv}x`,
+      color: '#34D399',
+      isPrimary: false
+    },
+    {
+      label: `PEMBANDING 2: MULTI-STAGE RIM (${joeliardiEval.rimFadeYears ?? 6}Y)`,
+      main: `Rp ${formatIdrPriceDisplay(rimFairIdr)}`,
+      sub: `Ohlson-Penman ω=${(joeliardiEval.rimPersistenceOmega ?? 0.72).toFixed(2)} · BVPS Rp ${joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')}`,
+      color: '#38BDF8',
+      isPrimary: false
+    },
+    {
+      label: `PEMBANDING 3: RELATIVE VALUE (${stock.ticker}↔${peerTkr})`,
+      main: `Rp ${formatIdrPriceDisplay(statArbFairIdr)}`,
+      sub: `StatArb Z=${zScoreVal >= 0 ? '+' : ''}${zScoreVal.toFixed(2)}σ · ρ=${rhoVal.toFixed(2)} (${
+        joeliardiEval.statArbSignal === 'MEAN_REVERSION_BUY'
+          ? 'Long Spread'
+          : joeliardiEval.statArbSignal === 'PAIR_OVEREXTENDED_TRIM'
+          ? 'Short Spread'
+          : 'Neutral Pair'
+      })`,
+      color: zScoreVal <= -1.0 ? '#34D399' : zScoreVal >= 1.25 ? '#FB7185' : '#D1D5DB',
+      isPrimary: false
+    }
+  ];
+
+  multiMethodStrip.forEach((m, idx) => {
+    const x = 38 + idx * (cardW + cardGap);
+    drawRoundedRect(ctx, x, curY, cardW, 68, 4);
+    ctx.fillStyle = m.isPrimary ? '#172030' : '#11161F';
+    ctx.fill();
+    ctx.strokeStyle = m.isPrimary ? '#F59E0B' : '#243044';
+    ctx.stroke();
+
+    ctx.fillStyle = m.isPrimary ? '#F59E0B' : '#9CA3AF';
+    drawTextAutoFit(ctx, m.label, x + 12, curY + 18, innerCardMaxW, 700, 9.0, 7.5);
+
+    ctx.fillStyle = m.isPrimary ? '#F9FAFB' : m.color;
+    drawTextAutoFit(
+      ctx,
+      m.main,
+      x + 12,
+      curY + 41,
+      innerCardMaxW,
+      m.isPrimary ? 800 : 700,
+      m.isPrimary ? 16.5 : 13.0,
+      10.0,
+      '"Fira Code", monospace'
+    );
+
+    ctx.fillStyle = '#9CA3AF';
+    drawTextAutoFit(ctx, m.sub, x + 12, curY + 58, innerCardMaxW, 600, 9.5, 7.5, '"Fira Code", monospace');
+  });
+
+  curY += 84;
 
   // 8. Nostradamus Synthesis Box (Matches Web UI Layout)
   drawRoundedRect(ctx, 38, curY, LOGICAL_WIDTH - 76, aiBoxH, 5);

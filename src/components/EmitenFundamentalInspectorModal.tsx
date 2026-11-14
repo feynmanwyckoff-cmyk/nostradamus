@@ -165,6 +165,10 @@ function renderHighlightedFinancialNarrative(
     'Implied PER',
     'Wajar PER',
     'Fair PER',
+    'Quality P/E',
+    'P/AFFO',
+    'EV/EBITDA',
+    'P/CF',
     'PER',
     'Justified PBV',
     'PBV Wajar',
@@ -172,6 +176,9 @@ function renderHighlightedFinancialNarrative(
     'Wajar PBV',
     'Fair PBV',
     'PBV',
+    'StatArb Z-Score',
+    'Z-Score',
+    'Korelasi',
     'Kepemilikan Top-10 KSEI',
     'Top-10 KSEI',
     'KSEI Top-10',
@@ -332,10 +339,15 @@ export function EmitenFundamentalInspectorModal({
     const justPbv =
       joeliardiEval.damodaranJustifiedPbv ?? joeliardiEval.joeliardiFairPbv;
     const betaCap = joeliardiEval.betaWeightedSizingCapPct ?? 14.0;
+    const secShort = joeliardiEval.sectorPrimaryMetricShort ?? 'PBV';
+    const secMult = joeliardiEval.sectorPrimaryImpliedMultiple ?? joeliardiEval.impliedPbv;
+    const secFairMult = joeliardiEval.sectorPrimaryFairMultiple ?? justPbv;
+    const peerTkr = joeliardiEval.statArbPeerTicker ?? 'PEER';
+    const zScore = joeliardiEval.statArbZScore ?? 0;
     return [
       `01/04 · Membedah Profitabilitas Kas ${activeStock.ticker}: GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}% · OCF/NI (Anti-Junk) ${ocfNi.toFixed(2)}x · ROE ${activeStock.roe.toFixed(1)}%...`,
-      `02/04 · Menguji Kurva Spot SBN (1Y/5Y/10Y) → Dynamic Ke ${dynKe.toFixed(2)}% & Damodaran Justified PBV ${justPbv}x (Intrinsik Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)})...`,
-      `03/04 · Memverifikasi 4-Faktor Out-of-Sample DeMiguel (Skor ${activeStock.dmuCompositeScore.toFixed(2)}/10), Neraca DER ${activeStock.debtToEquity.toFixed(2)}x & saringan HSC...`,
+      `02/04 · Menghitung Multi-Metode Harga Wajar (${secShort} ${secMult}x vs Wajar ${secFairMult}x · RIM ${joeliardiEval.rimFadeYears ?? 6}Y · Ke ${dynKe.toFixed(2)}%) → Utama Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)}...`,
+      `03/04 · Menguji Relative Value / Statistical Arbitrage (${activeStock.ticker} vs ${peerTkr}, Z-Score ${zScore >= 0 ? '+' : ''}${zScore.toFixed(2)}σ) & saringan HSC...`,
       `04/04 · Menghitung porsi 1/β Barbell Position Sizing (Cap ≤${betaCap.toFixed(1)}%, β ${activeStock.beta1Y.toFixed(2)}x) & menyintesis katalis berita emiten...`
     ];
   }, [activeStock, joeliardiEval]);
@@ -974,20 +986,30 @@ export function EmitenFundamentalInspectorModal({
             <div className="p-3.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
               <div className="text-[10px] font-bold uppercase tracking-wider text-[#D97706] bb-amber">
                 <MetricTooltip
-                  label="NILAI INTRINSIK WAJAR"
-                  title="Estimasi Nilai Intrinsik Wajar (Fundamental Kualitas Moat)"
-                  laymanExplanation="Perkiraan harga wajar saham berdasarkan kemampuan perusahaan mencetak laba bersih per saham (EPS), nilai buku ekuitas (BVPS), dan keunggulan ROE dibanding biaya modal (10,5%)."
-                  practicalGuide="Jika Nilai Intrinsik Wajar lebih tinggi dari Harga Pasar Live, berarti saham sedang diperdagangkan di bawah nilai fundamentalnya."
+                  label="NILAI INTRINSIK WAJAR (UTAMA)"
+                  title="Harga Wajar Utama: Quantedge Sector-Adaptive Ensemble + Pembanding Multi-Metode"
+                  laymanExplanation="Angka terbesar adalah Nilai Intrinsik Wajar paling akurat (Quantedge Ensemble yang memadukan Matriks Spesifik Sektor, Multi-Stage Residual Income Model 5-7Y, dan Relative Value Peer). Di bawahnya tertera nilai wajar dari masing-masing metode sebagai pembanding."
+                  practicalGuide="Gunakan angka utama berhuruf terbesar sebagai patokan harga wajar utama, dan cek 3 metode pembanding di bawahnya untuk melihat rentang konvergensi."
                   className="text-[#D97706] bb-amber"
                 />
               </div>
               <div className="text-lg font-bold font-mono text-[#111315] mt-1">
                 Rp {formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)}
               </div>
-              <span className="text-[11px] text-neutral-500 font-mono">
-                EPS ~Rp {joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')} · BVPS ~Rp{' '}
-                {joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')}
-              </span>
+              <div className="text-[10px] text-neutral-600 font-mono leading-tight mt-0.5">
+                {joeliardiEval.sectorPrimaryMetricShort ?? 'Sektor'}: Rp{' '}
+                {formatIdrPriceDisplay(
+                  joeliardiEval.sectorSpecificFairValueIdr ?? joeliardiEval.intrinsicValueIdr
+                )}{' '}
+                · RIM {joeliardiEval.rimFadeYears ?? 6}Y: Rp{' '}
+                {formatIdrPriceDisplay(
+                  joeliardiEval.rimFairValueIdr ?? joeliardiEval.intrinsicValueIdr
+                )}{' '}
+                · RelVal: Rp{' '}
+                {formatIdrPriceDisplay(
+                  joeliardiEval.statArbImpliedTargetIdr ?? joeliardiEval.intrinsicValueIdr
+                )}
+              </div>
             </div>
 
             <div className="p-3.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
@@ -1019,24 +1041,24 @@ export function EmitenFundamentalInspectorModal({
             <div className="p-3.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
               <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
                 <MetricTooltip
-                  label="JUSTIFIED PBV & PER (DAMODARAN)"
-                  title="Valuasi Berbasis Masa Depan: Damodaran Justified PBV = (ROE − g) ÷ (Ke − g)"
-                  laymanExplanation="Mengukur kelayakan harga saham terhadap nilai buku berdasarkan kapasitas perusahaan mencetak ROE di atas Dynamic Cost of Equity (Ke) dari kurva Spot SBN 1Y/5Y/10Y."
-                  practicalGuide="Jika Implied PBV pasar lebih rendah dari Justified PBV Damodaran, berarti pasar belum menghargai penuh mesin pertumbuhan nilai intrinsik emiten ini."
+                  label={`MATRIKS SEKTOR (${joeliardiEval.sectorPrimaryMetricShort ?? 'PBV'}) & PBV`}
+                  title={`Matriks Spesifik Sektor (${joeliardiEval.sectorPrimaryMetricLabel ?? 'Justified PBV'}) & Damodaran PBV`}
+                  laymanExplanation="Riset analis finansial membuktikan tidak ada satu rasio untuk semua sektor: Energi/Komoditas memakai P/CF (Arus Kas), Telekomunikasi/Menara memakai EV/EBITDA, Properti memakai P/AFFO, dan Perbankan memakai Justified PBV."
+                  practicalGuide="Bandingkan rasio sektor aktual terhadap kelipatan wajarnya serta Implied PBV terhadap Justified PBV Damodaran."
                   align="right"
                 />
               </div>
               <div className="text-sm font-bold font-mono text-[#111315] mt-1">
-                PBV {joeliardiEval.impliedPbv}x{' '}
+                {joeliardiEval.sectorPrimaryMetricShort ?? 'PBV'}{' '}
+                {joeliardiEval.sectorPrimaryImpliedMultiple ?? joeliardiEval.impliedPbv}x{' '}
                 <span className="text-xs font-normal text-[#0D5C46]">
-                  (Justified {joeliardiEval.damodaranJustifiedPbv ?? joeliardiEval.joeliardiFairPbv}x)
+                  (Wajar {joeliardiEval.sectorPrimaryFairMultiple ?? joeliardiEval.damodaranJustifiedPbv}x)
                 </span>
               </div>
-              <span className="text-xs font-bold font-mono text-[#0284C7] bb-cyan block mt-0.5">
-                PER {joeliardiEval.impliedPer}x{' '}
-                <span className="text-[11px] font-normal text-neutral-500">
-                  (Wajar {joeliardiEval.joeliardiFairPer}x · Ke {(joeliardiEval.dynamicCostOfEquityPct ?? 12.75).toFixed(2)}%)
-                </span>
+              <span className="text-[11px] font-bold font-mono text-[#0284C7] bb-cyan block mt-0.5">
+                PBV {joeliardiEval.impliedPbv}x (Just.{' '}
+                {joeliardiEval.damodaranJustifiedPbv ?? joeliardiEval.joeliardiFairPbv}x) · PER{' '}
+                {joeliardiEval.impliedPer}x
               </span>
             </div>
           </div>
@@ -1207,6 +1229,184 @@ export function EmitenFundamentalInspectorModal({
                   <strong className="text-[#0284C7]">
                     ≤{(joeliardiEval.betaWeightedSizingCapPct ?? 14).toFixed(1)}%
                   </strong>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Multi-Method Fair Value Comparison & Quantedge Statistical Arbitrage (Relative Value) */}
+          <div className="p-4 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs space-y-3.5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E4E2DD] pb-2.5">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-[#0D5C46] block">
+                  QUANTEDGE MULTI-MODEL VALUATION &amp; STATISTICAL ARBITRAGE (RELATIVE VALUE)
+                </span>
+                <h4 className="text-xs sm:text-sm font-bold text-[#111315]">
+                  Komparasi Multi-Metode Harga Wajar (Matriks Spesifik Sektor · RIM 5–7Y · Relative Value Peer)
+                </h4>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 text-[10px] font-mono font-bold rounded-xs bg-[#FFFFFF] border border-[#E4E2DD] text-[#111315]">
+                  Matriks Utama Sektor: {joeliardiEval.sectorPrimaryMetricLabel ?? 'Justified PBV'}
+                </span>
+              </div>
+            </div>
+
+            {/* 4 Valuation Methods Grid: Primary Method in Largest Font, 3 Others as Comparators */}
+            {joeliardiEval.valuationMethodsComparison &&
+              joeliardiEval.valuationMethodsComparison.length > 0 && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                  {joeliardiEval.valuationMethodsComparison.map((m) => {
+                    const isPrimary = Boolean(m.isPrimaryEnsemble);
+                    return (
+                      <div
+                        key={m.id}
+                        className={`p-3 rounded-xs border transition-colors ${
+                          isPrimary
+                            ? 'bg-[#FFFFFF] border-[#D97706] shadow-2xs'
+                            : 'bg-[#FFFFFF]/80 border-[#E4E2DD]'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1.5">
+                          <span
+                            className={`text-[10px] font-bold uppercase tracking-wider ${
+                              isPrimary ? 'text-[#D97706] bb-amber' : 'text-neutral-500'
+                            }`}
+                          >
+                            {isPrimary ? '★ ACUAN UTAMA (TERAKURAT)' : 'PEMBANDING MODEL'}
+                          </span>
+                          <span className="text-[10px] font-mono font-semibold text-neutral-500">
+                            Bobot {(m.weightPct ?? 0).toFixed(0)}%
+                          </span>
+                        </div>
+                        <div className="text-[11px] font-bold text-[#111315] mt-0.5 truncate">
+                          {m.name}
+                        </div>
+                        <div className="flex items-baseline justify-between gap-2 mt-1.5">
+                          <div
+                            className={
+                              isPrimary
+                                ? 'text-lg sm:text-xl font-extrabold font-mono text-[#111315]'
+                                : 'text-sm font-bold font-mono text-neutral-700'
+                            }
+                          >
+                            Rp {formatIdrPriceDisplay(m.fairPriceIdr)}
+                          </div>
+                          <span
+                            className={`text-[10.5px] font-mono font-bold ${
+                              m.mosPct >= 10
+                                ? 'text-[#0D5C46]'
+                                : m.mosPct >= 0
+                                ? 'text-[#D97706]'
+                                : 'text-[#9E2A2B]'
+                            }`}
+                          >
+                            {m.mosPct >= 0 ? '+' : ''}
+                            {m.mosPct.toFixed(1)}%
+                          </span>
+                        </div>
+                        <div className="text-[10px] font-mono text-neutral-600 mt-1 leading-snug">
+                          {m.metricBasis}
+                        </div>
+                        <div className="text-[10px] text-neutral-500 mt-0.5 leading-snug">
+                          Aktual: {m.impliedMultipleLabel} · Wajar: {m.fairMultipleLabel}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+            {/* Quantedge Statistical Arbitrage (Relative Value vs Twin Peer) & Sector Rationale Strip */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 pt-1">
+              <div className="lg:col-span-7 p-3 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#0284C7] bb-cyan">
+                    STATISTICAL ARBITRAGE &amp; RELATIVE VALUE ({activeStock.ticker} ↔{' '}
+                    {joeliardiEval.statArbPeerTicker ?? 'PEER'})
+                  </span>
+                  <span
+                    className={`px-2 py-0.5 text-[10px] font-mono font-bold rounded-xs border ${
+                      joeliardiEval.statArbSignal === 'MEAN_REVERSION_BUY'
+                        ? 'bg-[#0D5C46]/10 text-[#0D5C46] border-[#0D5C46]/30'
+                        : joeliardiEval.statArbSignal === 'PAIR_OVEREXTENDED_TRIM'
+                        ? 'bg-[#9E2A2B]/10 text-[#9E2A2B] border-[#9E2A2B]/30'
+                        : 'bg-neutral-100 text-neutral-700 border-neutral-300'
+                    }`}
+                  >
+                    {joeliardiEval.statArbSignalLabel ||
+                      (joeliardiEval.statArbSignal === 'MEAN_REVERSION_BUY'
+                        ? 'LONG SPREAD (MEAN-REVERSION BUY)'
+                        : joeliardiEval.statArbSignal === 'PAIR_OVEREXTENDED_TRIM'
+                        ? 'SHORT SPREAD (OVEREXTENDED VS PEER)'
+                        : 'NEUTRAL PAIR EQUILIBRIUM')}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-mono bg-[#FAF9F6] p-2 rounded-xs border border-[#E4E2DD]/80 mb-2">
+                  <div>
+                    <span className="text-neutral-500 block text-[9.5px]">PEER TWIN</span>
+                    <strong className="text-[#111315]">
+                      {joeliardiEval.statArbPeerTicker} ({joeliardiEval.statArbPeerName})
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="text-neutral-500 block text-[9.5px]">KORELASI HIST (ρ)</span>
+                    <strong className="text-[#0D5C46]">
+                      {(joeliardiEval.statArbCorrelation ?? 0.85).toFixed(2)}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="text-neutral-500 block text-[9.5px]">Z-SCORE SPREAD</span>
+                    <strong
+                      className={
+                        (joeliardiEval.statArbZScore ?? 0) <= -1.0
+                          ? 'text-[#0D5C46]'
+                          : (joeliardiEval.statArbZScore ?? 0) >= 1.25
+                          ? 'text-[#9E2A2B]'
+                          : 'text-[#111315]'
+                      }
+                    >
+                      {(joeliardiEval.statArbZScore ?? 0) >= 0 ? '+' : ''}
+                      {(joeliardiEval.statArbZScore ?? 0).toFixed(2)}σ (1D{' '}
+                      {(joeliardiEval.statArbSpread1DPct ?? 0) >= 0 ? '+' : ''}
+                      {(joeliardiEval.statArbSpread1DPct ?? 0).toFixed(2)}%)
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="text-neutral-500 block text-[9.5px]">TARGET KONVERGENSI</span>
+                    <strong className="text-[#0284C7]">
+                      Rp{' '}
+                      {formatIdrPriceDisplay(
+                        joeliardiEval.statArbImpliedTargetIdr ?? joeliardiEval.intrinsicValueIdr
+                      )}
+                    </strong>
+                  </div>
+                </div>
+                <p className="text-[11px] text-neutral-700 leading-relaxed">
+                  {joeliardiEval.statArbRationale}
+                </p>
+              </div>
+
+              <div className="lg:col-span-5 p-3 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs flex flex-col justify-between">
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#D97706] bb-amber block mb-1">
+                    RASIONALISASI MATRIKS SEKTOR &amp; MULTI-STAGE RIM ({joeliardiEval.rimFadeYears ?? 6}Y FADE)
+                  </span>
+                  <p className="text-[11px] text-neutral-700 leading-relaxed">
+                    {joeliardiEval.sectorAcademicRationale}
+                  </p>
+                </div>
+                <div className="mt-2 pt-2 border-t border-[#E4E2DD] flex flex-wrap items-center justify-between gap-2 text-[10.5px] font-mono text-neutral-600">
+                  <span>
+                    Anchor BVPS: <strong>Rp {joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')}</strong> · EPS:{' '}
+                    <strong>Rp {joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')}</strong>
+                  </span>
+                  <span>
+                    RIM ω={(joeliardiEval.rimPersistenceOmega ?? 0.72).toFixed(2)} ({joeliardiEval.rimFadeYears ?? 6}Thn):{' '}
+                    <strong className="text-[#0D5C46]">
+                      Rp {formatIdrPriceDisplay(joeliardiEval.rimFairValueIdr ?? joeliardiEval.intrinsicValueIdr)}
+                    </strong>
+                  </span>
                 </div>
               </div>
             </div>

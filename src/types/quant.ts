@@ -121,6 +121,33 @@ export interface SyncTelemetryReport {
   status: 'FULL_LIVE' | 'PARTIAL_LIVE' | 'FALLBACK_ONLY';
 }
 
+export type SectorValuationArchetype =
+  | 'ENERGY_MATERIALS_PCF'
+  | 'TELCO_INFRA_EVEBITDA'
+  | 'PROPERTY_REIT_PAFFO'
+  | 'FINANCIALS_JUSTIFIED_PBV'
+  | 'CONSUMER_HEALTH_QUALITY_PE';
+
+export type StatArbSignalType =
+  | 'MEAN_REVERSION_BUY'
+  | 'PAIR_OVEREXTENDED_TRIM'
+  | 'FAIR_COINTEGRATED'
+  | 'FUNDAMENTAL_DIVERGENCE';
+
+export interface ValuationMethodComparisonItem {
+  id: string;
+  name: string;
+  shortLabel: string;
+  metricBasis: string;
+  impliedMultipleLabel: string;
+  fairMultipleLabel: string;
+  fairPriceIdr: number;
+  mosPct: number;
+  weightPct: number;
+  isPrimaryEnsemble?: boolean;
+  isSectorPrimary?: boolean;
+}
+
 export interface JoeliardiOosEvaluation {
   ticker: string;
   name: string;
@@ -159,6 +186,39 @@ export interface JoeliardiOosEvaluation {
   sustainableGrowthRatePct?: number;
   damodaranJustifiedPbv?: number;
   betaWeightedSizingCapPct?: number;
+  // Multi-Stage Residual Income Model (Ohlson-Penman EBO 5-7Y Dynamic ROE Fade)
+  rimFairValueIdr?: number;
+  rimFadeYears?: number;
+  rimPersistenceOmega?: number;
+  rimTerminalRoePct?: number;
+  // Sector-Specific Institutional Valuation Matrix (P/CF, EV/EBITDA, P/AFFO, Justified PBV, Quality P/E)
+  sectorValuationArchetype?: SectorValuationArchetype;
+  sectorPrimaryMetricShort?: string;       // e.g. 'P/CF', 'EV/EBITDA', 'P/AFFO', 'Justified PBV', 'Quality P/E'
+  sectorPrimaryMetricLabel?: string;       // e.g. 'Price-to-Cash Flow (P/CF)'
+  sectorPrimaryImpliedMultiple?: number;   // e.g. 5.8 (x)
+  sectorPrimaryFairMultiple?: number;      // e.g. 7.6 (x)
+  sectorPrimaryPerShareIdr?: number;       // e.g. OCF/sh, EBITDA/sh, AFFO/sh, BVPS, or Cash EPS (IDR)
+  sectorPrimaryPerShareLabel?: string;     // e.g. 'OCF/Saham', 'EBITDA/Saham', 'AFFO/Saham'
+  sectorSpecificFairValueIdr?: number;
+  sectorAcademicRationale?: string;
+  // Agnostic Fundamental Cross-Sectional Peer Regression (Bartram & Grinblatt 2018 JFE)
+  agnosticPeerFairValueIdr?: number;
+  // Quantedge Statistical Arbitrage (Relative Value Pair Mean-Reversion)
+  statArbPeerTicker?: string;
+  statArbPeerName?: string;
+  statArbCorrelation?: number;
+  statArbSpread1DPct?: number;
+  statArbSpread30DPct?: number;
+  statArbZScore?: number;
+  statArbSignal?: StatArbSignalType;
+  statArbSignalLabel?: string;
+  statArbImpliedTargetIdr?: number;
+  statArbRationale?: string;
+  // Quantedge Systematic Multi-Metric Composite Engine
+  quantedgeSystematicScore?: number;
+  quantedgeCompositeYieldPct?: number;
+  quantedgeAlphaVerdict?: string;
+  valuationMethodsComparison?: ValuationMethodComparisonItem[];
   // KSEI HSC & Early Warning Suspect Telemetry
   hscTier?: 'HARD_BLOCK' | 'KSEI_DIVIDEND_PENALTY' | 'EARLY_WARNING_SUSPECT' | 'CLEAN';
   kseiHscConcentrationPct?: number;
@@ -173,8 +233,8 @@ export interface JoeliardiOosEvaluation {
   valuationLabel: string;
   businessQualityScore: number;   // 0 - 100 (Pillar 1: GP/A, ROE vs Dynamic Ke, Anti-Junk Accruals)
   balanceSheetHealthScore: number; // 0 - 100 (Pillar 2: DER, OCF Conversion, Dividend Reality)
-  valuationSafetyScore: number;   // 0 - 100 (Pillar 3: Justified PBV MoS, Earnings Yield vs SBN Spot + ERP)
-  oosQuantRobustnessScore: number; // 0 - 100 (Pillar 4: Out-of-Sample Cross-Sectional Factor & 1/Beta Stability)
+  valuationSafetyScore: number;   // 0 - 100 (Pillar 3: Multi-Method Ensemble MoS, Sector Matrix & SBN Spot Ke)
+  oosQuantRobustnessScore: number; // 0 - 100 (Pillar 4: Quantedge StatArb, OOS Cross-Sectional Factor & 1/Beta)
   totalConvictionScore: number;   // 0 - 100
   convictionGrade: 'A+ (CORE CONVICTION)' | 'A (SOLID VALUE)' | 'B (WATCHLIST / HOLD)' | 'C (SPECULATIVE)' | 'D (AVOID / HSC)';
   keyStrengths: string[];

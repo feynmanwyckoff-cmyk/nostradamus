@@ -999,12 +999,14 @@ DATA FUNDAMENTAL & KUANTITATIF LIVE EMITEN:
   * Net Buyback & Debt Paydown Yield: ${fwdDiv.buybackYield.toFixed(2)}%
   * Total Shareholder Yield Murni: ${fwdDiv.totalShYield.toFixed(2)}% (Forward Dividend Yield + Net Buyback & Debt Paydown Yield)
 - Pilar 2 — Kesehatan Neraca & Likuiditas (ADTV 20D): DER ${stock.debtToEquity}x | Beta 1Y: ${stock.beta1Y}x | Volatilitas Tahunan: ${stock.volatilityAnn}% | ADTV 20 Hari: Rp ${adtvMillions} Juta/hari | Batas Maksimal Alokasi 5% ADTV: Rp ${maxSafeMillions} Juta/hari
-- Pilar 3 — Kurva Spot SBN (Fabozzi 2012), Dynamic Cost of Equity (Ke) & Damodaran Justified PBV:
+- Pilar 3 — Multi-Metode Harga Wajar (Matriks Spesifik Sektor, Multi-Stage RIM 5-7Y & Relative Value Statistical Arbitrage):
   * Kurva Spot SBN: SBN 1Y ${sbn1YVal}% · SBN 5Y ${sbn5YVal}% · SBN 10Y ${sbn10YVal}% -> Spot SBN Blended (Spot Rf): ${sbnBlendedVal.toFixed(2)}%
   * Dynamic Cost of Equity (Ke): ${dynKeVal.toFixed(2)}% (Spot Rf ${sbnBlendedVal.toFixed(2)}% + Beta-Adjusted ERP ${erpBenchmarkVal}%) | Sustainable Growth (g): ${sustGrowthVal.toFixed(1)}%
-  * Damodaran Justified PBV = (ROE - g) / (Ke - g): ${justPbvVal}x vs Implied PBV Pasar: ${joeliardiEval?.impliedPbv ?? '-'}x
-  * Implied PER: ${joeliardiEval?.impliedPer ?? '-'}x vs Wajar PER: ${joeliardiEval?.joeliardiFairPer ?? '-'}x
-  * Estimasi Nilai Intrinsik Wajar Blended: Rp ${Number(joeliardiEval?.intrinsicValueIdr || stock.lastPrice).toLocaleString('id-ID')} | Margin of Safety (MoS): ${joeliardiEval?.marginOfSafetyPct ?? 0}% (${joeliardiEval?.valuationLabel || '-'})
+  * Matriks Spesifik Sektor (${joeliardiEval?.sectorPrimaryMetricLabel || 'Justified PBV'}): Aktual ${joeliardiEval?.sectorPrimaryImpliedMultiple ?? joeliardiEval?.impliedPbv ?? '-'}x vs Wajar ${joeliardiEval?.sectorPrimaryFairMultiple ?? justPbvVal}x -> Nilai Wajar Sektor: Rp ${Number(joeliardiEval?.sectorSpecificFairValueIdr || joeliardiEval?.intrinsicValueIdr || stock.lastPrice).toLocaleString('id-ID')}
+  * Multi-Stage Residual Income Model (Ohlson-Penman ${joeliardiEval?.rimFadeYears ?? 6}Y Fade, ω=${joeliardiEval?.rimPersistenceOmega ?? 0.72}): Nilai Wajar RIM Rp ${Number(joeliardiEval?.rimFairValueIdr || joeliardiEval?.intrinsicValueIdr || stock.lastPrice).toLocaleString('id-ID')}
+  * Statistical Arbitrage & Relative Value (${stock.ticker} vs Peer Twin ${joeliardiEval?.statArbPeerTicker || 'PEER'}): Korelasi ρ=${joeliardiEval?.statArbCorrelation ?? 0.85} | Spread Z-Score: ${joeliardiEval?.statArbZScore ?? 0}σ | Target Konvergensi RelVal: Rp ${Number(joeliardiEval?.statArbImpliedTargetIdr || joeliardiEval?.intrinsicValueIdr || stock.lastPrice).toLocaleString('id-ID')} (${joeliardiEval?.statArbSignal || 'FAIR_COINTEGRATED'})
+  * Damodaran Justified PBV = (ROE - g) / (Ke - g): ${justPbvVal}x vs Implied PBV Pasar: ${joeliardiEval?.impliedPbv ?? '-'}x | Implied PER: ${joeliardiEval?.impliedPer ?? '-'}x vs Wajar PER: ${joeliardiEval?.joeliardiFairPer ?? '-'}x
+  * HARGA WAJAR UTAMA (Quantedge Sector-Adaptive Ensemble): Rp ${Number(joeliardiEval?.intrinsicValueIdr || stock.lastPrice).toLocaleString('id-ID')} | Margin of Safety (MoS): ${joeliardiEval?.marginOfSafetyPct ?? 0}% (${joeliardiEval?.valuationLabel || '-'})
   * Spread Valuasi vs Dynamic Ke: Earnings Yield ${earningsYieldVal}% | Raw Spread vs Spot SBN Blended: ${rawSbnSpreadVal >= 0 ? '+' : ''}${rawSbnSpreadVal}% | Net Spread vs Dynamic Ke: ${netErpSpreadVal >= 0 ? '+' : ''}${netErpSpreadVal}%
 - Pilar 4 — 4-Faktor Out-of-Sample (OOS DeMiguel) & 1/Beta Barbell Position Sizing (Qian 2005 & Taleb 2012):
   * Skor Komposit OOS: ${stock.dmuCompositeScore}/10 (Peringkat Top ${stock.dmuRankPct}%, Zona Buffer: ${stock.dmuZone})

@@ -3309,15 +3309,29 @@ function buildDeepAnalyticalConvictionReport(params: {
         )
       : 0;
 
-  // Sector-Specific Economic Context
+  // Sector-Specific Economic Context & Quantedge Multi-Method Metrics
+  const secShort = joeliardiEval.sectorPrimaryMetricShort ?? 'PBV';
+  const secMult = joeliardiEval.sectorPrimaryImpliedMultiple ?? joeliardiEval.impliedPbv;
+  const secFairMult = joeliardiEval.sectorPrimaryFairMultiple ?? justPbv;
+  const secFairValIdr = joeliardiEval.sectorSpecificFairValueIdr ?? joeliardiEval.intrinsicValueIdr;
+  const rimFairValIdr = joeliardiEval.rimFairValueIdr ?? joeliardiEval.intrinsicValueIdr;
+  const rimFadeYrs = joeliardiEval.rimFadeYears ?? 6;
+  const peerTicker = joeliardiEval.statArbPeerTicker ?? 'PEER';
+  const statArbZ = joeliardiEval.statArbZScore ?? 0;
+  const statArbRho = joeliardiEval.statArbCorrelation ?? 0.85;
+  const statArbTargetIdr = joeliardiEval.statArbImpliedTargetIdr ?? joeliardiEval.intrinsicValueIdr;
+  const secPerShareIdr = joeliardiEval.sectorPrimaryPerShareIdr ?? joeliardiEval.estimatedEpsIdr;
+
   const secLower = stock.sector.toLowerCase();
   const sectorEconomicsNote = secLower.includes('financial')
-    ? `Di sektor Perbankan dan Keuangan, valuasi Implied PBV ${joeliardiEval.impliedPbv}x dibandingkan Damodaran Justified PBV ${justPbv}x diukur dari konsistensi perusahaan mencetak ROE (${stock.roe.toFixed(1)}%) di atas Dynamic Cost of Equity Ke (${dynKe.toFixed(2)}%) serta kualitas kas OCF/NI ${ocfNi.toFixed(2)}x.`
-    : secLower.includes('energy') || secLower.includes('basic')
-    ? `Di sektor Komoditas dan Energi (${stock.sector}), angka Implied PER ${joeliardiEval.impliedPer}x diuji terhadap Gross Profitability GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}%, rasio akrual OCF/NI ${ocfNi.toFixed(2)}x, neraca DER ${stock.debtToEquity.toFixed(2)}x, serta Forward Dividend Yield (Est) ${forwardDivYield.toFixed(2)}%.`
-    : secLower.includes('consumer') || secLower.includes('industrial') || secLower.includes('health')
-    ? `Di sektor riil dan manufaktur (${stock.sector}), daya saing struktural tercermin pada GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}%, Operating Margin ${stock.operatingMargin.toFixed(1)}%, dan perputaran aset ~${impliedAssetTurnover}x yang menghasilkan ROA murni ${impliedRoaPct}% serta kas operasi OCF/NI ${ocfNi.toFixed(2)}x.`
-    : `Di sektor ${stock.sector}, keseimbangan antara GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}%, kualitas kas OCF/NI ${ocfNi.toFixed(2)}x, dan rasio utang DER ${stock.debtToEquity.toFixed(2)}x menjadi kunci utama ketahanan nilai wajarnya.`;
+    ? `Di sektor Perbankan dan Keuangan, matriks utama adalah Damodaran Justified PBV (${joeliardiEval.impliedPbv}x vs Wajar ${justPbv}x) yang diukur dari konsistensi ROE (${stock.roe.toFixed(1)}%) di atas Dynamic Cost of Equity Ke (${dynKe.toFixed(2)}%) serta kualitas kas OCF/NI ${ocfNi.toFixed(2)}x.`
+    : secLower.includes('energy') || secLower.includes('basic') || secLower.includes('industrial')
+    ? `Di sektor Energi, Komoditas & Barang Modal (${stock.sector}), riset finansial menuntut matriks Price-to-Cash Flow (${secShort} ${secMult}x vs Wajar ${secFairMult}x, OCF/Saham ~Rp ${secPerShareIdr.toLocaleString('id-ID')}) yang diuji terhadap GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}% dan rasio akrual OCF/NI ${ocfNi.toFixed(2)}x.`
+    : secLower.includes('infra') || secLower.includes('tech') || secLower.includes('tele')
+    ? `Di sektor Telekomunikasi, Menara & Infrastruktur (${stock.sector}), beban depresiasi jaringan yang masif membuat EPS terdistorsi sehingga valuasi difokuskan pada matriks ${secShort} (${secMult}x vs Wajar ${secFairMult}x, EBITDA/Saham ~Rp ${secPerShareIdr.toLocaleString('id-ID')}) serta kualitas kas OCF/NI ${ocfNi.toFixed(2)}x.`
+    : secLower.includes('propert') || secLower.includes('real estate')
+    ? `Di sektor Properti & REITs (${stock.sector}), laba bersih akuntansi kerap terdistorsi revaluasi aset non-kas sehingga valuasi difokuskan pada Price-to-AFFO (${secShort} ${secMult}x vs Wajar ${secFairMult}x, AFFO/Saham ~Rp ${secPerShareIdr.toLocaleString('id-ID')}) dan nilai buku RNAV.`
+    : `Di sektor Konsumen & Kesehatan (${stock.sector}), daya saing struktural diukur melalui matriks ${secShort} (${secMult}x vs Wajar ${secFairMult}x) yang ditopang GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}%, ROA murni ${impliedRoaPct}%, serta konversi kas OCF/NI ${ocfNi.toFixed(2)}x.`;
 
   // Defensive Discount Anomaly Override (Beta < 0.5 AND Skor Value > 9.0)
   const isDefensiveDiscountAnomaly =
@@ -3484,8 +3498,8 @@ function buildDeepAnalyticalConvictionReport(params: {
     convictionScore: joeliardiEval.totalConvictionScore,
     chainOfThoughtSteps: [
       `01. Audit Profitabilitas Kas (GP/A & Anti-Junk OCF/NI): GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}% (ROA murni ${impliedRoaPct}% × Lev ${equityMultiplier}x, ROE ${stock.roe}%) dengan konversi kas operasi OCF/NI ${ocfNi.toFixed(2)}x (${accrualPen > 0 ? `Penalti Akrual -${accrualPen} pts` : '0 Penalti · Kas Riil Valid'}) -> ${isHighQualityOrganicRoe ? 'Mesin Kas Riil Berdaya Saing Kuat (Anti-Junk).' : isLeveragedRoe ? 'Laba Ditopang Leverage / Pantau Kas Operasi.' : 'Profitabilitas Operasional Terjaga.'}`,
-      `02. Kurva Spot SBN (1Y/5Y/10Y), Ke & Justified PBV: Kombinasi Spot SBN (1Y ${sbn1Y}% · 5Y ${sbn5Y}% · 10Y ${sbn10Y}% → Spot Rf ${sbnBlended.toFixed(2)}%) menghasilkan Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}% dan Damodaran Justified PBV ${justPbv}x (vs Implied PBV ${joeliardiEval.impliedPbv}x, Wajar PER ${joeliardiEval.joeliardiFairPer}x) -> Nilai Intrinsik Wajar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%).`,
-      `03. Uji Silang Momentum, Neraca & Value Trap: Membandingkan Skor Value (${stock.dmuValueScore}/10), DER ${stock.debtToEquity.toFixed(2)}x & Beta 1Y (${stock.beta1Y}x) dengan pergerakan harga 30D (${stock.return30D >= 0 ? '+' : ''}${stock.return30D}%) & volatilitas tahunan (${stock.volatilityAnn}%) -> ${isDefensiveDiscountAnomaly ? 'Strong Buy: Anomali Aset Defensif Terdiskon' : isValueTrapCandidate ? 'Harga Masih Tertekan / Tunggu Konfirmasi Akumulasi.' : isInstitutionalReRating ? 'Konfirmasi Akumulasi & Tren Sehat.' : 'Fase Konsolidasi Wajar.'}`,
+      `02. Multi-Metode Harga Wajar (${secShort}, RIM ${rimFadeYrs}Y & Kurva SBN): Matriks Spesifik Sektor ${secShort} ${secMult}x (Wajar ${secFairMult}x → Rp ${secFairValIdr.toLocaleString('id-ID')}), Multi-Stage RIM ${rimFadeYrs}Y (Ke ${dynKe.toFixed(2)}% → Rp ${rimFairValIdr.toLocaleString('id-ID')}), dan RelVal Peer (Rp ${statArbTargetIdr.toLocaleString('id-ID')}) -> Harga Wajar Utama Quantedge Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%).`,
+      `03. Relative Value (Statistical Arbitrage ${stock.ticker}↔${peerTicker}) & Value Trap: Korelasi historis ρ=${statArbRho.toFixed(2)} mencatat Z-Score ${statArbZ >= 0 ? '+' : ''}${statArbZ.toFixed(2)}σ (Target Konvergensi Rp ${statArbTargetIdr.toLocaleString('id-ID')}) dengan Skor Value ${stock.dmuValueScore}/10 & Beta ${stock.beta1Y}x -> ${isDefensiveDiscountAnomaly ? 'Strong Buy: Anomali Aset Defensif Terdiskon' : joeliardiEval.statArbSignal === 'MEAN_REVERSION_BUY' ? `Anomali Diskon Relatif vs ${peerTicker} (Mean-Reversion Buy).` : isValueTrapCandidate ? 'Harga Masih Tertekan / Tunggu Konfirmasi Akumulasi.' : isInstitutionalReRating ? 'Konfirmasi Akumulasi & Tren Sehat.' : 'Fase Ekuilibrium Relatif Wajar.'}`,
       `04. Sizing 1/β Barbell, Dividen & Likuiditas ADTV: Propensitas 1/β ${betaPropensity.toFixed(2)}x menetapkan Batas Alokasi Maks (1/β Cap) ≤${targetMaxPct}% portofolio, didukung Forward Dividend Yield (Est) ${forwardDivYield.toFixed(2)}% (Total Shareholder Yield ${totalShareholderYieldPct}%) & kapasitas 5% ADTV 20D (Maks Rp ${maxSafeMillionsStr} Jt/hari) -> ${stock.isHscFlagged ? 'Hindari Eksposur Spekulatif.' : isLiquidityCapped ? 'Wajib Pecah Order Sesuai Batas 5% ADTV.' : `Eksekusi Disiplin Sesuai Plafon 1/β ≤${targetMaxPct}%.`}`
     ],
     sections: [
@@ -3509,13 +3523,13 @@ function buildDeepAnalyticalConvictionReport(params: {
       },
       {
         id: 'oos-valuation',
-        badge: `02. JUSTIFIED PBV & KURVA SBN // MOS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%`,
-        title: 'Valuasi Damodaran Justified PBV, Kurva Spot SBN (1Y/5Y/10Y) & Dynamic Cost of Equity (Ke)',
-        keyMetricHighlight: `Justified PBV ${justPbv}x (Implied ${joeliardiEval.impliedPbv}x) · Ke ${dynKe.toFixed(2)}% (Spot Rf ${sbnBlended.toFixed(2)}%) · PER ${joeliardiEval.impliedPer}x (Wajar ${joeliardiEval.joeliardiFairPer}x)`,
-        reasoningParagraph: `Mengacu pada model kurva imbal hasil Fabozzi (2012), tingkat bebas risiko dihitung dari kombinasi kurva Spot SBN (15% SBN 1Y ${sbn1Y}% · 35% SBN 5Y ${sbn5Y}% · 50% SBN 10Y ${sbn10Y}% = Blended Spot Rf ${sbnBlended.toFixed(2)}%), menghasilkan Dynamic Cost of Equity (Ke) sebesar ${dynKe.toFixed(2)}%. Dengan tingkat pertumbuhan berkelanjutan (g) ${sustGrowth.toFixed(1)}%, rumus Damodaran Justified PBV = (ROE − g) ÷ (Ke − g) menghasilkan PBV Wajar ${justPbv}x dibandingkan Implied PBV pasar ${joeliardiEval.impliedPbv}x.`,
+        badge: `02. MULTI-METODE & STAT-ARB // MOS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%`,
+        title: `Komparasi Multi-Metode Harga Wajar (${secShort} · RIM ${rimFadeYrs}Y · StatArb ${stock.ticker}↔${peerTicker})`,
+        keyMetricHighlight: `Utama Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} · ${secShort} Rp ${secFairValIdr.toLocaleString('id-ID')} · RIM Rp ${rimFairValIdr.toLocaleString('id-ID')} · RelVal Rp ${statArbTargetIdr.toLocaleString('id-ID')}`,
+        reasoningParagraph: `Mengacu pada praktik institusional kuantitatif (Quantedge) dan kurva Spot SBN Fabozzi (Blended Spot Rf ${sbnBlended.toFixed(2)}% → Dynamic Ke ${dynKe.toFixed(2)}%), Harga Wajar Utama ditetapkan sebesar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} melalui konvergensi 3 model pembanding: (1) Matriks Spesifik Sektor ${secShort} (${secMult}x vs Wajar ${secFairMult}x = Rp ${secFairValIdr.toLocaleString('id-ID')}), (2) Multi-Stage Residual Income Model ${rimFadeYrs} Tahun (ω=${(joeliardiEval.rimPersistenceOmega ?? 0.72).toFixed(2)} = Rp ${rimFairValIdr.toLocaleString('id-ID')}), serta (3) Relative Value / Statistical Arbitrage terhadap ${peerTicker} (ρ=${statArbRho.toFixed(2)}, Z-Score ${statArbZ >= 0 ? '+' : ''}${statArbZ.toFixed(2)}σ = Rp ${statArbTargetIdr.toLocaleString('id-ID')}).`,
         bulletPoints: [
-          `Sinkronisasi Justified PBV & Nilai Intrinsik: Nilai Intrinsik Wajar Blended Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} tersinkronisasi penuh dengan Damodaran Justified PBV ${justPbv}x (× BVPS Rp ${joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')}) dan Wajar PER ${joeliardiEval.joeliardiFairPer}x (× EPS Rp ${joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')}), memberikan Margin of Safety ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%.`,
-          `Spread Earnings Yield vs Dynamic Ke: Earnings Yield tercatat ${earningsYieldPct}% (Spread ${yieldSpreadVsSbn >= 0 ? '+' : ''}${yieldSpreadVsSbn}% vs Spot SBN Blended ${sbnBlended.toFixed(2)}% dan Net Spread ${netErpSpreadPct >= 0 ? '+' : ''}${netErpSpreadPct}% terhadap Dynamic Ke ${dynKe.toFixed(2)}%).`,
+          `Komparasi Multi-Metode Harga Wajar: Acuan Utama Quantedge Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%) disandingkan dengan pembanding Matriks Sektor (${secShort}) Rp ${secFairValIdr.toLocaleString('id-ID')}, Multi-Stage RIM ${rimFadeYrs}Y Rp ${rimFairValIdr.toLocaleString('id-ID')}, dan Relative Value Peer Rp ${statArbTargetIdr.toLocaleString('id-ID')}.`,
+          `Statistical Arbitrage & Relative Value (${stock.ticker} vs ${peerTicker}): ${joeliardiEval.statArbRationale ?? `Korelasi historis ρ=${statArbRho.toFixed(2)} dengan Z-Score ${statArbZ.toFixed(2)}σ mengindikasikan target konvergensi relatif Rp ${statArbTargetIdr.toLocaleString('id-ID')}.`}`,
           `Uji Silang Momentum & Value Trap: ${isDefensiveDiscountAnomaly ? `Strong Buy: Anomali Aset Defensif Terdiskon — karena Beta sangat rendah (${stock.beta1Y.toFixed(2)}x < 0,50) dan Skor Value sangat tinggi (${stock.dmuValueScore.toFixed(1)}/10 > 9,0), koreksi harga 30D (${stock.return30D}%) merupakan anomali diskon beli terbaik.` : isValueTrapCandidate ? 'Meskipun valuasinya murah, tren harga jangka pendek atau ROE terhadap Ke menuntut akumulasi bertahap sambil menunggu konfirmasi teknikal.' : isMomentumOverextended ? 'Harga saham sudah naik melampaui estimasi nilai wajarnya; hindari mengejar harga di pucuk.' : `Valuasi diskon ${perDiscountPct}% terhadap PER wajar didukung oleh kualitas kas operasi nyata.`}`
         ],
         sentimentTone:
