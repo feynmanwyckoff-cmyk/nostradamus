@@ -3480,7 +3480,7 @@ function buildDeepAnalyticalConvictionReport(params: {
     verdictTitle = `Komite Investasi tidak menyarankan pembelian ${stock.ticker} karena terdeteksi fluktuasi harga spekulatif (HSC) di luar kewajaran fundamental`;
   } else if (isDefensiveDiscountAnomaly) {
     verdictBadge = 'STRONG ACCUMULATE // DEFENSIVE DISCOUNT ANOMALY';
-    verdictTitle = `Strong Buy: Anomali Aset Defensif Terdiskon pada ${stock.ticker} (Beta ${stock.beta1Y.toFixed(2)}x, Cap 1/β ≤${betaCap.toFixed(1)}% & Skor Value ${stock.dmuValueScore.toFixed(1)}/10) dengan Forward Dividend Yield (Est) ${forwardDivYield.toFixed(2)}%`;
+    verdictTitle = `Anomali Aset Defensif Terdiskon pada ${stock.ticker} (Beta ${stock.beta1Y.toFixed(2)}x, Cap 1/β ≤${betaCap.toFixed(1)}% & Skor Value ${stock.dmuValueScore.toFixed(1)}/10) dengan Forward Dividend Yield (Est) ${forwardDivYield.toFixed(2)}%`;
   } else if (isBuyOnStrengthCatalyst) {
     verdictBadge = 'BUY ON STRENGTH // CATALYST ACTIVE';
     verdictTitle = `Buy on Strength / Catalyst pada ${stock.ticker}: ${joeliardiEval.catalystBadgeLabel || 'Momentum Laba & Buyback Aktif'} (Forward ROE ${forwardRoePct.toFixed(1)}% vs Trailing ${trailingRoePct.toFixed(1)}% · TSY ${totalShareholderYieldPct.toFixed(2)}%) membatalkan instruksi tunggu koreksi`;
@@ -3752,12 +3752,13 @@ export async function requestEmitenAiInspection(params: {
                 : stripRawMarkdownArtifacts(
                     sr.verdictBadge || fallbackReport.verdictBadge
                   ),
-            verdictTitle:
+            verdictTitle: (
               joeliardiEval.isDefensiveDiscountAnomaly || isCatalystBuyOverride
                 ? fallbackReport.verdictTitle
                 : stripRawMarkdownArtifacts(
                     sr.verdictTitle || fallbackReport.verdictTitle
-                  ),
+                  )
+            ).replace(/^Strong\s+Buy\s*[:—-]\s*/i, ''),
             directAnswerSummary: cleanedSummary || fallbackReport.directAnswerSummary,
             convictionScore:
               typeof sr.convictionScore === 'number'
@@ -3791,13 +3792,14 @@ export async function requestEmitenAiInspection(params: {
                 ? sr.bearishRisks.map(stripRawMarkdownArtifacts)
                 : fallbackReport.bearishRisks,
             executionStrategy: {
-              recommendedAction:
+              recommendedAction: (
                 joeliardiEval.isDefensiveDiscountAnomaly || isCatalystBuyOverride
                   ? fallbackReport.executionStrategy.recommendedAction
                   : stripRawMarkdownArtifacts(
                       sr.executionStrategy?.recommendedAction ||
                         fallbackReport.executionStrategy.recommendedAction
-                    ),
+                    )
+              ).replace(/^Strong\s+Buy\s*[:—-]\s*/i, ''),
               idealEntryZone: fallbackReport.executionStrategy.idealEntryZone,
               InvalidationOrRiskLimit: stripRawMarkdownArtifacts(
                 sr.executionStrategy?.InvalidationOrRiskLimit ||

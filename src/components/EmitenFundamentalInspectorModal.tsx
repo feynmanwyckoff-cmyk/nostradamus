@@ -395,10 +395,10 @@ function renderHighlightedQuantRationale(
 
   return (
     <>
-      {highlightTokens(mainBody, 'main')}
-      <span className="inline">
+      <span>{highlightTokens(mainBody.trim(), 'main')}</span>
+      <span className="block mt-2 pt-1.5 border-t border-[#E4E2DD]/70">
         <strong
-          className={`font-extrabold px-1.5 py-0.5 rounded-2xs mr-1 ${
+          className={`font-extrabold px-1.5 py-0.5 rounded-2xs mr-1.5 inline-block ${
             isBuyFollowUp
               ? 'text-[#0D5C46] bg-[#059669]/15 border border-[#059669]/40'
               : isTrimRotateFollowUp
@@ -1843,22 +1843,22 @@ export function EmitenFundamentalInspectorModal({
                       return (
                         <div
                           key={m.id}
-                          className={`p-3 rounded-xs border transition-colors flex flex-col justify-between ${
+                          className={`p-3 rounded-xs border transition-colors flex flex-col ${
                             isPrimary
                               ? 'bg-[#FFFFFF] border-[#D97706] shadow-2xs'
                               : 'bg-[#FFFFFF]/80 border-[#E4E2DD]'
                           }`}
                         >
-                          <div>
+                          <div className="min-h-[48px] flex flex-col justify-start">
                             <div className="flex items-center justify-between gap-1.5">
                               <span
-                                className={`text-[10px] font-bold uppercase tracking-wider ${
+                                className={`text-[10px] font-bold uppercase tracking-wider whitespace-nowrap ${
                                   isPrimary ? 'text-[#D97706] bb-amber' : 'text-neutral-500'
                                 }`}
                               >
                                 {isPrimary ? '★ MODEL FINAL' : 'KOMPONEN ENSEMBLE'}
                               </span>
-                              <span className="text-[10px] font-mono font-semibold text-neutral-500 shrink-0">
+                              <span className="text-[10px] font-mono font-semibold text-neutral-500 shrink-0 whitespace-nowrap">
                                 Bobot {(m.weightPct ?? 0).toFixed(0)}%
                               </span>
                             </div>
@@ -1873,13 +1873,13 @@ export function EmitenFundamentalInspectorModal({
                             </div>
                           </div>
 
-                          <div className="mt-2.5 pt-2 border-t border-[#E4E2DD]/60">
+                          <div className="mt-2 pt-2 border-t border-[#E4E2DD]/60 flex-1 flex flex-col">
                             <div className="flex items-baseline justify-between gap-2">
-                              <div className="text-lg sm:text-xl font-extrabold font-mono text-[#111315]">
+                              <div className="text-lg sm:text-xl font-extrabold font-mono text-[#111315] whitespace-nowrap">
                                 Rp {formatIdrPriceDisplay(m.fairPriceIdr)}
                               </div>
                               <span
-                                className={`text-[10.5px] font-mono font-bold ${
+                                className={`text-[10.5px] font-mono font-bold whitespace-nowrap ${
                                   m.mosPct >= 10
                                     ? 'text-[#0D5C46]'
                                     : m.mosPct >= 0
@@ -1895,7 +1895,7 @@ export function EmitenFundamentalInspectorModal({
                             {/* Visual Accumulation Bar: Stacked Bar on Model Final vs Proportional Contribution Bar on Components */}
                             {isPrimary ? (
                               <div className="mt-1.5 mb-1.5 p-1.5 rounded-2xs bg-[#FAF9F6] border border-[#E4E2DD]">
-                                <div className="flex items-center justify-between text-[9.5px] font-mono text-neutral-600 mb-1">
+                                <div className="flex items-center justify-between gap-1 text-[9px] font-mono text-neutral-600 mb-1 whitespace-nowrap">
                                   <span className="font-bold text-[#111315]">
                                     Akumulasi 3 Komponen:
                                   </span>
@@ -2061,7 +2061,7 @@ export function EmitenFundamentalInspectorModal({
                 <div>
                   <div className="text-[10px] font-bold uppercase tracking-wider text-[#D97706] bb-amber block mb-1.5">
                     <MetricTooltip
-                      label={`RASIONALISASI MATRIKS SEKTOR & MULTI-STAGE RIM (${joeliardiEval.rimFadeYears ?? 6}Y FADE)`}
+                      label="RASIONALISASI MATRIKS SEKTOR & MULTI-STAGE RIM"
                       title="Diagnostik Spesifik Emiten, Konversi Kas & Persistensi RIM"
                       laymanExplanation="Membedah posisi valuasi spesifik emiten terhadap siklus sektornya, kualitas konversi laba menjadi kas operasi riil (OCF/NI & GP/A), serta daya tahan excess return pada model Ohlson-Penman RIM."
                       practicalGuide="Pastikan diskon multiple sektoral ditopang oleh OCF/NI ≥ 0,85x dan Forward ROE di atas Cost of Equity (Ke)."
@@ -2156,9 +2156,9 @@ export function EmitenFundamentalInspectorModal({
                           practicalGuide="GP/A ≥ 18% dengan ROA Murni ≥ 8% menandakan profitabilitas struktural yang kebal manipulasi akuntansi."
                         />
                       </div>
-                      <div className="text-xs sm:text-sm font-mono tabular-nums font-bold text-[#0D5C46] mt-0.5">
-                        GP/A {gpToAssets.toFixed(1)}%{' '}
-                        <span className="text-[10px] font-normal text-neutral-500">
+                      <div className="text-xs sm:text-sm font-mono tabular-nums font-bold text-[#0D5C46] mt-1">
+                        <div>GP/A {gpToAssets.toFixed(1)}%</div>
+                        <span className="block text-[10px] font-normal text-neutral-500 mt-0.5 leading-snug">
                           (ROA {roaDuPont.toFixed(1)}% · Lev {eqMult.toFixed(2)}x)
                         </span>
                       </div>
@@ -2167,15 +2167,15 @@ export function EmitenFundamentalInspectorModal({
                     <div className="p-2.5 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs">
                       <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
                         <MetricTooltip
-                          label="Kurva Spot SBN (1Y/5Y/10Y) & Ke"
+                          label="Kurva Spot SBN (1Y/5Y/10Y)"
                           title="Bobot Kombinasi Spot Rate SBN 1Y, 5Y, 10Y (Fabozzi 2012) & Cost of Equity Dinamis"
                           laymanExplanation="Menggunakan kombinasi probabilitas spot rate sepanjang yield curve obligasi pemerintah (15% SBN 1Y · 35% SBN 5Y · 50% SBN 10Y) sesuai durasi arus kas ekuitas untuk menghitung Dynamic Cost of Equity (Ke)."
                           practicalGuide="Semakin tinggi ROE emiten di atas Ke dinamis ini, semakin besar penciptaan nilai intrinsik bagi pemegang saham."
                         />
                       </div>
-                      <div className="text-xs sm:text-sm font-mono tabular-nums font-bold text-[#111315] mt-0.5">
-                        Ke {dynKe.toFixed(2)}%{' '}
-                        <span className="text-[10px] font-normal text-neutral-500">
+                      <div className="text-xs sm:text-sm font-mono tabular-nums font-bold text-[#111315] mt-1">
+                        <div>Ke {dynKe.toFixed(2)}%</div>
+                        <span className="block text-[10px] font-normal text-neutral-500 mt-0.5 leading-snug">
                           (Spot Rf {sbnBlended.toFixed(2)}%: 1Y {sbn1Y}%·5Y {sbn5Y}%·10Y {sbn10Y}%)
                         </span>
                       </div>
@@ -2191,12 +2191,12 @@ export function EmitenFundamentalInspectorModal({
                         />
                       </div>
                       <div
-                        className={`text-xs sm:text-sm font-mono tabular-nums font-bold mt-0.5 ${
+                        className={`text-xs sm:text-sm font-mono tabular-nums font-bold mt-1 ${
                           accrualPen === 0 ? 'text-[#0D5C46]' : 'text-[#D97706]'
                         }`}
                       >
-                        OCF/NI {ocfNi.toFixed(2)}x{' '}
-                        <span className="text-[10px] font-normal text-neutral-500">
+                        <div>OCF/NI {ocfNi.toFixed(2)}x</div>
+                        <span className="block text-[10px] font-normal text-neutral-500 mt-0.5 leading-snug">
                           {accrualPen > 0
                             ? `(Penalti Akrual -${accrualPen} pts)`
                             : '(0 Penalti · Kas Riil Valid)'}
@@ -2214,9 +2214,9 @@ export function EmitenFundamentalInspectorModal({
                           align="right"
                         />
                       </div>
-                      <div className="text-xs sm:text-sm font-mono tabular-nums font-bold text-[#0284C7] bb-cyan mt-0.5">
-                        PBV Wajar {justPbv}x{' '}
-                        <span className="text-[10px] font-normal text-neutral-500">
+                      <div className="text-xs sm:text-sm font-mono tabular-nums font-bold text-[#0284C7] bb-cyan mt-1">
+                        <div>PBV Wajar {justPbv}x</div>
+                        <span className="block text-[10px] font-normal text-neutral-500 mt-0.5 leading-snug">
                           (MoS {joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}
                           {joeliardiEval.marginOfSafetyPct.toFixed(1)}% · Cap 1/β ≤{betaCap.toFixed(1)}%)
                         </span>
@@ -2342,7 +2342,7 @@ export function EmitenFundamentalInspectorModal({
                         {structuredReport.verdictBadge}
                       </span>
                       <span className="text-xs font-bold text-[#111315]">
-                        {structuredReport.verdictTitle}
+                        {structuredReport.verdictTitle.replace(/^Strong\s+Buy\s*[:—-]\s*/i, '')}
                       </span>
                     </div>
                     <div className="flex items-center gap-2">
@@ -2569,21 +2569,28 @@ export function EmitenFundamentalInspectorModal({
                           ? { label: 'AREA WAJAR', cls: 'bg-[#0284C7]/15 text-[#0284C7] bb-cyan border-[#0284C7]/40' }
                           : { label: 'PREMIUM / ATAS WAJAR', cls: 'bg-[#D97706]/15 text-[#D97706] bb-amber border-[#D97706]/40' };
 
+                        const safeAdtvMillionsStr =
+                          joeliardiEval.maxSafeAllocationIdr >= 1_000_000
+                            ? (joeliardiEval.maxSafeAllocationIdr / 1_000_000).toLocaleString('id-ID', {
+                                maximumFractionDigits: 1
+                              })
+                            : joeliardiEval.maxSafeAllocationIdr.toLocaleString('id-ID');
+
                         return (
                           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
                             {/* Card 1: Tindakan Utama */}
-                            <div className="p-3 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2">
+                            <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2">
                               <div className="space-y-2">
-                                <div className="flex items-center justify-between gap-1.5 border-b border-[#E4E2DD]/80 pb-1.5">
-                                  <span className="text-[10px] font-bold uppercase text-neutral-500">
+                                <div className="flex items-center justify-between gap-1 border-b border-[#E4E2DD]/80 pb-1.5">
+                                  <span className="text-[9px] tracking-tight font-bold uppercase text-neutral-500 whitespace-nowrap shrink-0">
                                     1. Tindakan Utama
                                   </span>
-                                  <span className={`px-1.5 py-0.5 text-[9px] font-mono font-bold uppercase border rounded-xs ${actionBadge.cls}`}>
+                                  <span className={`px-1.5 py-0.5 text-[8px] font-mono font-bold uppercase border rounded-xs whitespace-nowrap shrink-0 ${actionBadge.cls}`}>
                                     {actionBadge.label}
                                   </span>
                                 </div>
-                                <div className="font-bold text-[#111315] leading-snug">
-                                  {ex.recommendedAction}
+                                <div className="font-bold text-[#111315] leading-snug text-[11.5px]">
+                                  {ex.recommendedAction.replace(/^Strong\s+Buy\s*[:—-]\s*/i, '')}
                                 </div>
                               </div>
                               <ul className="pt-2 border-t border-[#E4E2DD]/70 space-y-1 text-[10.5px] text-neutral-600">
@@ -2601,29 +2608,29 @@ export function EmitenFundamentalInspectorModal({
                             </div>
 
                             {/* Card 2: Zona Akumulasi Ideal */}
-                            <div className="p-3 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2">
+                            <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2">
                               <div className="space-y-2">
-                                <div className="flex items-center justify-between gap-1.5 border-b border-[#E4E2DD]/80 pb-1.5">
-                                  <span className="text-[10px] font-bold uppercase text-[#0D5C46]">
+                                <div className="flex items-center justify-between gap-1 border-b border-[#E4E2DD]/80 pb-1.5">
+                                  <span className="text-[9px] tracking-tight font-bold uppercase text-[#0D5C46] whitespace-nowrap shrink-0">
                                     2. Zona Akumulasi Ideal
                                   </span>
-                                  <span className={`px-1.5 py-0.5 text-[9px] font-mono font-bold uppercase border rounded-xs ${zoneStatusBadge.cls}`}>
+                                  <span className={`px-1.5 py-0.5 text-[8px] font-mono font-bold uppercase border rounded-xs whitespace-nowrap shrink-0 ${zoneStatusBadge.cls}`}>
                                     {zoneStatusBadge.label}
                                   </span>
                                 </div>
 
-                                <div className="space-y-1 font-mono text-[11px] bg-[#FFFFFF] p-2 rounded-xs border border-[#E4E2DD]/80">
-                                  <div className="flex items-center justify-between gap-1">
-                                    <span className="text-neutral-500 text-[10px]">Rentang Ideal:</span>
-                                    <strong className="text-[#0D5C46]">{extractedRange}</strong>
+                                <div className="space-y-1.5 font-mono tabular-nums text-[9.5px] bg-[#FFFFFF] p-2 rounded-xs border border-[#E4E2DD]/80">
+                                  <div className="flex items-center justify-between gap-1 whitespace-nowrap">
+                                    <span className="text-neutral-500 text-[9px] shrink-0">Rentang Ideal:</span>
+                                    <strong className="text-[#0D5C46] text-[9.5px] shrink-0">{extractedRange}</strong>
                                   </div>
-                                  <div className="flex items-center justify-between gap-1">
-                                    <span className="text-neutral-500 text-[10px]">Nilai Wajar:</span>
-                                    <strong className="text-[#111315]">Rp {formatIdrPriceDisplay(fairIdr)}</strong>
+                                  <div className="flex items-center justify-between gap-1 whitespace-nowrap">
+                                    <span className="text-neutral-500 text-[9px] shrink-0">Nilai Wajar:</span>
+                                    <strong className="text-[#111315] text-[9.5px] shrink-0">Rp {formatIdrPriceDisplay(fairIdr)}</strong>
                                   </div>
-                                  <div className="flex items-center justify-between gap-1">
-                                    <span className="text-neutral-500 text-[10px]">Spot vs Wajar:</span>
-                                    <strong className={mosVal >= 0 ? 'text-[#0D5C46]' : 'text-[#D97706] bb-amber'}>
+                                  <div className="flex items-center justify-between gap-1 whitespace-nowrap">
+                                    <span className="text-neutral-500 text-[9px] shrink-0">Spot vs Wajar:</span>
+                                    <strong className={`text-[9.5px] shrink-0 ${mosVal >= 0 ? 'text-[#0D5C46]' : 'text-[#D97706] bb-amber'}`}>
                                       Rp {formatIdrPriceDisplay(spotIdr)} ({mosVal >= 0 ? `+${mosVal.toFixed(1)}%` : `${mosVal.toFixed(1)}%`})
                                     </strong>
                                   </div>
@@ -2640,13 +2647,13 @@ export function EmitenFundamentalInspectorModal({
                             </div>
 
                             {/* Card 3: Batas Invalidation / Risiko */}
-                            <div className="p-3 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2">
+                            <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2">
                               <div className="space-y-2">
-                                <div className="flex items-center justify-between gap-1.5 border-b border-[#E4E2DD]/80 pb-1.5">
-                                  <span className="text-[10px] font-bold uppercase text-[#9E2A2B]">
+                                <div className="flex items-center justify-between gap-1 border-b border-[#E4E2DD]/80 pb-1.5">
+                                  <span className="text-[9px] tracking-tight font-bold uppercase text-[#9E2A2B] whitespace-nowrap shrink-0">
                                     3. Batas Invalidation
                                   </span>
-                                  <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold uppercase bg-[#E11D48]/15 text-[#9E2A2B] border border-[#E11D48]/40 rounded-xs">
+                                  <span className="px-1.5 py-0.5 text-[8px] font-mono font-bold uppercase bg-[#E11D48]/15 text-[#9E2A2B] border border-[#E11D48]/40 rounded-xs whitespace-nowrap shrink-0">
                                     STOP &lt; {extractedStop}
                                   </span>
                                 </div>
@@ -2679,32 +2686,32 @@ export function EmitenFundamentalInspectorModal({
                             </div>
 
                             {/* Card 4: Panduan Porsi Keranjang & Batas ADTV */}
-                            <div className="p-3 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2">
+                            <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2">
                               <div className="space-y-2">
-                                <div className="flex items-center justify-between gap-1.5 border-b border-[#E4E2DD]/80 pb-1.5">
-                                  <span className="text-[10px] font-bold uppercase text-[#0284C7] bb-cyan">
+                                <div className="flex items-center justify-between gap-1 border-b border-[#E4E2DD]/80 pb-1.5">
+                                  <span className="text-[9px] tracking-tight font-bold uppercase text-[#0284C7] bb-cyan whitespace-nowrap shrink-0">
                                     4. Porsi 1/β &amp; ADTV
                                   </span>
-                                  <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold uppercase bg-[#0284C7]/15 text-[#0284C7] bb-cyan border border-[#0284C7]/40 rounded-xs">
+                                  <span className="px-1.5 py-0.5 text-[8px] font-mono font-bold uppercase bg-[#0284C7]/15 text-[#0284C7] bb-cyan border border-[#0284C7]/40 rounded-xs whitespace-nowrap shrink-0">
                                     1/β Cap ≤{betaCapPct.toFixed(1)}%
                                   </span>
                                 </div>
 
-                                <div className="space-y-1 font-mono text-[11px] bg-[#FFFFFF] p-2 rounded-xs border border-[#E4E2DD]/80">
-                                  <div className="flex items-center justify-between gap-1">
-                                    <span className="text-neutral-500 text-[10px]">Alokasi:</span>
-                                    <strong className="text-[#111315]">{basketLabel}</strong>
+                                <div className="space-y-1.5 font-mono tabular-nums text-[9.5px] bg-[#FFFFFF] p-2 rounded-xs border border-[#E4E2DD]/80">
+                                  <div className="flex items-center justify-between gap-1 whitespace-nowrap">
+                                    <span className="text-neutral-500 text-[9px] shrink-0">Alokasi:</span>
+                                    <strong className="text-[#111315] text-[9px] tracking-tight shrink-0">{basketLabel}</strong>
                                   </div>
-                                  <div className="flex items-center justify-between gap-1">
-                                    <span className="text-neutral-500 text-[10px]">Porsi Ideal:</span>
-                                    <strong className="text-[#0284C7] bb-cyan">
+                                  <div className="flex items-center justify-between gap-1 whitespace-nowrap">
+                                    <span className="text-neutral-500 text-[9px] shrink-0">Porsi Ideal:</span>
+                                    <strong className="text-[#0284C7] bb-cyan text-[9px] tracking-tight shrink-0">
                                       {minAllocPct}% – {betaCapPct.toFixed(1)}% (1/β {betaProp.toFixed(2)}x)
                                     </strong>
                                   </div>
-                                  <div className="flex items-center justify-between gap-1">
-                                    <span className="text-neutral-500 text-[10px]">5% ADTV 20D:</span>
-                                    <strong className="text-[#0D5C46]">
-                                      ≤ Rp {joeliardiEval.maxSafeAllocationIdr.toLocaleString('id-ID')} Jt/hr
+                                  <div className="flex items-center justify-between gap-1 whitespace-nowrap">
+                                    <span className="text-neutral-500 text-[9px] shrink-0">5% ADTV 20D:</span>
+                                    <strong className="text-[#0D5C46] text-[9.5px] shrink-0">
+                                      ≤ Rp {safeAdtvMillionsStr} Jt/hr
                                     </strong>
                                   </div>
                                 </div>
@@ -2712,7 +2719,7 @@ export function EmitenFundamentalInspectorModal({
 
                               {ex.liquidityWarningBadge && (
                                 <div
-                                  className={`p-1.5 rounded-xs border text-[10px] font-mono font-bold leading-snug ${
+                                  className={`p-1.5 rounded-xs border text-[9.5px] font-mono font-bold leading-snug ${
                                     ex.isLiquidityCapped
                                       ? 'bg-[#F59E0B]/15 text-[#B45309] border-[#F59E0B]/50'
                                       : 'bg-[#059669]/10 text-[#0D5C46] border-[#059669]/35'

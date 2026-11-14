@@ -706,7 +706,7 @@ export function evaluateDynamicDecisionTree(params: {
       decisionState: 'STRONG_BUY_DEFENSIVE_ANOMALY',
       decisionActionLabel: 'STRONG BUY // DEFENSIVE DISCOUNT ANOMALY',
       recommendedActionText:
-        'Strong Buy: Anomali Aset Defensif Terdiskon — Akumulasi Bertahap (Buy on Weakness 2–3 Tahap) pada harga spot yang sudah berada di zona diskon dalam.',
+        'Anomali Aset Defensif Terdiskon — Akumulasi Bertahap (Buy on Weakness 2–3 Tahap) pada harga spot yang sudah berada di zona diskon dalam.',
       idealBuyLowIdr: low,
       idealBuyHighIdr: high,
       formattedAccumulationZone: `Rentang Beli Ideal: Rp ${low.toLocaleString('id-ID')} – Rp ${high.toLocaleString('id-ID')} | Nilai Wajar: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): ANOMALI DISKON DEFENSIF (MoS ${marginOfSafetyPct >= 0 ? '+' : ''}${marginOfSafetyPct.toFixed(1)}%)`
