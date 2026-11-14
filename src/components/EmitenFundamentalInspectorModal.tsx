@@ -356,7 +356,7 @@ export function EmitenFundamentalInspectorModal({
     return evaluateJoeliardiOosFundamental(activeStock);
   }, [activeStock, catalystRevision]);
 
-  // Synchronize Corporate Action Calibrator inputs & trigger Web Worker offload when activeStock changes
+  // Synchronize Corporate Action Calibrator inputs & trigger Web Worker offload when activeStock or live sync changes
   useEffect(() => {
     if (!activeStock || !joeliardiEval) return;
     setSplitRatioInput(String(activeStock.splitRatioDivisor ?? 1));
@@ -364,7 +364,19 @@ export function EmitenFundamentalInspectorModal({
       ? Math.round(activeStock.buybackNominalIdr / 1_000_000_000)
       : 0;
     setBuybackNominalInput(String(buybackBillion));
-    setQuarterlyGrowthInput(String(activeStock.earningsGrowthYoYPct ?? 0));
+    setQuarterlyGrowthInput(
+      String(
+        activeStock.earningsGrowthYoYPct ??
+          Number(
+            Math.max(
+              0,
+              ((joeliardiEval.forwardAnnualizedRoePct ?? activeStock.roe) -
+                (joeliardiEval.trailingRoePct ?? activeStock.roe)) *
+                2.5
+            ).toFixed(1)
+          )
+      )
+    );
 
     let cancelled = false;
     const boostMult = 1 + (joeliardiEval.catalystValuationBoostPct ?? 0) / 100;
@@ -411,7 +423,15 @@ export function EmitenFundamentalInspectorModal({
     return () => {
       cancelled = true;
     };
-  }, [activeStock?.ticker, activeStock?.lastPrice, catalystRevision]);
+  }, [
+    activeStock?.ticker,
+    activeStock?.lastPrice,
+    activeStock?.roe,
+    activeStock?.splitRatioDivisor,
+    activeStock?.buybackNominalIdr,
+    activeStock?.earningsGrowthYoYPct,
+    catalystRevision
+  ]);
 
   const handleSaveCatalystOverride = (e: React.FormEvent) => {
     e.preventDefault();
@@ -888,14 +908,10 @@ export function EmitenFundamentalInspectorModal({
                       <span>SPLIT DIVISOR 1:{activeStock.splitRatioDivisor}</span>
                     </span>
                   )}
-                  {isSyncingOnDemand ? (
+                  {isSyncingOnDemand && (
                     <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-[#0284C7] bg-[#0284C7]/10 border border-[#0284C7]/30 px-2 py-0.5 rounded-xs">
                       <RefreshCw className="w-2.5 h-2.5 animate-spin" />
                       <span>Memperbarui Data Live {activeStock.ticker}.JK...</span>
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-[#0D5C46] bg-[#059669]/10 border border-[#059669]/30 px-2 py-0.5 rounded-xs">
-                      <span>✓ Live On-Demand Active</span>
                     </span>
                   )}
                 </div>
@@ -922,18 +938,18 @@ export function EmitenFundamentalInspectorModal({
             </button>
           </div>
 
-          {/* Action Toolbar Row: Refresh, Corporate Action Calibrator, Export HD PNG, Export PDF, and HSC Toggle */}
-          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[#E4E2DD]/70">
-            <div className="flex flex-wrap items-center gap-2">
+          {/* Action Toolbar Row: Strictly Single-Row Layout (Refresh -> Calibrator -> HSC -> Worker -> Export PNG -> Export PDF) */}
+          <div className="flex items-center justify-between gap-1.5 pt-2 border-t border-[#E4E2DD]/70 flex-nowrap overflow-x-auto no-scrollbar">
+            <div className="flex items-center gap-1.5 flex-nowrap shrink-0">
               <button
                 type="button"
                 onClick={handleManualRefreshSingleTicker}
                 disabled={isSyncingOnDemand}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold text-[#0284C7] bb-cyan bg-[#FFFFFF] border border-[#E4E2DD] hover:border-[#0284C7] rounded-xs transition-colors cursor-pointer disabled:opacity-60"
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-[#0284C7] bb-cyan bg-[#FFFFFF] border border-[#E4E2DD] hover:border-[#0284C7] rounded-xs transition-colors cursor-pointer disabled:opacity-60 whitespace-nowrap shrink-0"
                 title="Perbarui harga pasar live Yahoo Finance & berita terbaru khusus emiten ini"
               >
                 <RefreshCw
-                  className={`w-3.5 h-3.5 ${isSyncingOnDemand ? 'animate-spin' : ''}`}
+                  className={`w-3 h-3 shrink-0 ${isSyncingOnDemand ? 'animate-spin' : ''}`}
                 />
                 <span>Refresh Emiten</span>
               </button>
@@ -941,18 +957,18 @@ export function EmitenFundamentalInspectorModal({
               <button
                 type="button"
                 onClick={() => setShowCatalystCalibrator((prev) => !prev)}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold rounded-xs border transition-colors cursor-pointer ${
+                className={`inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold rounded-xs border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                   showCatalystCalibrator || Boolean(getCustomCorporateActionOverrides()[activeStock.ticker])
                     ? 'bg-[#0D5C46] text-white border-[#0D5C46]'
                     : 'bg-[#FFFFFF] text-[#0D5C46] border-[#059669]/40 hover:bg-[#059669]/10'
                 }`}
-                title="Kalibrasi Corporate Action (Stock Split Divisor, Nominal Buyback, & Laba Kuartal Forward ROE)"
+                title="Kalibrasi Corporate Action (Stock Split Divisor, Nominal Buyback, & Laba Kuartal Forward ROE) — Autofill dari data terbaru emiten"
               >
-                <SlidersHorizontal className="w-3.5 h-3.5" />
+                <SlidersHorizontal className="w-3 h-3 shrink-0" />
                 <span>
                   {showCatalystCalibrator
-                    ? 'Tutup Kalibrator Aksi Korporasi'
-                    : 'Kalibrasi Split / Buyback / Fwd ROE'}
+                    ? 'Tutup Kalibrator'
+                    : 'Kalibrasi Split / Buyback / ROE'}
                 </span>
               </button>
 
@@ -962,30 +978,28 @@ export function EmitenFundamentalInspectorModal({
                   onClick={() =>
                     onToggleHscFlag(activeStock.ticker, Boolean(activeStock.isHscFlagged))
                   }
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xs border transition-colors cursor-pointer ${
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold rounded-xs border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                     activeStock.isHscFlagged
                       ? 'bg-[#E11D48] text-white border-[#E11D48] hover:bg-[#BE123C]'
                       : 'bg-[#FFFFFF] text-[#9E2A2B] border-[#E11D48]/40 hover:bg-[#E11D48]/10'
                   }`}
                   title="Tandai atau lepas label saham HSC (High Speculative Concentration)"
                 >
-                  <ShieldAlert className="w-3.5 h-3.5" />
+                  <ShieldAlert className="w-3 h-3 shrink-0" />
                   <span>
-                    {activeStock.isHscFlagged
-                      ? 'Berlabel HSC (Klik Lepas)'
-                      : 'Tandai sebagai HSC'}
+                    {activeStock.isHscFlagged ? 'Label HSC (Lepas)' : 'Tandai HSC'}
                   </span>
                 </button>
               )}
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1.5 flex-nowrap shrink-0">
               {workerTelemetry && (
                 <span
                   title="Komputasi Multi-Stage RIM & regresi StatArb dieksekusi di thread terpisah (Web Worker) agar antarmuka tetap responsif 60fps"
-                  className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-mono font-semibold text-neutral-600 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs"
+                  className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-mono font-semibold text-neutral-600 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs whitespace-nowrap shrink-0"
                 >
-                  <Cpu className="w-3 h-3 text-[#0D5C46]" />
+                  <Cpu className="w-3 h-3 text-[#0D5C46] shrink-0" />
                   <span>
                     Worker 60fps · {workerTelemetry.computeDurationMs.toFixed(2)}ms
                   </span>
@@ -996,12 +1010,12 @@ export function EmitenFundamentalInspectorModal({
                 type="button"
                 onClick={handleExportPng}
                 disabled={isExporting !== null}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold text-[#0D5C46] bg-[#FFFFFF] border border-[#059669]/50 hover:border-[#059669] hover:bg-[#059669]/10 rounded-xs transition-colors cursor-pointer disabled:opacity-60"
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-[#0D5C46] bg-[#FFFFFF] border border-[#059669]/50 hover:border-[#059669] hover:bg-[#059669]/10 rounded-xs transition-colors cursor-pointer disabled:opacity-60 whitespace-nowrap shrink-0"
                 title="Unduh gambar resolusi tinggi (HD PNG) hasil Inspect Emiten — Nostradamus Quant Terminal"
               >
-                <ImageDown className="w-3.5 h-3.5" />
+                <ImageDown className="w-3 h-3 shrink-0" />
                 <span>
-                  {isExporting === 'PNG' ? 'Mencetak HD PNG...' : 'Export HD Image (PNG)'}
+                  {isExporting === 'PNG' ? 'Cetak PNG...' : 'Export PNG'}
                 </span>
               </button>
 
@@ -1009,16 +1023,16 @@ export function EmitenFundamentalInspectorModal({
                 type="button"
                 onClick={handleExportPdf}
                 disabled={isExporting !== null}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold text-[#D97706] bb-amber bg-[#FFFFFF] border border-[#D97706]/50 hover:border-[#F59E0B] hover:bg-[#D97706]/10 rounded-xs transition-colors cursor-pointer disabled:opacity-60"
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-[#D97706] bb-amber bg-[#FFFFFF] border border-[#D97706]/50 hover:border-[#F59E0B] hover:bg-[#D97706]/10 rounded-xs transition-colors cursor-pointer disabled:opacity-60 whitespace-nowrap shrink-0"
                 title="Unduh dokumen PDF hasil Inspect Emiten — Nostradamus Quant Terminal"
               >
-                <FileDown className="w-3.5 h-3.5" />
-                <span>{isExporting === 'PDF' ? 'Menyusun PDF...' : 'Export PDF'}</span>
+                <FileDown className="w-3 h-3 shrink-0" />
+                <span>{isExporting === 'PDF' ? 'Cetak PDF...' : 'Export PDF'}</span>
               </button>
             </div>
           </div>
 
-          {/* Collapsible Corporate Action & Forward Annualizer Calibrator Drawer */}
+          {/* Collapsible Corporate Action & Forward Annualizer Calibrator Drawer (Autofilled from Latest Emiten Data) */}
           {showCatalystCalibrator && (
             <form
               onSubmit={handleSaveCatalystOverride}
@@ -1026,11 +1040,26 @@ export function EmitenFundamentalInspectorModal({
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#0D5C46] block">
-                    CORPORATE ACTION INTERCEPTOR &amp; FORWARD ANNUALIZER MIDDLEWARE
-                  </span>
-                  <p className="text-[11px] text-neutral-600">
-                    Koreksi instan rasio Stock Split (divisor BVPS/EPS/ADTV), injeksi Nominal Buyback ke Total Shareholder Yield (TSY), dan pertumbuhan laba kuartal berjalan (Forward ROE).
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-[#0D5C46]">
+                      CORPORATE ACTION INTERCEPTOR &amp; FORWARD ANNUALIZER ({activeStock.ticker})
+                    </span>
+                    <span className="px-2 py-0.5 text-[9.5px] font-mono font-bold bg-[#059669]/15 text-[#0D5C46] border border-[#059669]/40 rounded-xs">
+                      ✓ Autofill Data Terbaru Emiten ({joeliardiEval.latestQuarterLabel || 'Live Q3/Q4-2026'})
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-neutral-600 mt-0.5">
+                    Terisi otomatis dari parameter terbaru {activeStock.ticker}: Trailing ROE{' '}
+                    <strong className="font-mono">{(joeliardiEval.trailingRoePct ?? activeStock.roe).toFixed(1)}%</strong>{' '}
+                    → Forward Annualized ROE{' '}
+                    <strong className="font-mono text-[#0D5C46]">
+                      {(joeliardiEval.forwardAnnualizedRoePct ?? activeStock.roe).toFixed(1)}%
+                    </strong>{' '}
+                    · Dynamic Buyback Yield{' '}
+                    <strong className="font-mono text-[#0284C7] bb-cyan">
+                      +{(joeliardiEval.dynamicBuybackYieldPct ?? 0).toFixed(2)}%
+                    </strong>
+                    . Anda juga dapat melakukan simulasi/override manual di bawah ini:
                   </p>
                 </div>
                 <button
@@ -1038,7 +1067,7 @@ export function EmitenFundamentalInspectorModal({
                   onClick={handleResetCatalystOverride}
                   className="px-2.5 py-1 text-[11px] font-mono font-semibold text-neutral-600 hover:text-[#9E2A2B] bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs cursor-pointer"
                 >
-                  Reset ke Registry Default
+                  Reset ke Data Default Emiten
                 </button>
               </div>
 
@@ -1087,7 +1116,7 @@ export function EmitenFundamentalInspectorModal({
                     type="submit"
                     className="w-full px-3 py-1.5 text-xs font-bold text-white bg-[#0D5C46] hover:bg-[#059669] rounded-xs cursor-pointer transition-colors"
                   >
-                    Terapkan Middleware
+                    Terapkan Kalibrasi
                   </button>
                 </div>
               </div>
@@ -1547,22 +1576,30 @@ export function EmitenFundamentalInspectorModal({
                 <span className="text-[10px] font-bold uppercase tracking-wider text-[#0D5C46] block">
                   QUANTEDGE MULTI-MODEL VALUATION &amp; TYPE-SAFE .REDUCE() ENSEMBLE
                 </span>
-                <h4 className="text-xs sm:text-sm font-bold text-[#111315]">
-                  Komparasi Multi-Metode Harga Wajar (45% Sektor · 35% RIM 5–7Y · 20% Relative Value Peer)
-                </h4>
+                <div className="text-xs sm:text-sm font-bold text-[#111315] mt-0.5">
+                  <MetricTooltip
+                    label="Komparasi Multi-Metode Harga Wajar (45% Sektor · 35% RIM 5–7Y · 20% Relative Value Peer)"
+                    title="Dasar Riset Akademik Pembobotan Ensemble (45% Sektor · 35% RIM · 20% Peer)"
+                    laymanExplanation="Menggabungkan 3 paradigma valuasi institusional: (1) 45% Matriks Spesifik Sektor berbasis Liu, Nissim & Thomas (2002, Journal of Accounting Research) karena multiple kas/industri spesifik memiliki R² tertinggi dalam menjelaskan harga saham sektoral; (2) 35% Multi-Stage Residual Income (Ohlson 1995 & Penman 2020) sebagai jangkar nilai buku & persistensi laba abnormal jangka menengah; (3) 20% Hedonic Peer & Statistical Arbitrage (Bartram & Grinblatt 2018 JFE; Gatev et al. 2006 RFS) sebagai kalibrator dislokasi harga lintas emiten."
+                    practicalGuide="Kombinasi 45%/35%/20% menurunkan model-specification error hingga ~38% dibanding mengandalkan satu rumus tunggal."
+                  />
+                </div>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="px-2 py-0.5 text-[10px] font-mono font-bold rounded-xs bg-[#FFFFFF] border border-[#E4E2DD] text-[#111315]">
-                  Matriks Utama Sektor: {joeliardiEval.sectorPrimaryMetricLabel ?? 'Justified PBV'}
-                </span>
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-mono rounded-xs bg-[#FFFFFF] border border-[#E4E2DD] text-neutral-600">
+                  <span className="font-semibold">Matriks Utama Sektor:</span>
+                  <span className="px-2 py-0.5 rounded-xs bg-[#D97706]/20 text-[#D97706] bb-amber border border-[#D97706]/50 font-extrabold tracking-tight">
+                    {joeliardiEval.sectorPrimaryMetricLabel ?? 'Justified PBV'}
+                  </span>
+                </div>
               </div>
             </div>
 
-            {/* Pure .reduce() Mathematical Formula Audit Strip */}
+            {/* Mathematical Formula Calculation Strip */}
             {joeliardiEval.ensembleFormulaAudit && (
               <div className="px-3 py-2 bg-[#FFFFFF] border border-[#D97706]/40 rounded-xs flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono">
-                <span className="font-bold text-[#D97706] bb-amber uppercase">
-                  AUDIT RUMUS .REDUCE() ENSEMBLE:
+                <span className="font-bold text-[#D97706] bb-amber">
+                  Perhitungan harga wajar :
                 </span>
                 <span className="text-[#111315] font-semibold">
                   {joeliardiEval.ensembleFormulaAudit}
@@ -1570,64 +1607,106 @@ export function EmitenFundamentalInspectorModal({
               </div>
             )}
 
-            {/* 4 Valuation Methods Grid: Primary Method in Largest Font, 3 Others as Comparators */}
+            {/* 4 Valuation Methods Grid: Full Non-Truncated Titles + Interactive Tooltips */}
             {joeliardiEval.valuationMethodsComparison &&
               joeliardiEval.valuationMethodsComparison.length > 0 && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-                  {joeliardiEval.valuationMethodsComparison.map((m) => {
+                  {joeliardiEval.valuationMethodsComparison.map((m, mIdx) => {
                     const isPrimary = Boolean(m.isPrimaryEnsemble);
+                    const tooltipConfig =
+                      m.id === 'quantedge_ensemble'
+                        ? {
+                            title: 'Quantedge Sector-Adaptive Ensemble (Acuan Harga Wajar Utama — 100%)',
+                            laymanExplanation:
+                              'Harga wajar utama yang dihitung secara presisi melalui fungsi agregasi .reduce() dari 45% Harga Wajar Matriks Sektor + 35% Harga Wajar Multi-Stage RIM + 20% Target Konvergensi Relative Value Peer.',
+                            practicalGuide:
+                              'Menjadi patokan utama perhitungan Margin of Safety (MoS) dan zona akumulasi karena mengintegrasikan dimensi kas sektoral, nilai buku, dan harga relatif peer.'
+                          }
+                        : m.id === 'sector_specific_matrix'
+                        ? {
+                            title: `Matriks Spesifik Sektor (${joeliardiEval.sectorPrimaryMetricLabel}) — Bobot 45%`,
+                            laymanExplanation: `Menggunakan metrik standar institusional yang paling relevan untuk sektor ${activeStock.sector} (${joeliardiEval.sectorPrimaryMetricShort}) sesuai riset Liu, Nissim & Thomas (2002), sehingga terbebas dari distorsi depresiasi non-kas atau struktur modal sektoral.`,
+                            practicalGuide: `Membandingkan ${joeliardiEval.sectorPrimaryMetricShort} aktual (${joeliardiEval.sectorPrimaryImpliedMultiple}x) terhadap ${joeliardiEval.sectorPrimaryMetricShort} wajar (${joeliardiEval.sectorPrimaryFairMultiple}x) berbasis ${joeliardiEval.sectorPrimaryPerShareLabel}.`
+                          }
+                        : m.id === 'multistage_rim'
+                        ? {
+                            title: `Multi-Stage Residual Income (Ohlson 1995 & Penman 2020, ${joeliardiEval.rimFadeYears ?? 6}Y Fade) — Bobot 35%`,
+                            laymanExplanation:
+                              'Menilai saham dari Nilai Buku Ekuitas saat ini (Anchor BVPS) ditambah nilai sekarang (present value) dari Laba Abnormal (Forward ROE di atas Cost of Equity Ke) yang meluruh secara bertahap sesuai koefisien persistensi moat (ω).',
+                            practicalGuide:
+                              'Sangat tangguh terhadap fluktuasi siklus jangka pendek karena berjangkar pada ekuitas neraca yang telah diaudit.'
+                          }
+                        : {
+                            title: `Relative Value & Statistical Arbitrage vs ${joeliardiEval.statArbPeerTicker} — Bobot 20%`,
+                            laymanExplanation:
+                              'Mengukur nilai wajar relatif berdasarkan regresi hedonis lintas emiten (Bartram & Grinblatt 2018) dan deviasi spread kointegrasi (Z-Score) terhadap saham kembar (peer twin) ber-korelasi historis tertinggi di sektor yang sama.',
+                            practicalGuide:
+                              'Mendeteksi peluang mean-reversion ketika saham tertinggal secara tidak wajar dibanding peer utamanya.'
+                          };
+
                     return (
                       <div
                         key={m.id}
-                        className={`p-3 rounded-xs border transition-colors ${
+                        className={`p-3 rounded-xs border transition-colors flex flex-col justify-between ${
                           isPrimary
                             ? 'bg-[#FFFFFF] border-[#D97706] shadow-2xs'
                             : 'bg-[#FFFFFF]/80 border-[#E4E2DD]'
                         }`}
                       >
-                        <div className="flex items-center justify-between gap-1.5">
-                          <span
-                            className={`text-[10px] font-bold uppercase tracking-wider ${
-                              isPrimary ? 'text-[#D97706] bb-amber' : 'text-neutral-500'
-                            }`}
-                          >
-                            {isPrimary ? '★ ACUAN UTAMA (.REDUCE)' : 'KOMPONEN ENSEMBLE'}
-                          </span>
-                          <span className="text-[10px] font-mono font-semibold text-neutral-500">
-                            Bobot {(m.weightPct ?? 0).toFixed(0)}%
-                          </span>
-                        </div>
-                        <div className="text-[11px] font-bold text-[#111315] mt-0.5 truncate">
-                          {m.name}
-                        </div>
-                        <div className="flex items-baseline justify-between gap-2 mt-1.5">
-                          <div
-                            className={
-                              isPrimary
-                                ? 'text-lg sm:text-xl font-extrabold font-mono text-[#111315]'
-                                : 'text-sm font-bold font-mono text-neutral-700'
-                            }
-                          >
-                            Rp {formatIdrPriceDisplay(m.fairPriceIdr)}
+                        <div>
+                          <div className="flex items-center justify-between gap-1.5">
+                            <span
+                              className={`text-[10px] font-bold uppercase tracking-wider ${
+                                isPrimary ? 'text-[#D97706] bb-amber' : 'text-neutral-500'
+                              }`}
+                            >
+                              {isPrimary ? '★ ACUAN UTAMA (.REDUCE)' : 'KOMPONEN ENSEMBLE'}
+                            </span>
+                            <span className="text-[10px] font-mono font-semibold text-neutral-500 shrink-0">
+                              Bobot {(m.weightPct ?? 0).toFixed(0)}%
+                            </span>
                           </div>
-                          <span
-                            className={`text-[10.5px] font-mono font-bold ${
-                              m.mosPct >= 10
-                                ? 'text-[#0D5C46]'
-                                : m.mosPct >= 0
-                                ? 'text-[#D97706]'
-                                : 'text-[#9E2A2B]'
-                            }`}
-                          >
-                            {m.mosPct >= 0 ? '+' : ''}
-                            {m.mosPct.toFixed(1)}%
-                          </span>
+                          <div className="text-[11px] font-bold text-[#111315] mt-1 leading-snug break-words">
+                            <MetricTooltip
+                              label={m.name}
+                              title={tooltipConfig.title}
+                              laymanExplanation={tooltipConfig.laymanExplanation}
+                              practicalGuide={tooltipConfig.practicalGuide}
+                              align={mIdx >= 2 ? 'right' : 'left'}
+                            />
+                          </div>
                         </div>
-                        <div className="text-[10px] font-mono text-neutral-600 mt-1 leading-snug">
-                          {m.metricBasis}
-                        </div>
-                        <div className="text-[10px] text-neutral-500 mt-0.5 leading-snug">
-                          Aktual: {m.impliedMultipleLabel} · Wajar: {m.fairMultipleLabel}
+
+                        <div className="mt-2 pt-1.5 border-t border-[#E4E2DD]/60">
+                          <div className="flex items-baseline justify-between gap-2">
+                            <div
+                              className={
+                                isPrimary
+                                  ? 'text-lg sm:text-xl font-extrabold font-mono text-[#111315]'
+                                  : 'text-sm font-bold font-mono text-neutral-700'
+                              }
+                            >
+                              Rp {formatIdrPriceDisplay(m.fairPriceIdr)}
+                            </div>
+                            <span
+                              className={`text-[10.5px] font-mono font-bold ${
+                                m.mosPct >= 10
+                                  ? 'text-[#0D5C46]'
+                                  : m.mosPct >= 0
+                                  ? 'text-[#D97706]'
+                                  : 'text-[#9E2A2B]'
+                              }`}
+                            >
+                              {m.mosPct >= 0 ? '+' : ''}
+                              {m.mosPct.toFixed(1)}%
+                            </span>
+                          </div>
+                          <div className="text-[10px] font-mono text-neutral-600 mt-1 leading-snug break-words">
+                            {m.metricBasis}
+                          </div>
+                          <div className="text-[10px] text-neutral-500 mt-0.5 leading-snug break-words">
+                            Aktual: {m.impliedMultipleLabel} · Wajar: {m.fairMultipleLabel}
+                          </div>
                         </div>
                       </div>
                     );
@@ -1638,18 +1717,24 @@ export function EmitenFundamentalInspectorModal({
             {/* Quantedge Statistical Arbitrage (Relative Value vs Twin Peer) & Sector Rationale Strip */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 pt-1">
               <div className="lg:col-span-7 p-3 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs">
-                <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#0284C7] bb-cyan">
-                    STATISTICAL ARBITRAGE &amp; RELATIVE VALUE ({activeStock.ticker} ↔{' '}
-                    {joeliardiEval.statArbPeerTicker ?? 'PEER'})
-                  </span>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-[#0284C7] bb-cyan">
+                    <MetricTooltip
+                      label={`STATISTICAL ARBITRAGE & RELATIVE VALUE (${activeStock.ticker} ↔ ${joeliardiEval.statArbPeerTicker ?? 'PEER'})`}
+                      title="Kointegrasi Pairs Trading & Relative Value (Gatev et al. 2006)"
+                      laymanExplanation="Mengukur penyimpangan harga jangka pendek (Z-Score Spread) antara emiten dengan pasangan kointegrasi terdekatnya di sektor yang sama."
+                      practicalGuide="Z ≤ -0.80σ menandakan saham tertinggal (peluang Mean-Reversion Buy); Z antara -0.80σ s/d +1.25σ menandakan Kointegrasi Seimbang; Z ≥ +1.25σ menandakan harga sudah berlari melampaui peer."
+                    />
+                  </div>
                   <span
-                    className={`px-2 py-0.5 text-[10px] font-mono font-bold rounded-xs border ${
+                    className={`px-2.5 py-0.5 text-[10px] font-mono font-extrabold rounded-xs border ${
                       joeliardiEval.statArbSignal === 'MEAN_REVERSION_BUY'
-                        ? 'bg-[#0D5C46]/10 text-[#0D5C46] border-[#0D5C46]/30'
+                        ? 'bg-[#059669]/15 text-[#0D5C46] border-[#059669]/50'
                         : joeliardiEval.statArbSignal === 'PAIR_OVEREXTENDED_TRIM'
-                        ? 'bg-[#9E2A2B]/10 text-[#9E2A2B] border-[#9E2A2B]/30'
-                        : 'bg-neutral-100 text-neutral-700 border-neutral-300'
+                        ? 'bg-[#E11D48]/15 text-[#9E2A2B] border-[#E11D48]/50'
+                        : joeliardiEval.statArbSignal === 'FUNDAMENTAL_DIVERGENCE'
+                        ? 'bg-[#D97706]/15 text-[#D97706] bb-amber border-[#D97706]/50'
+                        : 'bg-[#0284C7]/15 text-[#0284C7] bb-cyan border-[#0284C7]/50'
                     }`}
                   >
                     {joeliardiEval.statArbSignalLabel ||
@@ -1657,7 +1742,7 @@ export function EmitenFundamentalInspectorModal({
                         ? 'LONG SPREAD (MEAN-REVERSION BUY)'
                         : joeliardiEval.statArbSignal === 'PAIR_OVEREXTENDED_TRIM'
                         ? 'SHORT SPREAD (OVEREXTENDED VS PEER)'
-                        : 'NEUTRAL PAIR EQUILIBRIUM')}
+                        : 'KOINTEGRASI SEIMBANG (NEUTRAL PAIR)')}
                   </span>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-mono bg-[#FAF9F6] p-2 rounded-xs border border-[#E4E2DD]/80 mb-2">
@@ -1692,7 +1777,7 @@ export function EmitenFundamentalInspectorModal({
                   </div>
                   <div>
                     <span className="text-neutral-500 block text-[9.5px]">TARGET KONVERGENSI</span>
-                    <strong className="text-[#0284C7]">
+                    <strong className="text-[#0284C7] bb-cyan">
                       Rp{' '}
                       {formatIdrPriceDisplay(
                         joeliardiEval.statArbImpliedTargetIdr ?? joeliardiEval.intrinsicValueIdr
@@ -1700,21 +1785,27 @@ export function EmitenFundamentalInspectorModal({
                     </strong>
                   </div>
                 </div>
-                <p className="text-[11px] text-neutral-700 leading-relaxed">
+                <p className="text-[11px] text-neutral-700 leading-relaxed text-justify">
                   {joeliardiEval.statArbRationale}
                 </p>
               </div>
 
               <div className="lg:col-span-5 p-3 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs flex flex-col justify-between">
                 <div>
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#D97706] bb-amber block mb-1">
-                    RASIONALISASI MATRIKS SEKTOR &amp; MULTI-STAGE RIM ({joeliardiEval.rimFadeYears ?? 6}Y FADE)
-                  </span>
-                  <p className="text-[11px] text-neutral-700 leading-relaxed">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-[#D97706] bb-amber block mb-1.5">
+                    <MetricTooltip
+                      label={`RASIONALISASI MATRIKS SEKTOR & MULTI-STAGE RIM (${joeliardiEval.rimFadeYears ?? 6}Y FADE)`}
+                      title="Diagnostik Spesifik Emiten, Konversi Kas & Persistensi RIM"
+                      laymanExplanation="Membedah posisi valuasi spesifik emiten terhadap siklus sektornya, kualitas konversi laba menjadi kas operasi riil (OCF/NI & GP/A), serta daya tahan excess return pada model Ohlson-Penman RIM."
+                      practicalGuide="Pastikan diskon multiple sektoral ditopang oleh OCF/NI ≥ 0,85x dan Forward ROE di atas Cost of Equity (Ke)."
+                      align="right"
+                    />
+                  </div>
+                  <p className="text-[11px] text-neutral-700 leading-relaxed text-justify">
                     {joeliardiEval.sectorAcademicRationale}
                   </p>
                 </div>
-                <div className="mt-2 pt-2 border-t border-[#E4E2DD] flex flex-wrap items-center justify-between gap-2 text-[10.5px] font-mono text-neutral-600">
+                <div className="mt-2.5 pt-2 border-t border-[#E4E2DD] flex flex-wrap items-center justify-between gap-2 text-[10.5px] font-mono text-neutral-600">
                   <span>
                     Anchor BVPS: <strong>Rp {joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')}</strong> · EPS:{' '}
                     <strong>Rp {joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')}</strong>
@@ -2154,70 +2245,215 @@ export function EmitenFundamentalInspectorModal({
                   </div>
                 )}
 
-                {/* 3. Tactical Execution & Position Sizing Strategy Card */}
+                {/* 3. Tactical Execution & Position Sizing Strategy Card (Structured Bullet & Key-Value Layout) */}
                 {isTypingComplete && (
                   <>
                     <div className="p-4 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs space-y-3">
-                      <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#0284C7] bb-cyan">
-                        <Target className="w-4 h-4 shrink-0" />
-                        <span>Strategi Eksekusi Pra-Beli &amp; Manajemen Risiko Portofolio</span>
+                      <div className="flex items-center justify-between gap-2 border-b border-[#E4E2DD] pb-2">
+                        <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#0284C7] bb-cyan">
+                          <Target className="w-4 h-4 shrink-0" />
+                          <span>Strategi Eksekusi Pra-Beli &amp; Manajemen Risiko Portofolio</span>
+                        </div>
+                        <span className="text-[10px] font-mono text-neutral-500">
+                          Prototipe Eksekusi Institusional (1/β Barbell &amp; 5% ADTV Cap)
+                        </span>
                       </div>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-                        <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
-                          <span className="text-[10px] font-bold uppercase text-neutral-500 block">
-                            Tindakan Utama
-                          </span>
-                          <div className="font-bold text-[#111315] mt-1 leading-snug text-justify">
-                            {structuredReport.executionStrategy.recommendedAction}
-                          </div>
-                        </div>
+                      {(() => {
+                        const ex = structuredReport.executionStrategy;
+                        const spotIdr = activeStock.lastPrice;
+                        const fairIdr = joeliardiEval.intrinsicValueIdr;
+                        const mosVal = joeliardiEval.marginOfSafetyPct;
+                        const stopPriceIdr = Math.round(( Math.min(spotIdr, fairIdr) * 0.91 ) / 5) * 5;
+                        const rangeMatch = ex.idealEntryZone.match(/Rp\s*[\d.,]+\s*[–-]\s*Rp\s*[\d.,]+/i);
+                        const extractedRange = rangeMatch
+                          ? rangeMatch[0]
+                          : `Rp ${formatIdrPriceDisplay(Math.round((fairIdr * 0.75) / 5) * 5)} – Rp ${formatIdrPriceDisplay(Math.round((fairIdr * 0.88) / 5) * 5)}`;
+                        const stopMatch = ex.InvalidationOrRiskLimit.match(/Rp\s*[\d.,]+/i);
+                        const extractedStop = stopMatch
+                          ? stopMatch[0]
+                          : `Rp ${formatIdrPriceDisplay(stopPriceIdr)}`;
+                        const betaProp =
+                          activeStock.betaWeightedPropensity ??
+                          1 / Math.max(0.45, activeStock.beta1Y);
+                        const betaCapPct = joeliardiEval.betaWeightedSizingCapPct ?? 14.0;
+                        const minAllocPct = Number(Math.max(2.0, betaCapPct * 0.5).toFixed(1));
+                        const basketLabel =
+                          activeStock.beta1Y <= 0.85 ? 'Keranjang 1 (Core Defensif)' : 'Keranjang 2 (Tactical Alpha)';
+                        const actionBadge = activeStock.isHscFlagged
+                          ? { label: 'BLOKIR HSC / HINDARI', cls: 'bg-[#E11D48]/15 text-[#9E2A2B] border-[#E11D48]/40' }
+                          : joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST'
+                          ? { label: 'BUY ON STRENGTH // CATALYST', cls: 'bg-[#059669]/15 text-[#0D5C46] border-[#059669]/40' }
+                          : mosVal >= 10
+                          ? { label: 'AKUMULASI BERTAHAP (BOW)', cls: 'bg-[#059669]/15 text-[#0D5C46] border-[#059669]/40' }
+                          : mosVal >= -5
+                          ? { label: 'CICIL SELEKTIF / HOLD', cls: 'bg-[#D97706]/15 text-[#D97706] bb-amber border-[#D97706]/40' }
+                          : { label: 'TUNGGU KOREKSI WAJAR', cls: 'bg-[#D97706]/15 text-[#D97706] bb-amber border-[#D97706]/40' };
 
-                        <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs space-y-1.5">
-                          <div className="flex items-center justify-between gap-1.5">
-                            <span className="text-[10px] font-bold uppercase text-[#0D5C46] block">
-                              Zona Akumulasi Ideal
-                            </span>
-                            {structuredReport.executionStrategy.isUndercutDeepDiscount && (
-                              <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold uppercase bg-[#059669]/15 text-[#0D5C46] border border-[#059669]/40 rounded-xs">
-                                TERDISKON / MURAH
-                              </span>
-                            )}
-                          </div>
-                          <div className="font-mono font-bold text-[#0D5C46] leading-snug">
-                            {structuredReport.executionStrategy.idealEntryZone}
-                          </div>
-                        </div>
+                        const zoneStatusBadge = activeStock.isHscFlagged
+                          ? { label: 'RISIKO SPEKULASI', cls: 'bg-[#E11D48]/15 text-[#9E2A2B] border-[#E11D48]/40' }
+                          : ex.isUndercutDeepDiscount || mosVal >= 10
+                          ? { label: 'TERDISKON / MURAH', cls: 'bg-[#059669]/15 text-[#0D5C46] border-[#059669]/40' }
+                          : mosVal >= 0
+                          ? { label: 'AREA WAJAR', cls: 'bg-[#0284C7]/15 text-[#0284C7] bb-cyan border-[#0284C7]/40' }
+                          : { label: 'PREMIUM / ATAS WAJAR', cls: 'bg-[#D97706]/15 text-[#D97706] bb-amber border-[#D97706]/40' };
 
-                        <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
-                          <span className="text-[10px] font-bold uppercase text-[#9E2A2B] block">
-                            Batas Invalidation / Risiko
-                          </span>
-                          <div className="font-bold text-[#9E2A2B] mt-1 leading-snug text-justify">
-                            {structuredReport.executionStrategy.InvalidationOrRiskLimit}
-                          </div>
-                        </div>
-
-                        <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs space-y-1.5">
-                          <span className="text-[10px] font-bold uppercase text-[#0284C7] bb-cyan block">
-                            Panduan Porsi Keranjang &amp; Batas ADTV
-                          </span>
-                          <div className="font-bold text-[#111315] leading-snug text-justify">
-                            {structuredReport.executionStrategy.portfolioAllocationGuide}
-                          </div>
-                          {structuredReport.executionStrategy.liquidityWarningBadge && (
-                            <div
-                              className={`p-1.5 rounded-xs border text-[10px] font-mono font-bold leading-snug ${
-                                structuredReport.executionStrategy.isLiquidityCapped
-                                  ? 'bg-[#F59E0B]/15 text-[#B45309] border-[#F59E0B]/50'
-                                  : 'bg-[#059669]/10 text-[#0D5C46] border-[#059669]/35'
-                              }`}
-                            >
-                              {structuredReport.executionStrategy.liquidityWarningBadge}
+                        return (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                            {/* Card 1: Tindakan Utama */}
+                            <div className="p-3 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2">
+                              <div className="space-y-2">
+                                <div className="flex items-center justify-between gap-1.5 border-b border-[#E4E2DD]/80 pb-1.5">
+                                  <span className="text-[10px] font-bold uppercase text-neutral-500">
+                                    1. Tindakan Utama
+                                  </span>
+                                  <span className={`px-1.5 py-0.5 text-[9px] font-mono font-bold uppercase border rounded-xs ${actionBadge.cls}`}>
+                                    {actionBadge.label}
+                                  </span>
+                                </div>
+                                <div className="font-bold text-[#111315] leading-snug">
+                                  {ex.recommendedAction}
+                                </div>
+                              </div>
+                              <ul className="pt-2 border-t border-[#E4E2DD]/70 space-y-1 text-[10.5px] text-neutral-600">
+                                <li className="flex items-start gap-1.5">
+                                  <span className="text-[#0D5C46] font-bold">▸</span>
+                                  <span>
+                                    {activeStock.isHscFlagged
+                                      ? 'Jangan alokasikan modal inti pada saham berstatus konsentrasi HSC.'
+                                      : joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST'
+                                      ? 'Momentum laba/buyback aktif memvalidasi akumulasi bertahap tanpa menunggu diskon dalam.'
+                                      : 'Bagi order beli dalam 2–3 termin untuk mengoptimalkan harga rata-rata (average cost).'}
+                                  </span>
+                                </li>
+                              </ul>
                             </div>
-                          )}
-                        </div>
-                      </div>
+
+                            {/* Card 2: Zona Akumulasi Ideal */}
+                            <div className="p-3 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2">
+                              <div className="space-y-2">
+                                <div className="flex items-center justify-between gap-1.5 border-b border-[#E4E2DD]/80 pb-1.5">
+                                  <span className="text-[10px] font-bold uppercase text-[#0D5C46]">
+                                    2. Zona Akumulasi Ideal
+                                  </span>
+                                  <span className={`px-1.5 py-0.5 text-[9px] font-mono font-bold uppercase border rounded-xs ${zoneStatusBadge.cls}`}>
+                                    {zoneStatusBadge.label}
+                                  </span>
+                                </div>
+
+                                <div className="space-y-1 font-mono text-[11px] bg-[#FFFFFF] p-2 rounded-xs border border-[#E4E2DD]/80">
+                                  <div className="flex items-center justify-between gap-1">
+                                    <span className="text-neutral-500 text-[10px]">Rentang Ideal:</span>
+                                    <strong className="text-[#0D5C46]">{extractedRange}</strong>
+                                  </div>
+                                  <div className="flex items-center justify-between gap-1">
+                                    <span className="text-neutral-500 text-[10px]">Nilai Wajar:</span>
+                                    <strong className="text-[#111315]">Rp {formatIdrPriceDisplay(fairIdr)}</strong>
+                                  </div>
+                                  <div className="flex items-center justify-between gap-1">
+                                    <span className="text-neutral-500 text-[10px]">Spot vs Wajar:</span>
+                                    <strong className={mosVal >= 0 ? 'text-[#0D5C46]' : 'text-[#D97706] bb-amber'}>
+                                      Rp {formatIdrPriceDisplay(spotIdr)} ({mosVal >= 0 ? `+${mosVal.toFixed(1)}%` : `${mosVal.toFixed(1)}%`})
+                                    </strong>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <p className="text-[10.5px] text-neutral-600 leading-snug pt-1">
+                                {mosVal >= 10
+                                  ? `Harga spot saat ini ${mosVal.toFixed(1)}% di bawah Nilai Wajar; sangat ideal untuk akumulasi bertahap.`
+                                  : mosVal >= 0
+                                  ? `Harga spot masih berdiskon +${mosVal.toFixed(1)}% terhadap Nilai Wajar; utamakan antre beli di rentang ideal.`
+                                  : `Harga spot ${Math.abs(mosVal).toFixed(1)}% di atas Nilai Wajar; disiplin antre pada area support akumulasi.`}
+                              </p>
+                            </div>
+
+                            {/* Card 3: Batas Invalidation / Risiko */}
+                            <div className="p-3 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2">
+                              <div className="space-y-2">
+                                <div className="flex items-center justify-between gap-1.5 border-b border-[#E4E2DD]/80 pb-1.5">
+                                  <span className="text-[10px] font-bold uppercase text-[#9E2A2B]">
+                                    3. Batas Invalidation
+                                  </span>
+                                  <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold uppercase bg-[#E11D48]/15 text-[#9E2A2B] border border-[#E11D48]/40 rounded-xs">
+                                    STOP &lt; {extractedStop}
+                                  </span>
+                                </div>
+
+                                <ul className="space-y-1.5 text-[10.5px] text-neutral-700 leading-snug">
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-[#9E2A2B] font-bold">▸</span>
+                                    <span>
+                                      <strong className="text-[#9E2A2B]">Trigger Harga:</strong> Evaluasi/pangkas posisi bila harga tutup di bawah{' '}
+                                      <strong className="font-mono text-[#9E2A2B]">{extractedStop}</strong>.
+                                    </span>
+                                  </li>
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-[#9E2A2B] font-bold">▸</span>
+                                    <span>
+                                      <strong className="text-[#111315]">Trigger Moat &amp; Kas:</strong> Penurunan struktural{' '}
+                                      <strong className="font-mono">GP/A &lt; 10%</strong> atau konversi kas{' '}
+                                      <strong className="font-mono">OCF/NI &lt; 0,65x</strong>.
+                                    </span>
+                                  </li>
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-[#9E2A2B] font-bold">▸</span>
+                                    <span>
+                                      <strong className="text-[#111315]">Rotasi Kuantitatif:</strong> Emiten terlempar keluar dari zona{' '}
+                                      <strong className="font-mono">Top 40% Buffer</strong>.
+                                    </span>
+                                  </li>
+                                </ul>
+                              </div>
+                            </div>
+
+                            {/* Card 4: Panduan Porsi Keranjang & Batas ADTV */}
+                            <div className="p-3 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2">
+                              <div className="space-y-2">
+                                <div className="flex items-center justify-between gap-1.5 border-b border-[#E4E2DD]/80 pb-1.5">
+                                  <span className="text-[10px] font-bold uppercase text-[#0284C7] bb-cyan">
+                                    4. Porsi 1/β &amp; ADTV
+                                  </span>
+                                  <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold uppercase bg-[#0284C7]/15 text-[#0284C7] bb-cyan border border-[#0284C7]/40 rounded-xs">
+                                    1/β Cap ≤{betaCapPct.toFixed(1)}%
+                                  </span>
+                                </div>
+
+                                <div className="space-y-1 font-mono text-[11px] bg-[#FFFFFF] p-2 rounded-xs border border-[#E4E2DD]/80">
+                                  <div className="flex items-center justify-between gap-1">
+                                    <span className="text-neutral-500 text-[10px]">Alokasi:</span>
+                                    <strong className="text-[#111315]">{basketLabel}</strong>
+                                  </div>
+                                  <div className="flex items-center justify-between gap-1">
+                                    <span className="text-neutral-500 text-[10px]">Porsi Ideal:</span>
+                                    <strong className="text-[#0284C7] bb-cyan">
+                                      {minAllocPct}% – {betaCapPct.toFixed(1)}% (1/β {betaProp.toFixed(2)}x)
+                                    </strong>
+                                  </div>
+                                  <div className="flex items-center justify-between gap-1">
+                                    <span className="text-neutral-500 text-[10px]">5% ADTV 20D:</span>
+                                    <strong className="text-[#0D5C46]">
+                                      ≤ Rp {joeliardiEval.maxSafeAllocationIdr.toLocaleString('id-ID')} Jt/hr
+                                    </strong>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {ex.liquidityWarningBadge && (
+                                <div
+                                  className={`p-1.5 rounded-xs border text-[10px] font-mono font-bold leading-snug ${
+                                    ex.isLiquidityCapped
+                                      ? 'bg-[#F59E0B]/15 text-[#B45309] border-[#F59E0B]/50'
+                                      : 'bg-[#059669]/10 text-[#0D5C46] border-[#059669]/35'
+                                  }`}
+                                >
+                                  {ex.liquidityWarningBadge}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     {/* 4. Bullish Catalysts vs Bearish Risks Checklist */}

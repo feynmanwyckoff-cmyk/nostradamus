@@ -683,41 +683,128 @@ export function renderInspectorReportCanvas(
     cotRowHeights.reduce((acc, h) => acc + h, 0) +
     Math.max(0, cotRowHeights.length - 1) * 12;
 
-  // Pre-measure Execution Strategy 4 cards so no text is ever cut off
+  // Pre-measure Structured Execution Strategy 4 cards so no text is ever cut off
   const ex = structuredReport?.executionStrategy;
   const exW = (LOGICAL_WIDTH - 112 - 12 * 3) / 4;
   let exCardH = 0;
+
+  const spotIdr = stock.lastPrice;
+  const fairIdr = joeliardiEval.intrinsicValueIdr;
+  const mosVal = joeliardiEval.marginOfSafetyPct;
+  const stopPriceIdr = Math.round((Math.min(spotIdr, fairIdr) * 0.91) / 5) * 5;
+  const rangeMatch = ex?.idealEntryZone?.match(/Rp\s*[\d.,]+\s*[–-]\s*Rp\s*[\d.,]+/i);
+  const extractedRange = rangeMatch
+    ? rangeMatch[0]
+    : `Rp ${formatIdrPriceDisplay(Math.round((fairIdr * 0.75) / 5) * 5)} – Rp ${formatIdrPriceDisplay(Math.round((fairIdr * 0.88) / 5) * 5)}`;
+  const stopMatch = ex?.InvalidationOrRiskLimit?.match(/Rp\s*[\d.,]+/i);
+  const extractedStop = stopMatch ? stopMatch[0] : `Rp ${formatIdrPriceDisplay(stopPriceIdr)}`;
+  const betaProp = stock.betaWeightedPropensity ?? 1 / Math.max(0.45, stock.beta1Y);
+  const betaCapPct = joeliardiEval.betaWeightedSizingCapPct ?? 14.0;
+  const minAllocPct = Number(Math.max(2.0, betaCapPct * 0.5).toFixed(1));
+  const basketLabel = stock.beta1Y <= 0.85 ? 'Keranjang 1 (Core Defensif)' : 'Keranjang 2 (Tactical Alpha)';
+
   const exCols = ex
     ? [
-        { label: 'TINDAKAN UTAMA', val: ex.recommendedAction, color: '#F3F4F6' },
         {
-          label: 'ZONA AKUMULASI IDEAL',
-          val: normalizeExportAccumulationZone(ex.idealEntryZone, stock, joeliardiEval),
+          label: '1. TINDAKAN UTAMA',
+          badge: stock.isHscFlagged
+            ? 'BLOKIR HSC'
+            : joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST'
+            ? 'BUY ON STRENGTH'
+            : mosVal >= 10
+            ? 'AKUMULASI BOW'
+            : 'SELEKTIF / HOLD',
+          badgeColor: stock.isHscFlagged ? '#FB7185' : mosVal >= 0 ? '#34D399' : '#FBBF24',
+          lines: [
+            ex.recommendedAction,
+            stock.isHscFlagged
+              ? '▸ Hindari alokasi modal inti pada saham HSC.'
+              : joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST'
+              ? '▸ Katalis aktif memvalidasi akumulasi momentum.'
+              : '▸ Bagi order beli dalam 2–3 termin bertahap.'
+          ],
+          color: '#F3F4F6'
+        },
+        {
+          label: '2. ZONA AKUMULASI IDEAL',
+          badge: stock.isHscFlagged
+            ? 'SPEKULATIF'
+            : ex.isUndercutDeepDiscount || mosVal >= 10
+            ? 'TERDISKON / MURAH'
+            : mosVal >= 0
+            ? 'AREA WAJAR'
+            : 'PREMIUM',
+          badgeColor: stock.isHscFlagged ? '#FB7185' : mosVal >= 10 ? '#34D399' : mosVal >= 0 ? '#38BDF8' : '#FBBF24',
+          lines: [
+            `▸ Rentang Ideal: ${extractedRange}`,
+            `▸ Nilai Wajar: Rp ${formatIdrPriceDisplay(fairIdr)}`,
+            `▸ Spot: Rp ${formatIdrPriceDisplay(spotIdr)} (MoS ${mosVal >= 0 ? '+' : ''}${mosVal.toFixed(1)}%)`,
+            mosVal >= 10
+              ? 'Diskon sangat ideal untuk akumulasi bertahap.'
+              : mosVal >= 0
+              ? 'Masih di bawah Nilai Wajar; cicil di rentang ideal.'
+              : 'Di atas Nilai Wajar; disiplin antre saat koreksi.'
+          ],
           color: '#34D399'
         },
         {
-          label: 'BATAS RISIKO / INVALIDATION',
-          val: ex.InvalidationOrRiskLimit,
+          label: '3. BATAS INVALIDATION',
+          badge: `STOP < ${extractedStop}`,
+          badgeColor: '#FB7185',
+          lines: [
+            `▸ Trigger Harga: Tutup di bawah ${extractedStop}`,
+            '▸ Trigger Moat: GP/A < 10% atau OCF/NI < 0,65x',
+            '▸ Rotasi Quant: Keluar dari zona Top 40% Buffer'
+          ],
           color: '#FB7185'
         },
         {
-          label: 'PANDUAN PORSI KERANJANG & ADTV',
-          val: ex.liquidityWarningBadge
-            ? `${ex.portfolioAllocationGuide} — ${ex.liquidityWarningBadge}`
-            : ex.portfolioAllocationGuide,
+          label: '4. PORSI 1/β & ADTV',
+          badge: `1/β Cap ≤${betaCapPct.toFixed(1)}%`,
+          badgeColor: '#38BDF8',
+          lines: [
+            `▸ ${basketLabel}`,
+            `▸ Porsi Ideal: ${minAllocPct}% – ${betaCapPct.toFixed(1)}% (1/β ${betaProp.toFixed(2)}x)`,
+            `▸ 5% ADTV 20D: ≤ Rp ${joeliardiEval.maxSafeAllocationIdr.toLocaleString('id-ID')} Jt/hr`,
+            ex.liquidityWarningBadge || '✓ LIQUIDITY VERIFIED: Kapasitas 5% ADTV Aman'
+          ],
           color: ex.isLiquidityCapped ? '#FBBF24' : '#38BDF8'
         }
       ].map((col) => {
-        sCtx.font = '600 10.5px Montserrat, sans-serif';
-        const wrapped = wrapCanvasText(sCtx, col.val, exW - 22);
+        sCtx.font = '600 10px Montserrat, sans-serif';
+        const wrapped: string[] = [];
+        col.lines.forEach((ln) => {
+          const wLines = wrapCanvasText(sCtx, ln, exW - 22);
+          wrapped.push(...wLines);
+        });
         return { ...col, wrapped };
       })
     : [];
 
   if (exCols.length > 0) {
     const maxExLines = Math.max(...exCols.map((c) => c.wrapped.length));
-    exCardH = Math.max(86, 36 + maxExLines * 15.5 + 12);
+    exCardH = Math.max(104, 40 + maxExLines * 14.5 + 12);
   }
+
+  // Pre-measure StatArb & Sector Rationale boxes in Row 3B so nothing clips
+  const statArbBoxW = Math.round((LOGICAL_WIDTH - 76 - 14) * 0.56);
+  const secRatBoxW = LOGICAL_WIDTH - 76 - 14 - statArbBoxW;
+  sCtx.font = '500 10px Montserrat, sans-serif';
+  const statArbRatLines = wrapCanvasText(
+    sCtx,
+    joeliardiEval.statArbRationale || '',
+    statArbBoxW - 24
+  );
+  const secRatLines = wrapCanvasText(
+    sCtx,
+    joeliardiEval.sectorAcademicRationale || '',
+    secRatBoxW - 24
+  );
+  const statArbAndRatRowH = Math.max(
+    118,
+    Math.max(66 + statArbRatLines.length * 14.5, 42 + secRatLines.length * 14.5 + 26)
+  );
+  const multiMethodSectionH = 38 + 86 + 10 + statArbAndRatRowH + 14;
 
   // Measure verdictTitle wrapping
   const verdictBadge = structuredReport?.verdictBadge || joeliardiEval.convictionGrade;
@@ -793,7 +880,7 @@ export function renderInspectorReportCanvas(
     102 +
     132 +
     80 + // Row 3 Academic Strip
-    84 + // Row 3B Multi-Method Fair Value & Quantedge Statistical Arbitrage Strip
+    multiMethodSectionH + // Row 3B Full Multi-Method Fair Value, Formula Bar, StatArb & Sector Rationale
     aiBoxH +
     18 +
     totalNewsSectionH +
@@ -1239,8 +1326,9 @@ export function renderInspectorReportCanvas(
 
   curY += 80;
 
-  // 7B. Row 3B: Multi-Method Fair Value Comparison & Quantedge Statistical Arbitrage Strip
+  // 7B. Row 3B: Multi-Method Fair Value Comparison, Formula Calculation Strip, StatArb & Sector Rationale
   const secShortLabel = joeliardiEval.sectorPrimaryMetricShort ?? 'PBV';
+  const secFullLabel = joeliardiEval.sectorPrimaryMetricLabel ?? 'Damodaran Justified PBV';
   const secFairIdr = joeliardiEval.sectorSpecificFairValueIdr ?? joeliardiEval.intrinsicValueIdr;
   const rimFairIdr = joeliardiEval.rimFairValueIdr ?? joeliardiEval.intrinsicValueIdr;
   const statArbFairIdr = joeliardiEval.statArbImpliedTargetIdr ?? joeliardiEval.intrinsicValueIdr;
@@ -1248,72 +1336,262 @@ export function renderInspectorReportCanvas(
   const zScoreVal = joeliardiEval.statArbZScore ?? 0;
   const rhoVal = joeliardiEval.statArbCorrelation ?? 0.85;
 
+  // Formula Calculation & Highlighted Sector Primary Metric Strip ("Perhitungan harga wajar :")
+  drawRoundedRect(ctx, 38, curY, LOGICAL_WIDTH - 76, 30, 4);
+  ctx.fillStyle = '#141B26';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(245, 158, 11, 0.45)';
+  ctx.stroke();
+
+  ctx.fillStyle = '#F59E0B';
+  ctx.font = '700 10.5px "Fira Code", monospace';
+  ctx.fillText('Perhitungan harga wajar :', 50, curY + 19);
+
+  const formulaStr =
+    joeliardiEval.ensembleFormulaAudit ||
+    `(Rp ${formatIdrPriceDisplay(secFairIdr)} × 45%) + (Rp ${formatIdrPriceDisplay(rimFairIdr)} × 35%) + (Rp ${formatIdrPriceDisplay(statArbFairIdr)} × 20%) = Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)}`;
+  ctx.fillStyle = '#F9FAFB';
+  drawTextAutoFit(ctx, formulaStr, 224, curY + 19, 520, 700, 10.5, 8.5, '"Fira Code", monospace');
+
+  // Right-aligned Highlighted Badge for Selected Sector Primary Metric
+  ctx.font = '700 9.5px "Fira Code", monospace';
+  const secMetricBadgeW = ctx.measureText(secFullLabel).width + 16;
+  const secMetricBadgeX = LOGICAL_WIDTH - 48 - secMetricBadgeW;
+  ctx.fillStyle = '#9CA3AF';
+  ctx.textAlign = 'right';
+  ctx.fillText('Matriks Utama Sektor:', secMetricBadgeX - 8, curY + 19);
+  ctx.textAlign = 'left';
+
+  drawRoundedRect(ctx, secMetricBadgeX, curY + 5, secMetricBadgeW, 20, 3);
+  ctx.fillStyle = 'rgba(217, 119, 6, 0.22)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(245, 158, 11, 0.65)';
+  ctx.stroke();
+  ctx.fillStyle = '#FBBF24';
+  ctx.fillText(secFullLabel, secMetricBadgeX + 8, curY + 18.5);
+
+  curY += 38;
+
+  const calcMethodMos = (fIdr: number) =>
+    Number((((fIdr - stock.lastPrice) / Math.max(1, fIdr)) * 100).toFixed(1));
+
   const multiMethodStrip = [
     {
-      label: '★ HARGA WAJAR UTAMA (QUANTEDGE)',
+      kicker: '★ ACUAN UTAMA (.REDUCE) · 100%',
+      title: 'Quantedge Sector-Adaptive Ensemble',
       main: `Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)}`,
-      sub: `Acuan Terakurat (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct.toFixed(1)}%)`,
+      mosPct: joeliardiEval.marginOfSafetyPct,
+      sub: `45% ${secShortLabel} + 35% RIM (${joeliardiEval.rimFadeYears ?? 6}Y) + 20% RelVal`,
       color: '#FBBF24',
       isPrimary: true
     },
     {
-      label: `PEMBANDING 1: MATRIKS SEKTOR (${secShortLabel})`,
+      kicker: 'KOMPONEN ENSEMBLE · BOBOT 45%',
+      title: `Matriks Spesifik Sektor: ${secFullLabel}`,
       main: `Rp ${formatIdrPriceDisplay(secFairIdr)}`,
-      sub: `${secShortLabel} ${joeliardiEval.sectorPrimaryImpliedMultiple ?? joeliardiEval.impliedPbv}x vs Wajar ${joeliardiEval.sectorPrimaryFairMultiple ?? justPbv}x`,
+      mosPct: calcMethodMos(secFairIdr),
+      sub: `${secShortLabel} Aktual ${joeliardiEval.sectorPrimaryImpliedMultiple ?? joeliardiEval.impliedPbv}x vs Wajar ${joeliardiEval.sectorPrimaryFairMultiple ?? justPbv}x`,
       color: '#34D399',
       isPrimary: false
     },
     {
-      label: `PEMBANDING 2: MULTI-STAGE RIM (${joeliardiEval.rimFadeYears ?? 6}Y)`,
+      kicker: 'KOMPONEN ENSEMBLE · BOBOT 35%',
+      title: `Multi-Stage Residual Income (Ohlson-Penman ${joeliardiEval.rimFadeYears ?? 6}Y)`,
       main: `Rp ${formatIdrPriceDisplay(rimFairIdr)}`,
-      sub: `Ohlson-Penman ω=${(joeliardiEval.rimPersistenceOmega ?? 0.72).toFixed(2)} · BVPS Rp ${joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')}`,
+      mosPct: calcMethodMos(rimFairIdr),
+      sub: `BVPS Rp ${joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')} · Fwd ROE ${(joeliardiEval.forwardAnnualizedRoePct ?? stock.roe).toFixed(1)}% · ω=${(joeliardiEval.rimPersistenceOmega ?? 0.72).toFixed(2)}`,
       color: '#38BDF8',
       isPrimary: false
     },
     {
-      label: `PEMBANDING 3: RELATIVE VALUE (${stock.ticker}↔${peerTkr})`,
+      kicker: 'KOMPONEN ENSEMBLE · BOBOT 20%',
+      title: `Relative Value & StatArb vs ${peerTkr} (ρ=${rhoVal.toFixed(2)})`,
       main: `Rp ${formatIdrPriceDisplay(statArbFairIdr)}`,
-      sub: `StatArb Z=${zScoreVal >= 0 ? '+' : ''}${zScoreVal.toFixed(2)}σ · ρ=${rhoVal.toFixed(2)} (${
-        joeliardiEval.statArbSignal === 'MEAN_REVERSION_BUY'
-          ? 'Long Spread'
-          : joeliardiEval.statArbSignal === 'PAIR_OVEREXTENDED_TRIM'
-          ? 'Short Spread'
-          : 'Neutral Pair'
-      })`,
-      color: zScoreVal <= -1.0 ? '#34D399' : zScoreVal >= 1.25 ? '#FB7185' : '#D1D5DB',
+      mosPct: calcMethodMos(statArbFairIdr),
+      sub: `Z-Score ${zScoreVal >= 0 ? '+' : ''}${zScoreVal.toFixed(2)}σ · Peer Hedonic Rp ${formatIdrPriceDisplay(joeliardiEval.agnosticPeerFairValueIdr ?? statArbFairIdr)}`,
+      color: zScoreVal <= -1.0 ? '#34D399' : zScoreVal >= 1.25 ? '#FB7185' : '#38BDF8',
       isPrimary: false
     }
   ];
 
   multiMethodStrip.forEach((m, idx) => {
     const x = 38 + idx * (cardW + cardGap);
-    drawRoundedRect(ctx, x, curY, cardW, 68, 4);
+    drawRoundedRect(ctx, x, curY, cardW, 86, 4);
     ctx.fillStyle = m.isPrimary ? '#172030' : '#11161F';
     ctx.fill();
     ctx.strokeStyle = m.isPrimary ? '#F59E0B' : '#243044';
     ctx.stroke();
 
     ctx.fillStyle = m.isPrimary ? '#F59E0B' : '#9CA3AF';
-    drawTextAutoFit(ctx, m.label, x + 12, curY + 18, innerCardMaxW, 700, 9.0, 7.5);
+    drawTextAutoFit(ctx, m.kicker, x + 12, curY + 16, innerCardMaxW, 700, 8.5, 7.2);
+
+    // Full Non-Truncated Model Name
+    ctx.fillStyle = '#F9FAFB';
+    drawTextAutoFit(ctx, m.title, x + 12, curY + 32, innerCardMaxW, 700, 10.0, 7.8);
 
     ctx.fillStyle = m.isPrimary ? '#F9FAFB' : m.color;
     drawTextAutoFit(
       ctx,
       m.main,
       x + 12,
-      curY + 41,
-      innerCardMaxW,
+      curY + 55,
+      innerCardMaxW - 58,
       m.isPrimary ? 800 : 700,
-      m.isPrimary ? 16.5 : 13.0,
+      m.isPrimary ? 16.0 : 13.5,
       10.0,
       '"Fira Code", monospace'
     );
 
+    const mosColor = m.mosPct >= 10 ? '#34D399' : m.mosPct >= 0 ? '#FBBF24' : '#FB7185';
+    ctx.fillStyle = mosColor;
+    ctx.font = '700 10px "Fira Code", monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(
+      `${m.mosPct >= 0 ? '+' : ''}${m.mosPct.toFixed(1)}%`,
+      x + cardW - 12,
+      curY + 54
+    );
+    ctx.textAlign = 'left';
+
     ctx.fillStyle = '#9CA3AF';
-    drawTextAutoFit(ctx, m.sub, x + 12, curY + 58, innerCardMaxW, 600, 9.5, 7.5, '"Fira Code", monospace');
+    drawTextAutoFit(ctx, m.sub, x + 12, curY + 74, innerCardMaxW, 600, 9.0, 7.2, '"Fira Code", monospace');
   });
 
-  curY += 84;
+  curY += 96;
+
+  // Draw 2-Column StatArb Box (Left) & Sector/RIM Rationale Box (Right)
+  drawRoundedRect(ctx, 38, curY, statArbBoxW, statArbAndRatRowH, 4);
+  ctx.fillStyle = '#11161F';
+  ctx.fill();
+  ctx.strokeStyle = '#243044';
+  ctx.stroke();
+
+  ctx.fillStyle = '#38BDF8';
+  drawTextAutoFit(
+    ctx,
+    `STATISTICAL ARBITRAGE & RELATIVE VALUE (${stock.ticker} ↔ ${peerTkr})`,
+    50,
+    curY + 19,
+    statArbBoxW - 260,
+    700,
+    9.5,
+    8.0
+  );
+
+  // High-Contrast StatArb Signal Badge (Readable in all states including Neutral Equilibrium)
+  const saSignal = joeliardiEval.statArbSignal;
+  const saBadgeText =
+    joeliardiEval.statArbSignalLabel ||
+    `Kointegrasi Seimbang vs ${peerTkr} (Z = ${zScoreVal >= 0 ? '+' : ''}${zScoreVal.toFixed(2)}σ)`;
+  ctx.font = '700 8.5px "Fira Code", monospace';
+  const saBadgeW = Math.min(245, ctx.measureText(saBadgeText).width + 16);
+  const saBadgeX = 38 + statArbBoxW - 12 - saBadgeW;
+  drawRoundedRect(ctx, saBadgeX, curY + 6, saBadgeW, 18, 3);
+  ctx.fillStyle =
+    saSignal === 'MEAN_REVERSION_BUY'
+      ? 'rgba(16, 185, 129, 0.18)'
+      : saSignal === 'PAIR_OVEREXTENDED_TRIM'
+      ? 'rgba(225, 29, 72, 0.18)'
+      : saSignal === 'FUNDAMENTAL_DIVERGENCE'
+      ? 'rgba(245, 158, 11, 0.18)'
+      : 'rgba(2, 132, 199, 0.22)';
+  ctx.fill();
+  ctx.strokeStyle =
+    saSignal === 'MEAN_REVERSION_BUY'
+      ? '#10B981'
+      : saSignal === 'PAIR_OVEREXTENDED_TRIM'
+      ? '#F43F5E'
+      : saSignal === 'FUNDAMENTAL_DIVERGENCE'
+      ? '#F59E0B'
+      : '#38BDF8';
+  ctx.stroke();
+  ctx.fillStyle =
+    saSignal === 'MEAN_REVERSION_BUY'
+      ? '#34D399'
+      : saSignal === 'PAIR_OVEREXTENDED_TRIM'
+      ? '#FB7185'
+      : saSignal === 'FUNDAMENTAL_DIVERGENCE'
+      ? '#FBBF24'
+      : '#38BDF8';
+  drawTextAutoFit(ctx, saBadgeText, saBadgeX + 8, curY + 18, saBadgeW - 16, 700, 8.5, 7.2, '"Fira Code", monospace');
+
+  // Compact Metric Strip inside StatArb Box
+  drawRoundedRect(ctx, 50, curY + 29, statArbBoxW - 24, 24, 3);
+  ctx.fillStyle = '#141B26';
+  ctx.fill();
+  ctx.strokeStyle = '#1F2A3C';
+  ctx.stroke();
+  const saMetricSummary = `Peer Twin: ${peerTkr} (${joeliardiEval.statArbPeerName ?? peerTkr})  |  Korelasi ρ = ${rhoVal.toFixed(2)}  |  Z-Score: ${zScoreVal >= 0 ? '+' : ''}${zScoreVal.toFixed(2)}σ  |  Target: Rp ${formatIdrPriceDisplay(statArbFairIdr)}`;
+  ctx.fillStyle = '#E5E7EB';
+  drawTextAutoFit(ctx, saMetricSummary, 58, curY + 44, statArbBoxW - 40, 600, 9.5, 7.8, '"Fira Code", monospace');
+
+  ctx.fillStyle = '#D1D5DB';
+  ctx.font = '500 10px Montserrat, sans-serif';
+  statArbRatLines.forEach((ln, idx) => {
+    ctx.fillText(ln, 50, curY + 69 + idx * 14.5);
+  });
+
+  // Right Box: Enriched Sector Matrix & Multi-Stage RIM Rationale
+  const secRatX = 38 + statArbBoxW + 14;
+  drawRoundedRect(ctx, secRatX, curY, secRatBoxW, statArbAndRatRowH, 4);
+  ctx.fillStyle = '#11161F';
+  ctx.fill();
+  ctx.strokeStyle = '#243044';
+  ctx.stroke();
+
+  ctx.fillStyle = '#F59E0B';
+  drawTextAutoFit(
+    ctx,
+    `RASIONALISASI MATRIKS SEKTOR & MULTI-STAGE RIM (${joeliardiEval.rimFadeYears ?? 6}Y FADE)`,
+    secRatX + 12,
+    curY + 19,
+    secRatBoxW - 24,
+    700,
+    9.5,
+    8.0
+  );
+
+  ctx.fillStyle = '#D1D5DB';
+  ctx.font = '500 10px Montserrat, sans-serif';
+  secRatLines.forEach((ln, idx) => {
+    ctx.fillText(ln, secRatX + 12, curY + 38 + idx * 14.5);
+  });
+
+  const rimFooterY = curY + statArbAndRatRowH - 22;
+  ctx.strokeStyle = '#1F2A3C';
+  ctx.beginPath();
+  ctx.moveTo(secRatX + 12, rimFooterY);
+  ctx.lineTo(secRatX + secRatBoxW - 12, rimFooterY);
+  ctx.stroke();
+
+  ctx.fillStyle = '#9CA3AF';
+  drawTextAutoFit(
+    ctx,
+    `Anchor BVPS: Rp ${joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')} · EPS: Rp ${joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')}`,
+    secRatX + 12,
+    rimFooterY + 15,
+    secRatBoxW * 0.56,
+    600,
+    9.0,
+    7.5,
+    '"Fira Code", monospace'
+  );
+  ctx.fillStyle = '#34D399';
+  ctx.textAlign = 'right';
+  drawTextAutoFit(
+    ctx,
+    `RIM ω=${(joeliardiEval.rimPersistenceOmega ?? 0.72).toFixed(2)} (${joeliardiEval.rimFadeYears ?? 6}Thn): Rp ${formatIdrPriceDisplay(rimFairIdr)}`,
+    secRatX + secRatBoxW - 12,
+    rimFooterY + 15,
+    secRatBoxW * 0.42,
+    700,
+    9.0,
+    7.5,
+    '"Fira Code", monospace'
+  );
+  ctx.textAlign = 'left';
+
+  curY += statArbAndRatRowH + 14;
 
   // 8. Nostradamus Synthesis Box (Matches Web UI Layout)
   drawRoundedRect(ctx, 38, curY, LOGICAL_WIDTH - 76, aiBoxH, 5);
@@ -1489,7 +1767,7 @@ export function renderInspectorReportCanvas(
     textY = rowStartY - 12;
   }
 
-  // 4 Execution Strategy Cards (Full text, no truncation)
+  // 4 Structured Execution Strategy Cards (Full text, badge + structured rows, no truncation)
   if (exCols.length > 0) {
     textY += 16;
     exCols.forEach((ec, idx) => {
@@ -1502,12 +1780,32 @@ export function renderInspectorReportCanvas(
       ctx.stroke();
 
       ctx.fillStyle = '#9CA3AF';
-      drawTextAutoFit(ctx, ec.label, exX + 11, textY + 19, exW - 22, 700, 9.5, 8.0);
+      drawTextAutoFit(ctx, ec.label, exX + 11, textY + 18, exW - 96, 700, 9.0, 7.5);
+
+      if (ec.badge) {
+        ctx.font = '700 8.0px "Fira Code", monospace';
+        const bW = Math.min(92, ctx.measureText(ec.badge).width + 10);
+        const bX = exX + exW - 10 - bW;
+        drawRoundedRect(ctx, bX, textY + 6, bW, 15, 2);
+        ctx.fillStyle = 'rgba(30, 41, 59, 0.9)';
+        ctx.fill();
+        ctx.strokeStyle = ec.badgeColor;
+        ctx.stroke();
+        ctx.fillStyle = ec.badgeColor;
+        drawTextAutoFit(ctx, ec.badge, bX + 5, textY + 16.5, bW - 10, 700, 8.0, 6.8, '"Fira Code", monospace');
+      }
+
+      // Subtle card header separator
+      ctx.strokeStyle = '#1F2A3C';
+      ctx.beginPath();
+      ctx.moveTo(exX + 11, textY + 26);
+      ctx.lineTo(exX + exW - 11, textY + 26);
+      ctx.stroke();
 
       ctx.fillStyle = ec.color;
-      ctx.font = '600 10.5px Montserrat, sans-serif';
+      ctx.font = '600 10px Montserrat, sans-serif';
       ec.wrapped.forEach((el, eIdx) => {
-        ctx.fillText(el, exX + 11, textY + 37 + eIdx * 15.5);
+        ctx.fillText(el, exX + 11, textY + 41 + eIdx * 14.5);
       });
     });
   }

@@ -1890,6 +1890,9 @@ function computeSectorSpecificValuation(params: {
   derPenaltyMultiplier: number;
   accrualQualityMultiplier: number;
   hscDiscountMultiplier: number;
+  rimFairValueIdr?: number;
+  rimFadeYears?: number;
+  rimPersistenceOmega?: number;
 }): {
   sectorValuationArchetype: SectorValuationArchetype;
   sectorPrimaryMetricShort: string;
@@ -1909,20 +1912,27 @@ function computeSectorSpecificValuation(params: {
     ocfToNetIncomeRatio,
     grossProfitabilityToAssets,
     dynamicCostOfEquityPct,
+    sustainableGrowthRatePct,
     standaloneFairPbv,
     standaloneFairPer,
     derPenaltyMultiplier,
     accrualQualityMultiplier,
-    hscDiscountMultiplier
+    hscDiscountMultiplier,
+    rimFairValueIdr,
+    rimFadeYears = 6,
+    rimPersistenceOmega = 0.75
   } = params;
 
   const sec = stock.sector;
-  const cleanTicker = stock.ticker.toUpperCase();
+  const cleanTicker = stock.ticker.toUpperCase().replace(/\.JK$/i, '');
   const der = Math.max(0.05, stock.debtToEquity);
+  const roeSpreadPct = Number((stock.roe - dynamicCostOfEquityPct).toFixed(2));
+  const rimValText = rimFairValueIdr
+    ? `Rp ${rimFairValueIdr.toLocaleString('id-ID')}`
+    : `Rp ${Math.round(estimatedBvpsIdr * standaloneFairPbv).toLocaleString('id-ID')}`;
 
   // 1. ENERGY, BASIC MATERIALS & CAPITAL GOODS (INDUSTRIALS) -> Price-to-Cash Flow (P/CF)
   if (sec === 'Energy' || sec === 'Basic Materials' || sec === 'Industrials') {
-    // Operating Cash Flow per Share includes non-cash DD&A (Depletion, Depreciation & Amortization) typical of resource/heavy equipment firms
     const ddaAddbackMultiplier = sec === 'Energy' || sec === 'Basic Materials' ? 1.24 : 1.18;
     const effectiveCashConversion = Math.max(0.55, Math.min(1.65, ocfToNetIncomeRatio));
     const ocfPerShareIdr = Math.max(
@@ -1931,8 +1941,8 @@ function computeSectorSpecificValuation(params: {
     );
     const impliedPcf = Number(Math.max(1.8, Math.min(45.0, price / ocfPerShareIdr)).toFixed(2));
 
-    // Fair P/CF anchored on inverse Cost of Equity, GP/A efficiency, and balance sheet solvency
-    const baseTargetPcf = (100 / Math.max(9.2, dynamicCostOfEquityPct + 0.8)) * (sec === 'Industrials' ? 1.05 : 0.96);
+    const baseTargetPcf =
+      (100 / Math.max(9.2, dynamicCostOfEquityPct + 0.8)) * (sec === 'Industrials' ? 1.05 : 0.96);
     const gpaBonus = Math.max(0.88, Math.min(1.22, 0.86 + (grossProfitabilityToAssets / 24) * 0.28));
     const fairPcf = Number(
       Math.max(
@@ -1945,6 +1955,35 @@ function computeSectorSpecificValuation(params: {
     );
     const sectorSpecificFairValueIdr = roundToIdxTick(Math.max(50, ocfPerShareIdr * fairPcf));
 
+    const pcfSpreadPct = Number((((fairPcf - impliedPcf) / Math.max(0.1, fairPcf)) * 100).toFixed(1));
+    const cyclePositionLabel =
+      pcfSpreadPct >= 20
+        ? `terdiskon tajam ${pcfSpreadPct}% di bawah ekuilibrium siklusnya (${impliedPcf}x vs Wajar ${fairPcf}x)`
+        : pcfSpreadPct >= 5
+        ? `diperdagangkan pada diskon moderat ${pcfSpreadPct}% (${impliedPcf}x vs Wajar ${fairPcf}x)`
+        : pcfSpreadPct >= -8
+        ? `berada di ekuilibrium siklus wajar (${impliedPcf}x vs Wajar ${fairPcf}x)`
+        : `diperdagangkan pada premi siklikal ${Math.abs(pcfSpreadPct)}% di atas rata-rata historis (${impliedPcf}x vs Wajar ${fairPcf}x)`;
+
+    const subSectorContext = ['ADRO', 'AADI', 'ITMG', 'PTBA', 'HRUM', 'INDY', 'BUMI', 'MBAP', 'TOBA'].includes(cleanTicker)
+      ? 'emiten batu bara & transisi energi dengan struktur biaya tambang (stripping ratio) yang menghasilkan depresiasi/deplesi non-kas besar'
+      : ['ESSA', 'BRPT', 'TPIA', 'AKRA', 'MEDC', 'ELSA', 'PGAS', 'RAJA'].includes(cleanTicker)
+      ? 'emiten hilirisasi amonia/petrokimia & migas dengan utilisasi pabrik padat modal (plant amortization tinggi)'
+      : ['ANTM', 'INCO', 'MDKA', 'MBMA', 'NCKL', 'AMMN', 'TINS', 'BRMS', 'PSAB'].includes(cleanTicker)
+      ? 'emiten pemurnian mineral/smelter & logam mulia dengan intensitas CapEx pengolahan bijih yang masif'
+      : ['INKP', 'TKIM', 'SMGR', 'INTP', 'AVIA'].includes(cleanTicker)
+      ? 'emiten industri dasar & manufaktur hulu dengan beban penyusutan fasilitas pabrik berkapasitas besar'
+      : sec === 'Industrials'
+      ? 'emiten alat berat & konglomerasi industri dengan siklus belanja modal armada (fleet depreciation) tinggi'
+      : `emiten ${sec} padat modal dengan amortisasi hak konsesi & aset tetap signifikan`;
+
+    const cashQualityDiag =
+      ocfToNetIncomeRatio >= 1.05
+        ? `Surplus konversi kas riil sangat solid (OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x; OCF Rp ${ocfPerShareIdr.toLocaleString('id-ID')}/shm > EPS Rp ${estimatedEpsIdr.toLocaleString('id-ID')}/shm)`
+        : ocfToNetIncomeRatio >= 0.85
+        ? `Kualitas konversi kas sehat (OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x; OCF Rp ${ocfPerShareIdr.toLocaleString('id-ID')}/shm sejalan EPS Rp ${estimatedEpsIdr.toLocaleString('id-ID')}/shm)`
+        : `Terdapat serapan modal kerja/akrual (OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x; OCF Rp ${ocfPerShareIdr.toLocaleString('id-ID')}/shm di bawah EPS Rp ${estimatedEpsIdr.toLocaleString('id-ID')}/shm)`;
+
     return {
       sectorValuationArchetype: 'ENERGY_MATERIALS_PCF',
       sectorPrimaryMetricShort: 'P/CF',
@@ -1954,7 +1993,7 @@ function computeSectorSpecificValuation(params: {
       sectorPrimaryPerShareIdr: ocfPerShareIdr,
       sectorPrimaryPerShareLabel: 'OCF/Saham',
       sectorSpecificFairValueIdr,
-      sectorAcademicRationale: `Sektor ${sec} memiliki beban deplesi tambang & depresiasi barang modal besar sehingga Laba Bersih sering terdistorsi non-kas; P/CF berbasis Arus Kas Operasi (OCF Rp ${ocfPerShareIdr.toLocaleString('id-ID')}/saham) adalah standar valuasi institusional paling akurat.`
+      sectorAcademicRationale: `Diagnostik ${cleanTicker} (${subSectorContext}): Saat ini P/CF ${cleanTicker} ${cyclePositionLabel}. ${cashQualityDiag} dengan efisiensi aset GP/A ${grossProfitabilityToAssets.toFixed(1)}% dan leverage DER ${der.toFixed(2)}x. Pada model Ohlson-Penman RIM (${rimFadeYears}Y Fade, ω=${rimPersistenceOmega.toFixed(2)}), selisih Forward ROE ${stock.roe.toFixed(1)}% vs Ke ${dynamicCostOfEquityPct.toFixed(2)}% (${roeSpreadPct >= 0 ? '+' : ''}${roeSpreadPct}% excess return) mengunci nilai intrinsik jangka menengah di ${rimValText}.`
     };
   }
 
@@ -1964,7 +2003,6 @@ function computeSectorSpecificValuation(params: {
     sec === 'Technology' ||
     ['TLKM', 'ISAT', 'EXCL', 'TOWR', 'TBIG', 'MTEL', 'JSMR', 'LINK', 'WIFI', 'DATA'].includes(cleanTicker)
   ) {
-    // Telco & Infrastructure carry massive network/tower depreciation & debt service; EBITDA captures true operating cash generation
     const infraDepreciationFactor =
       ['TOWR', 'TBIG', 'MTEL', 'TLKM', 'ISAT', 'EXCL', 'JSMR'].includes(cleanTicker) || sec === 'Infrastructures'
         ? 1.72
@@ -2004,6 +2042,15 @@ function computeSectorSpecificValuation(params: {
     );
     const sectorSpecificFairValueIdr = roundToIdxTick(Math.max(50, rawEquityFairValue));
 
+    const evSpreadPct = Number((((fairEvEbitda - impliedEvEbitda) / Math.max(0.1, fairEvEbitda)) * 100).toFixed(1));
+    const infraProfile = ['TOWR', 'TBIG', 'MTEL'].includes(cleanTicker)
+      ? 'infrastruktur menara telekomunikasi dengan kontrak sewa jangka panjang (tenancy ratio) & beban depresiasi menara tinggi'
+      : ['TLKM', 'ISAT', 'EXCL', 'WIFI', 'LINK', 'DATA'].includes(cleanTicker)
+      ? 'operator jaringan telekomunikasi & serat optik dengan amortisasi spektrum frekuensi dan belanja modal jaringan masif'
+      : ['JSMR', 'CMNP', 'META'].includes(cleanTicker)
+      ? 'operator konsesi jalan tol & infrastruktur transportasi dengan amortisasi hak konsesi jangka panjang'
+      : `emiten ${sec} dengan struktur modal berbasis utang proyek & depresiasi jaringan`;
+
     return {
       sectorValuationArchetype: 'TELCO_INFRA_EVEBITDA',
       sectorPrimaryMetricShort: 'EV/EBITDA',
@@ -2013,7 +2060,7 @@ function computeSectorSpecificValuation(params: {
       sectorPrimaryPerShareIdr: ebitdaPerShareIdr,
       sectorPrimaryPerShareLabel: 'EBITDA/Saham',
       sectorSpecificFairValueIdr,
-      sectorAcademicRationale: `Sektor Telekomunikasi & Infrastruktur menanggung depresiasi jaringan/menara masif yang menekan EPS di atas kertas; EV/EBITDA (EBITDA ~Rp ${ebitdaPerShareIdr.toLocaleString('id-ID')}/saham, Net Debt ~Rp ${netDebtPerShareIdr.toLocaleString('id-ID')}/saham) menetralisir distorsi depresiasi & struktur utang.`
+      sectorAcademicRationale: `Diagnostik ${cleanTicker} (${infraProfile}): EV/EBITDA aktual ${impliedEvEbitda}x vs Wajar ${fairEvEbitda}x (${evSpreadPct >= 0 ? `diskon ${evSpreadPct}%` : `premi ${Math.abs(evSpreadPct)}%`}) menetralisir distorsi penyusutan non-kas dan memperhitungkan Net Debt ~Rp ${netDebtPerShareIdr.toLocaleString('id-ID')}/shm (DER ${der.toFixed(2)}x). Kapasitas kas operasional EBITDA Rp ${ebitdaPerShareIdr.toLocaleString('id-ID')}/shm (OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x, GP/A ${grossProfitabilityToAssets.toFixed(1)}%) ditopang oleh nilai intrinsik RIM (${rimFadeYears}Y, ω=${rimPersistenceOmega.toFixed(2)}) sebesar ${rimValText}.`
     };
   }
 
@@ -2022,8 +2069,6 @@ function computeSectorSpecificValuation(params: {
     sec === 'Properties & Real Estate' ||
     ['CTRA', 'BSDE', 'PWON', 'SMRA', 'DMAS', 'JRPT', 'PLIN', 'PANI', 'MKPI', 'LPKR', 'ASRI'].includes(cleanTicker)
   ) {
-    // Property accounting Net Income is heavily distorted by non-cash fair-value asset revaluations & lumpy handover recognition.
-    // AFFO = Recurring Funds From Operations minus Maintenance CapEx, anchored on cash conversion & recurring asset yield.
     const affoPerShareIdr = Math.max(
       3,
       Math.round(
@@ -2045,12 +2090,13 @@ function computeSectorSpecificValuation(params: {
         )
       ).toFixed(2)
     );
-    // Blend 70% P/AFFO Cash Valuation + 30% Discounted RNAV/Book Anchor
     const paffoValue = affoPerShareIdr * fairPaffo;
     const rnavBookAnchor = estimatedBvpsIdr * standaloneFairPbv;
     const sectorSpecificFairValueIdr = roundToIdxTick(
       Math.max(50, 0.70 * paffoValue + 0.30 * rnavBookAnchor)
     );
+
+    const affoSpreadPct = Number((((fairPaffo - impliedPaffo) / Math.max(0.1, fairPaffo)) * 100).toFixed(1));
 
     return {
       sectorValuationArchetype: 'PROPERTY_REIT_PAFFO',
@@ -2061,7 +2107,7 @@ function computeSectorSpecificValuation(params: {
       sectorPrimaryPerShareIdr: affoPerShareIdr,
       sectorPrimaryPerShareLabel: 'AFFO/Saham',
       sectorSpecificFairValueIdr,
-      sectorAcademicRationale: `Laba bersih sektor Properti/REITs sering terdistorsi oleh revaluasi aset non-kas di atas kertas; Price-to-AFFO (AFFO ~Rp ${affoPerShareIdr.toLocaleString('id-ID')}/saham setelah dikurangi CapEx pemeliharaan) mengukur arus kas operasional berulang yang riil.`
+      sectorAcademicRationale: `Diagnostik ${cleanTicker} (Siklus Properti & Landbank): P/AFFO aktual ${impliedPaffo}x vs Wajar ${fairPaffo}x (${affoSpreadPct >= 0 ? `diskon ${affoSpreadPct}%` : `premi ${Math.abs(affoSpreadPct)}%`}) menyaring distorsi pengakuan laba serah-terima (handover) & revaluasi non-kas. Arus kas berulang AFFO Rp ${affoPerShareIdr.toLocaleString('id-ID')}/shm (OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x, DER ${der.toFixed(2)}x) dipadukan dengan jangkar nilai buku RNAV/RIM (${rimFadeYears}Y, ω=${rimPersistenceOmega.toFixed(2)}) di ${rimValText}.`
     };
   }
 
@@ -2071,6 +2117,13 @@ function computeSectorSpecificValuation(params: {
     const sectorSpecificFairValueIdr = roundToIdxTick(
       Math.max(50, estimatedBvpsIdr * standaloneFairPbv)
     );
+    const pbvSpreadPct = Number((((standaloneFairPbv - impliedPbv) / Math.max(0.1, standaloneFairPbv)) * 100).toFixed(1));
+    const bankTierDesc = ['BBCA', 'BMRI', 'BBRI', 'BBNI'].includes(cleanTicker)
+      ? 'perbankan KBMI 4 pemilik waralaba dana murah (CASA) & efisiensi biaya dana struktural'
+      : ['BRIS', 'BTPS', 'BNGA', 'BDMN', 'NISP', 'BJBR', 'BJTM'].includes(cleanTicker)
+      ? 'perbankan menengah/syariah dengan ekspansi pembiayaan selektif & kualitas pencadangan terjaga'
+      : 'institusi keuangan dengan modal inti produktif & sensitivitas kurva imbal hasil SBN';
+
     return {
       sectorValuationArchetype: 'FINANCIALS_JUSTIFIED_PBV',
       sectorPrimaryMetricShort: 'Justified PBV',
@@ -2080,7 +2133,7 @@ function computeSectorSpecificValuation(params: {
       sectorPrimaryPerShareIdr: estimatedBvpsIdr,
       sectorPrimaryPerShareLabel: 'BVPS Ekuitas',
       sectorSpecificFairValueIdr,
-      sectorAcademicRationale: `Pada sektor Perbankan & Keuangan, utang/DPK adalah bahan baku operasional sehingga EV/EBITDA tidak relevan; Justified PBV = (ROE − g) ÷ (Ke − g) berbasis Nilai Buku (BVPS Rp ${estimatedBvpsIdr.toLocaleString('id-ID')}) dan Kurva SBN Spot adalah standar emas akademik.`
+      sectorAcademicRationale: `Diagnostik ${cleanTicker} (${bankTierDesc}): PBV aktual ${impliedPbv}x vs Justified PBV ${standaloneFairPbv}x (${pbvSpreadPct >= 0 ? `diskon ${pbvSpreadPct}%` : `premi ${Math.abs(pbvSpreadPct)}%`}) dihitung dari rumus Damodaran (Fwd ROE ${stock.roe.toFixed(1)}% − g ${sustainableGrowthRatePct.toFixed(1)}%) ÷ (Ke ${dynamicCostOfEquityPct.toFixed(2)}% − g). Dengan Excess Return ${roeSpreadPct >= 0 ? '+' : ''}${roeSpreadPct}% di atas Ke kurva SBN dan kualitas laba kas OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x, model Multi-Stage RIM (${rimFadeYears}Y, ω=${rimPersistenceOmega.toFixed(2)}) menghasilkan nilai wajar ${rimValText}.`
     };
   }
 
@@ -2097,6 +2150,13 @@ function computeSectorSpecificValuation(params: {
   const sectorSpecificFairValueIdr = roundToIdxTick(
     Math.max(50, cashAdjustedEpsIdr * fairQualityPe)
   );
+  const peSpreadPct = Number((((fairQualityPe - impliedQualityPe) / Math.max(0.1, fairQualityPe)) * 100).toFixed(1));
+  const moatStrengthDesc =
+    grossProfitabilityToAssets >= 22
+      ? 'moat penetapan harga (pricing power) & perputaran aset superior'
+      : grossProfitabilityToAssets >= 15
+      ? 'efisiensi margin kotor & perputaran modal kerja yang solid'
+      : 'struktur margin kompetitif yang menuntut disiplin perputaran kas';
 
   return {
     sectorValuationArchetype: 'CONSUMER_HEALTH_QUALITY_PE',
@@ -2107,7 +2167,7 @@ function computeSectorSpecificValuation(params: {
     sectorPrimaryPerShareIdr: cashAdjustedEpsIdr,
     sectorPrimaryPerShareLabel: 'Cash EPS',
     sectorSpecificFairValueIdr,
-    sectorAcademicRationale: `Untuk sektor ${sec}, kekuatan moat harga & perputaran aset diukur melalui Cash-Adjusted P/E (Cash EPS Rp ${cashAdjustedEpsIdr.toLocaleString('id-ID')}/saham) yang dikalibrasi dengan Gross Profitability (Novy-Marx GP/A ${grossProfitabilityToAssets.toFixed(1)}%).`
+    sectorAcademicRationale: `Diagnostik ${cleanTicker} (${sec} — ${moatStrengthDesc}): Quality P/E aktual ${impliedQualityPe}x vs Wajar ${fairQualityPe}x (${peSpreadPct >= 0 ? `diskon ${peSpreadPct}%` : `premi ${Math.abs(peSpreadPct)}%`}) bertumpu pada Cash EPS Rp ${cashAdjustedEpsIdr.toLocaleString('id-ID')}/shm (OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x, GP/A Novy-Marx ${grossProfitabilityToAssets.toFixed(1)}%, DER ${der.toFixed(2)}x). Persistensi laba abnormal Ohlson-Penman (ω=${rimPersistenceOmega.toFixed(2)} selama ${rimFadeYears} tahun, Fwd ROE ${stock.roe.toFixed(1)}% vs Ke ${dynamicCostOfEquityPct.toFixed(2)}%) mengonfirmasi nilai wajar RIM di ${rimValText}.`
   };
 }
 
@@ -2468,7 +2528,10 @@ export function evaluateJoeliardiOosFundamental(
     standaloneFairPer,
     derPenaltyMultiplier: derPenaltyMultiplier * corpIntercept.catalystValuationMultiplier,
     accrualQualityMultiplier,
-    hscDiscountMultiplier
+    hscDiscountMultiplier,
+    rimFairValueIdr,
+    rimFadeYears,
+    rimPersistenceOmega
   });
   const {
     sectorValuationArchetype,
