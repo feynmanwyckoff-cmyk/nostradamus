@@ -477,11 +477,21 @@ function isArticleStrictlyAboutEmitenServer(
     Boolean(companyName) &&
     new RegExp(`\\b${cleanTicker}\\s+Indonesia\\s+Tbk$`, 'i').test(String(companyName));
 
+  const companyCorePhrase = isSyntheticCompany
+    ? ''
+    : String(companyName || '')
+        .replace(/\b(PT|Persero|Tbk|Indonesia)\b/gi, ' ')
+        .replace(/[^a-zA-Z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+  const companyCoreWordCount = companyCorePhrase ? companyCorePhrase.split(' ').length : 0;
+
   const cleanedCompany = isSyntheticCompany
     ? ''
     : String(companyName || '')
         .replace(
-          /\b(Tbk|PT|Persero|Indonesia|Internasional|Nusantara|Sejahtera|Pratama|Makmur|Sentosa|Abadi|Karya|Utama|Mandiri|Group|Grup|Investama|Corporindo|Korporindo|Teknologi|Digital|Solusi|Data|Siber|Komputasi|Inovasi|Sistem|Logistik|Armada|Pelayaran|Samudera|Ekspres|Properti|Kawasan|Persada|Industri|Teknik|Traktor|Menara|Telekom|Energi|Sumber|Tambang|Mineral|Logam|Semen|Kertas|Pangan|Sawit|Nabati|Retail|Media|Medika|Farma|Husada|Klinik|Kapital|Sentral|Mitra|Prima|Cipta|Graha|Bumi|Bina|Jasa|Multi|Surya|Mega|Megah|Dana|Artha|Bank|Sinergi|Global|Nasional|Jaya)\b/gi,
+          /\b(Tbk|PT|Persero|Indonesia|Internasional|International|Nusantara|Sejahtera|Pratama|Makmur|Sentosa|Abadi|Karya|Utama|Mandiri|Group|Grup|Investama|Corporindo|Korporindo|Teknologi|Technology|Technologies|Digital|Solusi|Solutions|Solution|Data|Siber|Komputasi|Inovasi|Sistem|Systems|System|Logistik|Logistics|Armada|Pelayaran|Shipping|Marine|Samudera|Ekspres|Express|Properti|Properties|Property|Kawasan|Persada|Industri|Industries|Industry|Teknik|Engineering|Traktor|Menara|Tower|Towers|Telekom|Telekomunikasi|Telecom|Communications|Communication|Networks|Network|Energi|Energy|Resources|Resource|Sumber|Tambang|Mining|Mineral|Minerals|Logam|Metals|Metal|Copper|Gold|Nickel|Coal|Oil|Gas|Power|Semen|Cement|Kertas|Paper|Pulp|Packaging|Pangan|Foods|Food|Beverages|Beverage|Sawit|Plantations|Plantation|Agri|Agriculture|Nabati|Retail|Commercial|Trading|Media|Medika|Healthcare|Health|Farma|Pharmaceuticals|Pharmaceutical|Pharma|Husada|Klinik|Kapital|Capital|Sentral|Central|Mitra|Partners|Partner|Prima|Cipta|Graha|Bumi|Bina|Jasa|Services|Service|Multi|Multifinance|Surya|Mega|Megah|Dana|Finance|Financial|Financials|Artha|Bank|Banking|Sinergi|Global|Nasional|National|Jaya|Holdings|Holding|Corporation|Corp|Company|Companies|Limited|Ltd|Inc|Plc|Ventures|Venture|Pacific|Asia|Asian|Consumer|Investment|Investments|Enterprises|Enterprise|Infrastructure|Development|Manufacturing|Textiles|Textile|Ceramics|Steel|Chemicals|Chemical|Petrochemical|Life|Insurance|Securitas|Sekuritas|Aneka|indo|indonesian)\b/gi,
           ' '
         )
         .replace(/[^a-zA-Z0-9\s]/g, ' ')
@@ -494,8 +504,16 @@ function isArticleStrictlyAboutEmitenServer(
     .filter((w) => w.length >= 4 && w !== cleanTicker.toLowerCase());
 
   const primaryTwoWords = companyTokens.slice(0, 2).join(' ');
+  const hasFullCorePhraseInTitleOrUrl =
+    companyCoreWordCount >= 2 &&
+    companyCorePhrase.length >= 8 &&
+    (new RegExp(`\\b${companyCorePhrase.replace(/\s+/g, '\\s+')}\\b`, 'i').test(headlineCore) ||
+      urlLower.includes(companyCorePhrase.replace(/\s+/g, '-')));
+
   const hasCompanyInTitleOrUrl =
-    (primaryTwoWords.length >= 6 &&
+    hasFullCorePhraseInTitleOrUrl ||
+    (companyTokens.length >= 2 &&
+      primaryTwoWords.length >= 8 &&
       (headlineCore.toLowerCase().includes(primaryTwoWords) ||
         urlLower.includes(primaryTwoWords.replace(/\s+/g, '-')))) ||
     companyTokens.some(
@@ -504,12 +522,21 @@ function isArticleStrictlyAboutEmitenServer(
         (new RegExp(`\\b${tok}\\b`, 'i').test(headlineCore) || urlLower.includes(tok))
     );
 
-  // 3. Reject common-word false positives (e.g. "Sekolah Elit", "Trader Elit", "Green List elit", crypto articles)
+  // 3. Reject common-word false positives & foreign stock market companies (e.g. BE Semiconductor Industries, Mueller Industries)
   const commonWordFalsePositiveRegex = new RegExp(
     `\\b(?:sekolah|kampus|universitas|pesantren|kawasan|perumahan|hunian|apartemen|kompleks|kaum|kelompok|kalangan|golongan|pasukan|unit|tim|klub|liga|divisi|atlet|pemain|pejabat|politisi|partai|kuliner|restoran|hotel|gaya\\s+hidup|trader|investor\\s+kripto|green\\s+list)\\s+${cleanTicker}\\b|\\b${cleanTicker}\\s+(?:politik|global|jepang|dunia|eropa|amerika|asia|lokal|nasional|kripto|crypto)\\b`,
     'i'
   );
   if (commonWordFalsePositiveRegex.test(headlineCore)) {
+    return false;
+  }
+
+  if (
+    /\b(BE\s+Semiconductor|Mueller\s+Industries|Wall\s+Street|Nasdaq|NYSE|Dow\s+Jones|S&P\s*500|Bursa\s+AS|Bursa\s+Eropa|Saham\s+AS|Nvidia|Tesla|Apple|Microsoft|Amazon|Alphabet|Meta\s+Platforms)\b/i.test(
+      combinedContext
+    ) &&
+    !exactUpperTickerRegex.test(headlineCore)
+  ) {
     return false;
   }
 
@@ -538,9 +565,20 @@ function isArticleStrictlyAboutEmitenServer(
     return false;
   }
 
-  // 5. Guard against articles primarily about ANOTHER 4-letter IDX ticker (e.g., "Profil Emiten TOBA" matching MPMX via inline "Baca Juga")
+  // 5. Guard against articles primarily about ANOTHER 4-letter IDX ticker
+  const parenthesizedTickers = Array.from(
+    headlineCore.matchAll(/(?:\(|\[)([A-Z]{4})(?:\)|\])|\b([A-Z]{4})\.JK\b/g)
+  ).map((m) => (m[1] || m[2] || '').toUpperCase());
+  if (
+    parenthesizedTickers.length > 0 &&
+    !parenthesizedTickers.includes(cleanTicker) &&
+    !exactUpperTickerRegex.test(headlineCore)
+  ) {
+    return false;
+  }
+
   const foreignEmitenInTitle = headlineCore.match(
-    /\b(?:emiten|saham|dividen|laba|kinerja|prospek|profil|direksi)\s+([A-Z]{4})\b/
+    /\b(?:emiten|saham|dividen|laba|kinerja|prospek|profil|direksi|komisaris|rups)\s+(?:PT\s+)?([A-Z]{4})\b/
   );
   if (
     foreignEmitenInTitle &&
@@ -815,25 +853,39 @@ async function startServer() {
       const isSyntheticName = new RegExp(`\\b${rawTicker}\\s+Indonesia\\s+Tbk$`, 'i').test(
         rawName
       );
+      const companyCorePhrase = isSyntheticName
+        ? ''
+        : rawName
+            .replace(/\b(PT|Persero|Tbk|Indonesia)\b/gi, ' ')
+            .replace(/[^a-zA-Z0-9\s]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
       const cleanCompanyShort = isSyntheticName
         ? ''
         : rawName
             .replace(
-              /\b(Tbk|PT|Persero|Indonesia|Internasional|Nusantara|Sejahtera|Pratama|Makmur|Sentosa|Abadi|Karya|Utama|Mandiri|Group|Grup|Investama|Corporindo|Korporindo)\b/gi,
+              /\b(Tbk|PT|Persero|Indonesia|Internasional|International|Nusantara|Sejahtera|Pratama|Makmur|Sentosa|Abadi|Karya|Utama|Mandiri|Group|Grup|Investama|Corporindo|Korporindo|Industri|Industries|Industry|Resources|Resource|Energi|Energy|Holdings|Holding|Corporation|Company|Limited|Properti|Properties|Property|Tambang|Mining|Mineral|Minerals|Logam|Metals|Metal|Teknologi|Technology|Technologies|Digital|Solusi|Solutions|Sistem|Systems|Logistik|Logistics|Pelayaran|Shipping|Marine|Samudera|Kawasan|Persada|Menara|Telekom|Telecom|Kapital|Capital|Sentral|Central|Mitra|Partners|Prima|Cipta|Graha|Bumi|Bina|Jasa|Services|Multi|Multifinance|Surya|Mega|Megah|Dana|Finance|Financial|Artha|Bank|Banking|Sinergi|Global|Nasional|National|Jaya|Pacific|Asia|Asian|Ventures|Enterprises|Infrastructure|Development|Manufacturing|Chemicals|Chemical|Petrochemical|Plantations|Plantation|Foods|Food|Beverages|Retail|Healthcare|Pharma|Pharmaceuticals|Insurance|Sekuritas)\b/gi,
               ' '
             )
+            .replace(/[^a-zA-Z0-9\s]/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
       const primaryWords = cleanCompanyShort
         .split(' ')
-        .filter((w) => w.length >= 3 && w.toUpperCase() !== rawTicker)
+        .filter((w) => w.length >= 4 && w.toUpperCase() !== rawTicker)
         .slice(0, 2)
         .join(' ');
+      const fallbackPhrase =
+        companyCorePhrase.split(' ').length >= 2 && companyCorePhrase.length >= 8
+          ? companyCorePhrase
+          : '';
+      const effectiveSearchPhrase =
+        primaryWords && primaryWords.length >= 5 ? primaryWords : fallbackPhrase;
 
-      // Use intitle: with explicit IDX capital market context to prevent matching common words or inline "Baca Juga" links
+      // Use intitle: with explicit IDX capital market context to prevent matching common words or generic English corporate terms
       const queryTerm =
-        primaryWords && primaryWords.length >= 5
-          ? `(intitle:"${rawTicker}" OR intitle:"${primaryWords}") (saham OR emiten OR BEI OR IDX OR Tbk OR dividen OR laba) when:90d`
+        effectiveSearchPhrase && effectiveSearchPhrase.toUpperCase() !== rawTicker
+          ? `(intitle:"${rawTicker}" OR intitle:"${effectiveSearchPhrase}") (saham OR emiten OR BEI OR IDX OR Tbk OR dividen OR laba) when:90d`
           : `intitle:"${rawTicker}" (saham OR emiten OR BEI OR IDX OR Tbk OR dividen OR laba) when:90d`;
 
       const googleNewsRssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(

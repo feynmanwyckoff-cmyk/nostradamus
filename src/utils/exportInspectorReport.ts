@@ -27,6 +27,14 @@ interface RichWordToken {
 
 const VERDICT_TERMS = [
   'STRONG BUY: ANOMALI ASET DEFENSIF TERDISKON',
+  'Langkah Follow-Up:',
+  'BELI / AKUMULASI',
+  'TAHAN BELI BARU / JUAL SEBAGIAN (TRIM)',
+  'ROTASI KE PAIR',
+  'Pertahankan posisi (HOLD)',
+  'Hindari arbitrase pasangan (pair trade) murni',
+  'Anomali Relative Value Terdeteksi:',
+  'Surplus konversi kas riil sangat solid',
   'TERDISKON / MURAH',
   'MAHAL / PREMIUM',
   'UNDERCUT / DEEP DISCOUNT',
@@ -50,6 +58,15 @@ const VERDICT_TERMS = [
 ];
 
 const METRIC_LABELS = [
+  'Ohlson-Penman RIM',
+  'Multi-Stage RIM',
+  'Forward Annualized ROE',
+  'Forward ROE',
+  'Fwd ROE',
+  'terdiskon tajam',
+  'excess return',
+  'Spread 30D',
+  'Spread 1D',
   'Implied Target Wajar PER',
   'Implied PER',
   'Wajar PER',
@@ -75,6 +92,7 @@ const METRIC_LABELS = [
   'GP/A (Novy-Marx)',
   'GP/A',
   'OCF/NI',
+  'OCF',
   'Penalti Akrual',
   'Spot SBN Blended',
   'Kurva Spot SBN',
@@ -227,10 +245,16 @@ function tokenizeFinancialNarrative(text: string, ticker?: string): RichWordToke
   const cleanTicker = (ticker || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
 
   const patternParts: string[] = [
+    `Langkah\\s+Follow-Up:`,
+    `BELI\\s*\\/\\s*AKUMULASI(?:\\s+[A-Z]{4})?`,
+    `TAHAN\\s+BELI\\s+BARU\\s*\\/\\s*JUAL\\s+SEBAGIAN\\s*\\(TRIM\\)(?:\\s+[A-Z]{4})?`,
+    `ROTASI\\s+KE\\s+PAIR(?:\\s+[A-Z]{4})?`,
+    `Pertahankan\\s+posisi\\s*\\(HOLD\\)(?:\\s+[A-Z]{4})?`,
     `\\b(?:${VERDICT_TERMS.join('|')})\\b`,
-    `\\b(?:${METRIC_LABELS.join('|')})\\s*~?(?:Rp\\s*)?[+-]?\\d+(?:[.,]\\d+)?(?:%|x|\\/100|\\/10|\\/saham)?`,
-    `~?Rp\\s*\\d+(?:[.,]\\d+)*(?:\\/saham)?`,
-    `[+-]?\\d+(?:[.,]\\d+)?(?:%|x|\\b\\/100\\b|\\b\\/10\\b)`
+    `\\b(?:${METRIC_LABELS.join('|')})\\s*~?(?:Rp\\s*)?[+-]?\\d+(?:[.,]\\d+)?(?:%|x|σ|\\/100|\\/10|\\/shm|\\/saham)?`,
+    `[+-]?\\d+(?:[.,]\\d+)?x\\s+vs\\s+(?:Wajar|Justified\\s+PBV)\\s+[+-]?\\d+(?:[.,]\\d+)?x`,
+    `~?Rp\\s*\\d+(?:[.,]\\d+)*(?:\\/shm|\\/saham)?`,
+    `[+-]?\\d+(?:[.,]\\d+)?(?:%|x|σ|\\b\\/100\\b|\\b\\/10\\b)`
   ];
 
   if (cleanTicker.length >= 4) {
@@ -249,7 +273,11 @@ function tokenizeFinancialNarrative(text: string, ticker?: string): RichWordToke
     let style: 'normal' | 'bold' | 'verdict' = 'normal';
     if (isMatched) {
       const upper = seg.trim().toUpperCase();
-      style = VERDICT_TERMS.some((v) => v === upper) ? 'verdict' : 'bold';
+      const isActionHighlight =
+        /LANGKAH FOLLOW-UP|BELI \/ AKUMULASI|TAHAN BELI BARU|ROTASI KE PAIR|PERTAHANKAN POSISI/i.test(
+          upper
+        ) || VERDICT_TERMS.some((v) => v.toUpperCase() === upper);
+      style = isActionHighlight ? 'verdict' : 'bold';
     }
 
     const words = seg.split(/\s+/).filter(Boolean);
@@ -786,25 +814,24 @@ export function renderInspectorReportCanvas(
     exCardH = Math.max(104, 40 + maxExLines * 14.5 + 12);
   }
 
-  // Pre-measure StatArb & Sector Rationale boxes in Row 3B so nothing clips
+  // Pre-measure StatArb & Sector Rationale boxes in Row 3B using rich token wrapping so nothing clips
   const statArbBoxW = Math.round((LOGICAL_WIDTH - 76 - 14) * 0.56);
   const secRatBoxW = LOGICAL_WIDTH - 76 - 14 - statArbBoxW;
-  sCtx.font = '500 10px Montserrat, sans-serif';
-  const statArbRatLines = wrapCanvasText(
-    sCtx,
+  const statArbRichTokens = tokenizeFinancialNarrative(
     joeliardiEval.statArbRationale || '',
-    statArbBoxW - 24
+    stock.ticker
   );
-  const secRatLines = wrapCanvasText(
-    sCtx,
+  const statArbRichLines = wrapRichTokens(sCtx, statArbRichTokens, statArbBoxW - 24, 9.8);
+  const secRatRichTokens = tokenizeFinancialNarrative(
     joeliardiEval.sectorAcademicRationale || '',
-    secRatBoxW - 24
+    stock.ticker
   );
+  const secRatRichLines = wrapRichTokens(sCtx, secRatRichTokens, secRatBoxW - 24, 9.8);
   const statArbAndRatRowH = Math.max(
-    118,
-    Math.max(66 + statArbRatLines.length * 14.5, 42 + secRatLines.length * 14.5 + 26)
+    124,
+    Math.max(68 + statArbRichLines.length * 14.5, 42 + secRatRichLines.length * 14.5 + 26)
   );
-  const multiMethodSectionH = 38 + 86 + 10 + statArbAndRatRowH + 14;
+  const multiMethodSectionH = 34 + 38 + 114 + 10 + statArbAndRatRowH + 14;
 
   // Measure verdictTitle wrapping
   const verdictBadge = structuredReport?.verdictBadge || joeliardiEval.convictionGrade;
@@ -1084,7 +1111,7 @@ export function renderInspectorReportCanvas(
       ]
     },
     {
-      label: 'NILAI INTRINSIK WAJAR (UTAMA)',
+      label: 'NILAI INTRINSIK WAJAR',
       labelColor: '#F59E0B',
       main: `Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)}`,
       mainColor: '#F9FAFB',
@@ -1336,7 +1363,35 @@ export function renderInspectorReportCanvas(
   const zScoreVal = joeliardiEval.statArbZScore ?? 0;
   const rhoVal = joeliardiEval.statArbCorrelation ?? 0.85;
 
-  // Formula Calculation & Highlighted Sector Primary Metric Strip ("Perhitungan harga wajar :")
+  // Section Header Row: QUANTEDGE MULTI-MODEL VALUATION & Single-Line Title "Komparasi Multi-Metode Harga Wajar"
+  ctx.fillStyle = '#10B981';
+  ctx.font = '700 9.5px Montserrat, sans-serif';
+  ctx.fillText('QUANTEDGE MULTI-MODEL VALUATION', 38, curY + 11);
+
+  ctx.fillStyle = '#F9FAFB';
+  ctx.font = '700 13px Montserrat, sans-serif';
+  ctx.fillText('Komparasi Multi-Metode Harga Wajar', 38, curY + 27);
+
+  // Right-aligned Highlighted Badge for Selected Sector Primary Metric
+  ctx.font = '700 9.5px "Fira Code", monospace';
+  const secMetricBadgeW = ctx.measureText(secFullLabel).width + 16;
+  const secMetricBadgeX = LOGICAL_WIDTH - 38 - secMetricBadgeW;
+  ctx.fillStyle = '#9CA3AF';
+  ctx.textAlign = 'right';
+  ctx.fillText('Matriks Utama Sektor:', secMetricBadgeX - 8, curY + 22);
+  ctx.textAlign = 'left';
+
+  drawRoundedRect(ctx, secMetricBadgeX, curY + 8, secMetricBadgeW, 20, 3);
+  ctx.fillStyle = 'rgba(217, 119, 6, 0.22)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(245, 158, 11, 0.65)';
+  ctx.stroke();
+  ctx.fillStyle = '#FBBF24';
+  ctx.fillText(secFullLabel, secMetricBadgeX + 8, curY + 21.5);
+
+  curY += 34;
+
+  // Formula Calculation Strip ("Perhitungan harga wajar :")
   drawRoundedRect(ctx, 38, curY, LOGICAL_WIDTH - 76, 30, 4);
   ctx.fillStyle = '#141B26';
   ctx.fill();
@@ -1351,36 +1406,41 @@ export function renderInspectorReportCanvas(
     joeliardiEval.ensembleFormulaAudit ||
     `(Rp ${formatIdrPriceDisplay(secFairIdr)} × 45%) + (Rp ${formatIdrPriceDisplay(rimFairIdr)} × 35%) + (Rp ${formatIdrPriceDisplay(statArbFairIdr)} × 20%) = Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)}`;
   ctx.fillStyle = '#F9FAFB';
-  drawTextAutoFit(ctx, formulaStr, 224, curY + 19, 520, 700, 10.5, 8.5, '"Fira Code", monospace');
-
-  // Right-aligned Highlighted Badge for Selected Sector Primary Metric
-  ctx.font = '700 9.5px "Fira Code", monospace';
-  const secMetricBadgeW = ctx.measureText(secFullLabel).width + 16;
-  const secMetricBadgeX = LOGICAL_WIDTH - 48 - secMetricBadgeW;
-  ctx.fillStyle = '#9CA3AF';
-  ctx.textAlign = 'right';
-  ctx.fillText('Matriks Utama Sektor:', secMetricBadgeX - 8, curY + 19);
-  ctx.textAlign = 'left';
-
-  drawRoundedRect(ctx, secMetricBadgeX, curY + 5, secMetricBadgeW, 20, 3);
-  ctx.fillStyle = 'rgba(217, 119, 6, 0.22)';
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(245, 158, 11, 0.65)';
-  ctx.stroke();
-  ctx.fillStyle = '#FBBF24';
-  ctx.fillText(secFullLabel, secMetricBadgeX + 8, curY + 18.5);
+  drawTextAutoFit(
+    ctx,
+    formulaStr,
+    224,
+    curY + 19,
+    LOGICAL_WIDTH - 274,
+    700,
+    10.5,
+    8.5,
+    '"Fira Code", monospace'
+  );
 
   curY += 38;
 
   const calcMethodMos = (fIdr: number) =>
     Number((((fIdr - stock.lastPrice) / Math.max(1, fIdr)) * 100).toFixed(1));
 
+  const totalModelFinalIdr = Math.max(1, joeliardiEval.intrinsicValueIdr);
+  const secContribIdr = Math.round(secFairIdr * 0.45);
+  const rimContribIdr = Math.round(rimFairIdr * 0.35);
+  const relContribIdr = Math.max(0, totalModelFinalIdr - secContribIdr - rimContribIdr);
+
+  const secSharePct = Math.max(8, Math.min(80, Math.round((secContribIdr / totalModelFinalIdr) * 100)));
+  const rimSharePct = Math.max(8, Math.min(80, Math.round((rimContribIdr / totalModelFinalIdr) * 100)));
+  const relSharePct = Math.max(6, 100 - secSharePct - rimSharePct);
+
   const multiMethodStrip = [
     {
-      kicker: '★ ACUAN UTAMA (.REDUCE) · 100%',
+      kicker: '★ MODEL FINAL · 100%',
       title: 'Quantedge Sector-Adaptive Ensemble',
       main: `Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)}`,
       mosPct: joeliardiEval.marginOfSafetyPct,
+      contribText: `Akumulasi: +Rp ${formatIdrPriceDisplay(secContribIdr)} + Rp ${formatIdrPriceDisplay(rimContribIdr)} + Rp ${formatIdrPriceDisplay(relContribIdr)}`,
+      contribSharePct: 100,
+      barColor: '#F59E0B',
       sub: `45% ${secShortLabel} + 35% RIM (${joeliardiEval.rimFadeYears ?? 6}Y) + 20% RelVal`,
       color: '#FBBF24',
       isPrimary: true
@@ -1390,8 +1450,11 @@ export function renderInspectorReportCanvas(
       title: `Matriks Spesifik Sektor: ${secFullLabel}`,
       main: `Rp ${formatIdrPriceDisplay(secFairIdr)}`,
       mosPct: calcMethodMos(secFairIdr),
+      contribText: `Kontribusi (45%): +Rp ${formatIdrPriceDisplay(secContribIdr)} ke Model Final`,
+      contribSharePct: secSharePct,
+      barColor: '#F59E0B',
       sub: `${secShortLabel} Aktual ${joeliardiEval.sectorPrimaryImpliedMultiple ?? joeliardiEval.impliedPbv}x vs Wajar ${joeliardiEval.sectorPrimaryFairMultiple ?? justPbv}x`,
-      color: '#34D399',
+      color: '#F9FAFB',
       isPrimary: false
     },
     {
@@ -1399,8 +1462,11 @@ export function renderInspectorReportCanvas(
       title: `Multi-Stage Residual Income (Ohlson-Penman ${joeliardiEval.rimFadeYears ?? 6}Y)`,
       main: `Rp ${formatIdrPriceDisplay(rimFairIdr)}`,
       mosPct: calcMethodMos(rimFairIdr),
+      contribText: `Kontribusi (35%): +Rp ${formatIdrPriceDisplay(rimContribIdr)} ke Model Final`,
+      contribSharePct: rimSharePct,
+      barColor: '#10B981',
       sub: `BVPS Rp ${joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')} · Fwd ROE ${(joeliardiEval.forwardAnnualizedRoePct ?? stock.roe).toFixed(1)}% · ω=${(joeliardiEval.rimPersistenceOmega ?? 0.72).toFixed(2)}`,
-      color: '#38BDF8',
+      color: '#F9FAFB',
       isPrimary: false
     },
     {
@@ -1408,15 +1474,18 @@ export function renderInspectorReportCanvas(
       title: `Relative Value & StatArb vs ${peerTkr} (ρ=${rhoVal.toFixed(2)})`,
       main: `Rp ${formatIdrPriceDisplay(statArbFairIdr)}`,
       mosPct: calcMethodMos(statArbFairIdr),
+      contribText: `Kontribusi (20%): +Rp ${formatIdrPriceDisplay(relContribIdr)} ke Model Final`,
+      contribSharePct: relSharePct,
+      barColor: '#38BDF8',
       sub: `Z-Score ${zScoreVal >= 0 ? '+' : ''}${zScoreVal.toFixed(2)}σ · Peer Hedonic Rp ${formatIdrPriceDisplay(joeliardiEval.agnosticPeerFairValueIdr ?? statArbFairIdr)}`,
-      color: zScoreVal <= -1.0 ? '#34D399' : zScoreVal >= 1.25 ? '#FB7185' : '#38BDF8',
+      color: '#F9FAFB',
       isPrimary: false
     }
   ];
 
   multiMethodStrip.forEach((m, idx) => {
     const x = 38 + idx * (cardW + cardGap);
-    drawRoundedRect(ctx, x, curY, cardW, 86, 4);
+    drawRoundedRect(ctx, x, curY, cardW, 114, 4);
     ctx.fillStyle = m.isPrimary ? '#172030' : '#11161F';
     ctx.fill();
     ctx.strokeStyle = m.isPrimary ? '#F59E0B' : '#243044';
@@ -1427,18 +1496,19 @@ export function renderInspectorReportCanvas(
 
     // Full Non-Truncated Model Name
     ctx.fillStyle = '#F9FAFB';
-    drawTextAutoFit(ctx, m.title, x + 12, curY + 32, innerCardMaxW, 700, 10.0, 7.8);
+    drawTextAutoFit(ctx, m.title, x + 12, curY + 31, innerCardMaxW, 700, 10.0, 7.8);
 
-    ctx.fillStyle = m.isPrimary ? '#F9FAFB' : m.color;
+    // Uniform Large Bold Price Font on All 4 Cards (Model Final & Ensemble Components)
+    ctx.fillStyle = '#F9FAFB';
     drawTextAutoFit(
       ctx,
       m.main,
       x + 12,
-      curY + 55,
+      curY + 54,
       innerCardMaxW - 58,
-      m.isPrimary ? 800 : 700,
-      m.isPrimary ? 16.0 : 13.5,
-      10.0,
+      800,
+      16.0,
+      11.5,
       '"Fira Code", monospace'
     );
 
@@ -1449,15 +1519,65 @@ export function renderInspectorReportCanvas(
     ctx.fillText(
       `${m.mosPct >= 0 ? '+' : ''}${m.mosPct.toFixed(1)}%`,
       x + cardW - 12,
-      curY + 54
+      curY + 53
     );
     ctx.textAlign = 'left';
 
+    // Visual Contribution Bar (Stacked 3-Segment Bar on Model Final, Proportional Bar on Components)
+    const barTrackX = x + 12;
+    const barTrackY = curY + 62;
+    const barTrackW = innerCardMaxW;
+    const barTrackH = 6;
+
+    drawRoundedRect(ctx, barTrackX, barTrackY, barTrackW, barTrackH, 2);
+    ctx.fillStyle = '#222C3C';
+    ctx.fill();
+
+    if (m.isPrimary) {
+      const w1 = Math.max(8, Math.round((barTrackW * secSharePct) / 100));
+      const w2 = Math.max(8, Math.round((barTrackW * rimSharePct) / 100));
+      const w3 = Math.max(6, barTrackW - w1 - w2 - 2);
+      ctx.fillStyle = '#F59E0B';
+      ctx.fillRect(barTrackX, barTrackY, w1, barTrackH);
+      ctx.fillStyle = '#10B981';
+      ctx.fillRect(barTrackX + w1 + 1, barTrackY, w2, barTrackH);
+      ctx.fillStyle = '#38BDF8';
+      ctx.fillRect(barTrackX + w1 + w2 + 2, barTrackY, w3, barTrackH);
+    } else {
+      const fillW = Math.max(8, Math.round((barTrackW * m.contribSharePct) / 100));
+      drawRoundedRect(ctx, barTrackX, barTrackY, fillW, barTrackH, 2);
+      ctx.fillStyle = m.barColor;
+      ctx.fill();
+    }
+
+    ctx.fillStyle = m.isPrimary ? '#FBBF24' : m.barColor;
+    drawTextAutoFit(
+      ctx,
+      m.contribText,
+      x + 12,
+      curY + 81,
+      innerCardMaxW,
+      700,
+      8.6,
+      7.0,
+      '"Fira Code", monospace'
+    );
+
     ctx.fillStyle = '#9CA3AF';
-    drawTextAutoFit(ctx, m.sub, x + 12, curY + 74, innerCardMaxW, 600, 9.0, 7.2, '"Fira Code", monospace');
+    drawTextAutoFit(
+      ctx,
+      m.sub,
+      x + 12,
+      curY + 99,
+      innerCardMaxW,
+      600,
+      8.8,
+      7.2,
+      '"Fira Code", monospace'
+    );
   });
 
-  curY += 96;
+  curY += 124;
 
   // Draw 2-Column StatArb Box (Left) & Sector/RIM Rationale Box (Right)
   drawRoundedRect(ctx, 38, curY, statArbBoxW, statArbAndRatRowH, 4);
@@ -1513,7 +1633,17 @@ export function renderInspectorReportCanvas(
       : saSignal === 'FUNDAMENTAL_DIVERGENCE'
       ? '#FBBF24'
       : '#38BDF8';
-  drawTextAutoFit(ctx, saBadgeText, saBadgeX + 8, curY + 18, saBadgeW - 16, 700, 8.5, 7.2, '"Fira Code", monospace');
+  drawTextAutoFit(
+    ctx,
+    saBadgeText,
+    saBadgeX + 8,
+    curY + 18,
+    saBadgeW - 16,
+    700,
+    8.5,
+    7.2,
+    '"Fira Code", monospace'
+  );
 
   // Compact Metric Strip inside StatArb Box
   drawRoundedRect(ctx, 50, curY + 29, statArbBoxW - 24, 24, 3);
@@ -1523,15 +1653,35 @@ export function renderInspectorReportCanvas(
   ctx.stroke();
   const saMetricSummary = `Peer Twin: ${peerTkr} (${joeliardiEval.statArbPeerName ?? peerTkr})  |  Korelasi ρ = ${rhoVal.toFixed(2)}  |  Z-Score: ${zScoreVal >= 0 ? '+' : ''}${zScoreVal.toFixed(2)}σ  |  Target: Rp ${formatIdrPriceDisplay(statArbFairIdr)}`;
   ctx.fillStyle = '#E5E7EB';
-  drawTextAutoFit(ctx, saMetricSummary, 58, curY + 44, statArbBoxW - 40, 600, 9.5, 7.8, '"Fira Code", monospace');
+  drawTextAutoFit(
+    ctx,
+    saMetricSummary,
+    58,
+    curY + 44,
+    statArbBoxW - 40,
+    600,
+    9.5,
+    7.8,
+    '"Fira Code", monospace'
+  );
 
-  ctx.fillStyle = '#D1D5DB';
-  ctx.font = '500 10px Montserrat, sans-serif';
-  statArbRatLines.forEach((ln, idx) => {
-    ctx.fillText(ln, 50, curY + 69 + idx * 14.5);
-  });
+  drawRichTokenLines(
+    ctx,
+    statArbRichLines,
+    50,
+    curY + 69,
+    14.5,
+    9.8,
+    '#D1D5DB',
+    '#F9FAFB',
+    saSignal === 'MEAN_REVERSION_BUY'
+      ? '#34D399'
+      : saSignal === 'PAIR_OVEREXTENDED_TRIM'
+      ? '#FB7185'
+      : '#38BDF8'
+  );
 
-  // Right Box: Enriched Sector Matrix & Multi-Stage RIM Rationale
+  // Right Box: Enriched Sector Matrix & Multi-Stage RIM Rationale with Bold & Highlight Typography
   const secRatX = 38 + statArbBoxW + 14;
   drawRoundedRect(ctx, secRatX, curY, secRatBoxW, statArbAndRatRowH, 4);
   ctx.fillStyle = '#11161F';
@@ -1551,11 +1701,17 @@ export function renderInspectorReportCanvas(
     8.0
   );
 
-  ctx.fillStyle = '#D1D5DB';
-  ctx.font = '500 10px Montserrat, sans-serif';
-  secRatLines.forEach((ln, idx) => {
-    ctx.fillText(ln, secRatX + 12, curY + 38 + idx * 14.5);
-  });
+  drawRichTokenLines(
+    ctx,
+    secRatRichLines,
+    secRatX + 12,
+    curY + 38,
+    14.5,
+    9.8,
+    '#D1D5DB',
+    '#F9FAFB',
+    '#34D399'
+  );
 
   const rimFooterY = curY + statArbAndRatRowH - 22;
   ctx.strokeStyle = '#1F2A3C';

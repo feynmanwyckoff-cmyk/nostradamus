@@ -2313,20 +2313,20 @@ function computeStatArbAndAgnosticPeerValuation(params: {
 
   let statArbSignal: StatArbSignalType = 'FAIR_COINTEGRATED';
   let statArbSignalLabel = `Kointegrasi Seimbang vs ${resolvedPeer.peerTicker} (Z = ${statArbZScore >= 0 ? '+' : ''}${statArbZScore}σ)`;
-  let statArbRationale = `Pergerakan relatif ${clean} terhadap pasangan berkorelasi tinggi ${resolvedPeer.peerTicker} (ρ = ${resolvedPeer.correlation.toFixed(2)}) berada dalam koridor ekuilibrium wajar (Spread 1D ${statArbSpread1DPct >= 0 ? '+' : ''}${statArbSpread1DPct}%, 30D ${statArbSpread30DPct >= 0 ? '+' : ''}${statArbSpread30DPct}%).`;
+  let statArbRationale = `Pergerakan relatif ${clean} terhadap pasangan berkorelasi tinggi ${resolvedPeer.peerTicker} (ρ = ${resolvedPeer.correlation.toFixed(2)}) berada dalam koridor ekuilibrium wajar (Spread 1D ${statArbSpread1DPct >= 0 ? '+' : ''}${statArbSpread1DPct}%, 30D ${statArbSpread30DPct >= 0 ? '+' : ''}${statArbSpread30DPct}%). Langkah Follow-Up: Pertahankan posisi (HOLD) ${clean} sesuai sinyal fundamental utama; belum diperlukan rotasi pasangan terhadap ${resolvedPeer.peerTicker}.`;
 
   if (!isCleanFundamental || stock.isHscFlagged) {
     statArbSignal = 'FUNDAMENTAL_DIVERGENCE';
     statArbSignalLabel = `Divergensi Fundamental / Non-Arbitrase (Z = ${statArbZScore >= 0 ? '+' : ''}${statArbZScore}σ)`;
-    statArbRationale = `Selisih harga terhadap ${resolvedPeer.peerTicker} dipengaruhi perbedaan kualitas fundamental/kas (OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x) atau risiko konsentrasi HSC, sehingga tidak boleh diperlakukan sebagai mean-reversion murni.`;
+    statArbRationale = `Selisih harga terhadap ${resolvedPeer.peerTicker} dipengaruhi perbedaan kualitas fundamental/kas (OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x) atau risiko konsentrasi HSC, sehingga tidak boleh diperlakukan sebagai mean-reversion murni. Langkah Follow-Up: Hindari arbitrase pasangan (pair trade) murni antara ${clean} dan ${resolvedPeer.peerTicker}; fokus pada evaluasi fundamental mandiri.`;
   } else if (statArbZScore <= -0.80 || (stock.change1D <= -1.5 && statArbSpread1DPct <= -2.0)) {
     statArbSignal = 'MEAN_REVERSION_BUY';
     statArbSignalLabel = `StatArb Long / Mean-Reversion Buy vs ${resolvedPeer.peerTicker} (Z = ${statArbZScore}σ)`;
-    statArbRationale = `Anomali Relative Value Terdeteksi: Secara historis korelasi ${clean}–${resolvedPeer.peerTicker} sangat kuat (ρ = ${resolvedPeer.correlation.toFixed(2)}), namun ${clean} tertinggal (Spread 1D ${statArbSpread1DPct >= 0 ? '+' : ''}${statArbSpread1DPct}% · 30D ${statArbSpread30DPct >= 0 ? '+' : ''}${statArbSpread30DPct}% · Z-Score ${statArbZScore}σ) tanpa penurunan kualitas kas (OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x). Mengindikasikan tekanan likuiditas sementara / forced selling institusi dengan target konvergensi Rp ${statArbImpliedTargetIdr.toLocaleString('id-ID')}.`;
+    statArbRationale = `Anomali Relative Value Terdeteksi: Secara historis korelasi ${clean}–${resolvedPeer.peerTicker} sangat kuat (ρ = ${resolvedPeer.correlation.toFixed(2)}), namun ${clean} tertinggal (Spread 1D ${statArbSpread1DPct >= 0 ? '+' : ''}${statArbSpread1DPct}% · 30D ${statArbSpread30DPct >= 0 ? '+' : ''}${statArbSpread30DPct}% · Z-Score ${statArbZScore}σ) tanpa penurunan kualitas kas (OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x) dengan target konvergensi Rp ${statArbImpliedTargetIdr.toLocaleString('id-ID')}. Langkah Follow-Up: BELI / AKUMULASI ${clean} (atau lakukan rotasi taktis dari ${resolvedPeer.peerTicker} ke ${clean}) untuk menangkap potensi mean-reversion menuju Rp ${statArbImpliedTargetIdr.toLocaleString('id-ID')}.`;
   } else if (statArbZScore >= 1.25) {
     statArbSignal = 'PAIR_OVEREXTENDED_TRIM';
     statArbSignalLabel = `Relative Overextended vs ${resolvedPeer.peerTicker} (Z = +${statArbZScore}σ)`;
-    statArbRationale = `${clean} telah berlari melampaui pasangan kointegrasinya ${resolvedPeer.peerTicker} (ρ = ${resolvedPeer.correlation.toFixed(2)}) dengan Z-Score +${statArbZScore}σ (Spread 30D +${statArbSpread30DPct}%). Secara Statistical Arbitrage, ruang upside relatif jangka pendek mulai menyempit dibanding ${resolvedPeer.peerTicker}.`;
+    statArbRationale = `${clean} telah berlari melampaui pasangan kointegrasinya ${resolvedPeer.peerTicker} (ρ = ${resolvedPeer.correlation.toFixed(2)}) dengan Z-Score +${statArbZScore}σ (Spread 30D ${statArbSpread30DPct >= 0 ? '+' : ''}${statArbSpread30DPct}%). Secara Statistical Arbitrage, ruang upside relatif jangka pendek mulai menyempit dibanding ${resolvedPeer.peerTicker}. Langkah Follow-Up: TAHAN BELI BARU / JUAL SEBAGIAN (TRIM) ${clean} & ROTASI KE PAIR ${resolvedPeer.peerTicker} yang secara relatif lebih murah, atau tunggu harga ${clean} kembali ke area konvergensi Rp ${statArbImpliedTargetIdr.toLocaleString('id-ID')}.`;
   }
 
   return {
@@ -2624,7 +2624,7 @@ export function evaluateJoeliardiOosFundamental(
   const valuationMethodsComparison: ValuationMethodComparisonItem[] = [
     {
       id: 'quantedge_ensemble',
-      name: 'Quantedge Sector-Adaptive Ensemble (Utama)',
+      name: 'Quantedge Sector-Adaptive Ensemble',
       shortLabel: 'Quantedge Ensemble',
       metricBasis: `45% ${sectorPrimaryMetricShort} + 35% RIM (${rimFadeYears}Y) + 20% RelVal (${ensembleFormulaAudit})`,
       impliedMultipleLabel: `PER ${impliedPer}x · PBV ${impliedPbv}x`,

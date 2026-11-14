@@ -292,6 +292,145 @@ function renderHighlightedFinancialNarrative(
   });
 }
 
+function renderHighlightedQuantRationale(
+  text: string,
+  ticker?: string,
+  peerTicker?: string
+): React.ReactNode {
+  if (!text) return null;
+  const cleanTicker = (ticker || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const cleanPeer = (peerTicker || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+  // Split out "Langkah Follow-Up: ..." if present so we can style the follow-up sentence inline with distinct tactical emphasis
+  const followUpSplit = text.split(/(Langkah Follow-Up:\s*[\s\S]*)$/i);
+  const mainBody = followUpSplit[0] || '';
+  const followUpClause = followUpSplit[1] || '';
+
+  const highlightTokens = (segmentText: string, keyPrefix: string) => {
+    const tokenPatterns: string[] = [
+      `terdiskon\\s+tajam\\s+[+-]?\\d+(?:[.,]\\d+)?%`,
+      `(?:diskon|premi)\\s+[+-]?\\d+(?:[.,]\\d+)?%`,
+      `Surplus\\s+konversi\\s+kas\\s+riil\\s+sangat\\s+solid`,
+      `Anomali\\s+Relative\\s+Value\\s+Terdeteksi`,
+      `Ohlson-Penman\\s+RIM(?:\\s*\\([^)]+\\))?`,
+      `Multi-Stage\\s+RIM(?:\\s*\\([^)]+\\))?`,
+      `(?:OCF\\/NI|GP\\/A(?:\\s+Novy-Marx)?|DER|Forward\\s+ROE|Fwd\\s+ROE|Ke|Z-Score|Spread\\s+1D|Spread\\s+30D|P\\/CF|EV\\/EBITDA|P\\/AFFO|Justified\\s+PBV|Quality\\s+P\\/E|Cash\\s+EPS|EBITDA|AFFO|OCF|EPS|BVPS|ρ|ω)\\s*(?:=\\s*)?~?(?:Rp\\s*)?[+-]?\\d+(?:[.,]\\d+)?(?:%|x|σ|\\/[a-zA-Z]+)?`,
+      `[+-]?\\d+(?:[.,]\\d+)?x\\s+vs\\s+(?:Wajar|Justified\\s+PBV)\\s+[+-]?\\d+(?:[.,]\\d+)?x`,
+      `[+-]?\\d+(?:[.,]\\d+)?%\\s+excess\\s+return`,
+      `~?Rp\\s*\\d+(?:[.,]\\d+)*(?:\\/shm|\\/saham)?`,
+      `[+-]?\\d+(?:[.,]\\d+)?(?:%|x|σ)`
+    ];
+    if (cleanTicker.length >= 4) tokenPatterns.push(`\\b${cleanTicker}\\b`);
+    if (cleanPeer.length >= 4) tokenPatterns.push(`\\b${cleanPeer}\\b`);
+
+    const regex = new RegExp(`(${tokenPatterns.join('|')})`, 'g');
+    const parts = segmentText.split(regex);
+
+    return parts.map((part, idx) => {
+      if (!part) return null;
+      if (idx % 2 === 1) {
+        const lower = part.toLowerCase();
+        if (
+          lower.includes('terdiskon') ||
+          lower.includes('diskon') ||
+          lower.includes('surplus konversi kas') ||
+          lower.includes('excess return') ||
+          lower.startsWith('rp ')
+        ) {
+          return (
+            <strong
+              key={`${keyPrefix}_${idx}`}
+              className="font-extrabold text-[#0D5C46] bg-[#059669]/10 px-1 py-0.2 rounded-2xs"
+            >
+              {part}
+            </strong>
+          );
+        }
+        if (lower.includes('premi') || (lower.includes('z-score') && part.includes('+'))) {
+          return (
+            <strong
+              key={`${keyPrefix}_${idx}`}
+              className="font-extrabold text-[#D97706] bb-amber bg-[#D97706]/10 px-1 py-0.2 rounded-2xs"
+            >
+              {part}
+            </strong>
+          );
+        }
+        if (
+          lower.includes('ohlson-penman') ||
+          lower.includes('multi-stage rim') ||
+          lower.includes('vs wajar') ||
+          lower.includes('vs justified')
+        ) {
+          return (
+            <strong
+              key={`${keyPrefix}_${idx}`}
+              className="font-bold text-[#0284C7] bb-cyan underline decoration-[#0284C7]/40 underline-offset-2"
+            >
+              {part}
+            </strong>
+          );
+        }
+        return (
+          <strong key={`${keyPrefix}_${idx}`} className="font-bold text-[#111315]">
+            {part}
+          </strong>
+        );
+      }
+      return <React.Fragment key={`${keyPrefix}_${idx}`}>{part}</React.Fragment>;
+    });
+  };
+
+  if (!followUpClause) {
+    return highlightTokens(mainBody, 'main');
+  }
+
+  const isBuyFollowUp = /BELI\s*\/\s*AKUMULASI/i.test(followUpClause);
+  const isTrimRotateFollowUp = /TAHAN\s+BELI\s+BARU|TRIM|ROTASI\s+KE\s+PAIR/i.test(followUpClause);
+
+  const followUpBody = followUpClause.replace(/^Langkah Follow-Up:\s*/i, '');
+  const actionMatch = followUpBody.match(
+    /^(BELI\s*\/\s*AKUMULASI\s+[A-Z]{4}|TAHAN\s+BELI\s+BARU\s*\/\s*JUAL\s+SEBAGIAN\s*\(TRIM\)\s+[A-Z]{4}\s*&\s*ROTASI\s+KE\s+PAIR\s+[A-Z]{4}|Pertahankan\s+posisi\s*\(HOLD\)\s+[A-Z]{4}|Hindari\s+arbitrase\s+pasangan\s*\(pair\s+trade\)\s+murni)/i
+  );
+
+  return (
+    <>
+      {highlightTokens(mainBody, 'main')}
+      <span className="inline">
+        <strong
+          className={`font-extrabold px-1.5 py-0.5 rounded-2xs mr-1 ${
+            isBuyFollowUp
+              ? 'text-[#0D5C46] bg-[#059669]/15 border border-[#059669]/40'
+              : isTrimRotateFollowUp
+              ? 'text-[#9E2A2B] bg-[#E11D48]/15 border border-[#E11D48]/40'
+              : 'text-[#0284C7] bb-cyan bg-[#0284C7]/15 border border-[#0284C7]/40'
+          }`}
+        >
+          Langkah Follow-Up:
+        </strong>
+        {actionMatch ? (
+          <>
+            <strong
+              className={`font-extrabold underline underline-offset-2 ${
+                isBuyFollowUp
+                  ? 'text-[#0D5C46]'
+                  : isTrimRotateFollowUp
+                  ? 'text-[#9E2A2B]'
+                  : 'text-[#111315]'
+              }`}
+            >
+              {actionMatch[1]}
+            </strong>
+            {highlightTokens(followUpBody.slice(actionMatch[1].length), 'fu_rest')}
+          </>
+        ) : (
+          highlightTokens(followUpBody, 'fu_all')
+        )}
+      </span>
+    </>
+  );
+}
+
 export function EmitenFundamentalInspectorModal({
   stock,
   regimeStatus = 'WASPADA',
@@ -1298,10 +1437,10 @@ export function EmitenFundamentalInspectorModal({
             <div className="p-3.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
               <div className="text-[10px] font-bold uppercase tracking-wider text-[#D97706] bb-amber">
                 <MetricTooltip
-                  label="NILAI INTRINSIK WAJAR (UTAMA)"
-                  title="Harga Wajar Utama: Type-Safe .reduce() Ensemble (45% Sektor + 35% RIM + 20% RelVal)"
+                  label="NILAI INTRINSIK WAJAR"
+                  title="Harga Wajar: Quantedge Multi-Model Ensemble (45% Sektor + 35% RIM + 20% RelVal)"
                   laymanExplanation="Angka terbesar dieksekusi dengan metode .reduce() murni pada array harga akhir ((Harga Sektor × 45%) + (Harga RIM × 35%) + (Harga RelVal × 20%)), sehingga 100% sinkron secara matematis dengan komponen pembanding di bawahnya."
-                  practicalGuide="Gunakan angka utama sebagai patokan nilai intrinsik dan periksa rumus .reduce() di bawahnya untuk audit transparansi kuantitatif."
+                  practicalGuide="Gunakan angka utama sebagai patokan nilai intrinsik dan periksa rincian kontribusi di bawahnya untuk audit transparansi kuantitatif."
                   className="text-[#D97706] bb-amber"
                 />
               </div>
@@ -1574,11 +1713,11 @@ export function EmitenFundamentalInspectorModal({
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E4E2DD] pb-2.5">
               <div>
                 <span className="text-[10px] font-bold uppercase tracking-wider text-[#0D5C46] block">
-                  QUANTEDGE MULTI-MODEL VALUATION &amp; TYPE-SAFE .REDUCE() ENSEMBLE
+                  QUANTEDGE MULTI-MODEL VALUATION
                 </span>
                 <div className="text-xs sm:text-sm font-bold text-[#111315] mt-0.5">
                   <MetricTooltip
-                    label="Komparasi Multi-Metode Harga Wajar (45% Sektor · 35% RIM 5–7Y · 20% Relative Value Peer)"
+                    label="Komparasi Multi-Metode Harga Wajar"
                     title="Dasar Riset Akademik Pembobotan Ensemble (45% Sektor · 35% RIM · 20% Peer)"
                     laymanExplanation="Menggabungkan 3 paradigma valuasi institusional: (1) 45% Matriks Spesifik Sektor berbasis Liu, Nissim & Thomas (2002, Journal of Accounting Research) karena multiple kas/industri spesifik memiliki R² tertinggi dalam menjelaskan harga saham sektoral; (2) 35% Multi-Stage Residual Income (Ohlson 1995 & Penman 2020) sebagai jangkar nilai buku & persistensi laba abnormal jangka menengah; (3) 20% Hedonic Peer & Statistical Arbitrage (Bartram & Grinblatt 2018 JFE; Gatev et al. 2006 RFS) sebagai kalibrator dislokasi harga lintas emiten."
                     practicalGuide="Kombinasi 45%/35%/20% menurunkan model-specification error hingga ~38% dibanding mengandalkan satu rumus tunggal."
@@ -1607,112 +1746,236 @@ export function EmitenFundamentalInspectorModal({
               </div>
             )}
 
-            {/* 4 Valuation Methods Grid: Full Non-Truncated Titles + Interactive Tooltips */}
+            {/* 4 Valuation Methods Grid: Full Non-Truncated Titles + Visual Accumulation Bars + Interactive Tooltips */}
             {joeliardiEval.valuationMethodsComparison &&
-              joeliardiEval.valuationMethodsComparison.length > 0 && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-                  {joeliardiEval.valuationMethodsComparison.map((m, mIdx) => {
-                    const isPrimary = Boolean(m.isPrimaryEnsemble);
-                    const tooltipConfig =
-                      m.id === 'quantedge_ensemble'
-                        ? {
-                            title: 'Quantedge Sector-Adaptive Ensemble (Acuan Harga Wajar Utama — 100%)',
-                            laymanExplanation:
-                              'Harga wajar utama yang dihitung secara presisi melalui fungsi agregasi .reduce() dari 45% Harga Wajar Matriks Sektor + 35% Harga Wajar Multi-Stage RIM + 20% Target Konvergensi Relative Value Peer.',
-                            practicalGuide:
-                              'Menjadi patokan utama perhitungan Margin of Safety (MoS) dan zona akumulasi karena mengintegrasikan dimensi kas sektoral, nilai buku, dan harga relatif peer.'
-                          }
-                        : m.id === 'sector_specific_matrix'
-                        ? {
-                            title: `Matriks Spesifik Sektor (${joeliardiEval.sectorPrimaryMetricLabel}) — Bobot 45%`,
-                            laymanExplanation: `Menggunakan metrik standar institusional yang paling relevan untuk sektor ${activeStock.sector} (${joeliardiEval.sectorPrimaryMetricShort}) sesuai riset Liu, Nissim & Thomas (2002), sehingga terbebas dari distorsi depresiasi non-kas atau struktur modal sektoral.`,
-                            practicalGuide: `Membandingkan ${joeliardiEval.sectorPrimaryMetricShort} aktual (${joeliardiEval.sectorPrimaryImpliedMultiple}x) terhadap ${joeliardiEval.sectorPrimaryMetricShort} wajar (${joeliardiEval.sectorPrimaryFairMultiple}x) berbasis ${joeliardiEval.sectorPrimaryPerShareLabel}.`
-                          }
-                        : m.id === 'multistage_rim'
-                        ? {
-                            title: `Multi-Stage Residual Income (Ohlson 1995 & Penman 2020, ${joeliardiEval.rimFadeYears ?? 6}Y Fade) — Bobot 35%`,
-                            laymanExplanation:
-                              'Menilai saham dari Nilai Buku Ekuitas saat ini (Anchor BVPS) ditambah nilai sekarang (present value) dari Laba Abnormal (Forward ROE di atas Cost of Equity Ke) yang meluruh secara bertahap sesuai koefisien persistensi moat (ω).',
-                            practicalGuide:
-                              'Sangat tangguh terhadap fluktuasi siklus jangka pendek karena berjangkar pada ekuitas neraca yang telah diaudit.'
-                          }
-                        : {
-                            title: `Relative Value & Statistical Arbitrage vs ${joeliardiEval.statArbPeerTicker} — Bobot 20%`,
-                            laymanExplanation:
-                              'Mengukur nilai wajar relatif berdasarkan regresi hedonis lintas emiten (Bartram & Grinblatt 2018) dan deviasi spread kointegrasi (Z-Score) terhadap saham kembar (peer twin) ber-korelasi historis tertinggi di sektor yang sama.',
-                            practicalGuide:
-                              'Mendeteksi peluang mean-reversion ketika saham tertinggal secara tidak wajar dibanding peer utamanya.'
-                          };
+              joeliardiEval.valuationMethodsComparison.length > 0 &&
+              (() => {
+                const secFair =
+                  joeliardiEval.sectorSpecificFairValueIdr ?? joeliardiEval.intrinsicValueIdr;
+                const rimFair =
+                  joeliardiEval.rimFairValueIdr ?? joeliardiEval.intrinsicValueIdr;
+                const relFair =
+                  joeliardiEval.statArbImpliedTargetIdr ?? joeliardiEval.intrinsicValueIdr;
+                const totalModelFinal = Math.max(1, joeliardiEval.intrinsicValueIdr);
 
-                    return (
-                      <div
-                        key={m.id}
-                        className={`p-3 rounded-xs border transition-colors flex flex-col justify-between ${
-                          isPrimary
-                            ? 'bg-[#FFFFFF] border-[#D97706] shadow-2xs'
-                            : 'bg-[#FFFFFF]/80 border-[#E4E2DD]'
-                        }`}
-                      >
-                        <div>
-                          <div className="flex items-center justify-between gap-1.5">
-                            <span
-                              className={`text-[10px] font-bold uppercase tracking-wider ${
-                                isPrimary ? 'text-[#D97706] bb-amber' : 'text-neutral-500'
-                              }`}
-                            >
-                              {isPrimary ? '★ ACUAN UTAMA (.REDUCE)' : 'KOMPONEN ENSEMBLE'}
-                            </span>
-                            <span className="text-[10px] font-mono font-semibold text-neutral-500 shrink-0">
-                              Bobot {(m.weightPct ?? 0).toFixed(0)}%
-                            </span>
-                          </div>
-                          <div className="text-[11px] font-bold text-[#111315] mt-1 leading-snug break-words">
-                            <MetricTooltip
-                              label={m.name}
-                              title={tooltipConfig.title}
-                              laymanExplanation={tooltipConfig.laymanExplanation}
-                              practicalGuide={tooltipConfig.practicalGuide}
-                              align={mIdx >= 2 ? 'right' : 'left'}
-                            />
-                          </div>
-                        </div>
+                const secContribIdr = Math.round(secFair * 0.45);
+                const rimContribIdr = Math.round(rimFair * 0.35);
+                const relContribIdr = Math.max(
+                  0,
+                  totalModelFinal - secContribIdr - rimContribIdr
+                );
 
-                        <div className="mt-2 pt-1.5 border-t border-[#E4E2DD]/60">
-                          <div className="flex items-baseline justify-between gap-2">
-                            <div
-                              className={
-                                isPrimary
-                                  ? 'text-lg sm:text-xl font-extrabold font-mono text-[#111315]'
-                                  : 'text-sm font-bold font-mono text-neutral-700'
-                              }
-                            >
-                              Rp {formatIdrPriceDisplay(m.fairPriceIdr)}
+                const secSharePct = Math.max(
+                  8,
+                  Math.min(80, Math.round((secContribIdr / totalModelFinal) * 100))
+                );
+                const rimSharePct = Math.max(
+                  8,
+                  Math.min(80, Math.round((rimContribIdr / totalModelFinal) * 100))
+                );
+                const relSharePct = Math.max(
+                  6,
+                  100 - secSharePct - rimSharePct
+                );
+
+                return (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                    {joeliardiEval.valuationMethodsComparison.map((m, mIdx) => {
+                      const isPrimary = Boolean(m.isPrimaryEnsemble);
+                      const cleanMethodName = m.name.replace(/\s*\(Utama\)/i, '');
+                      const compContribIdr =
+                        m.id === 'sector_specific_matrix'
+                          ? secContribIdr
+                          : m.id === 'multistage_rim'
+                          ? rimContribIdr
+                          : m.id === 'statarb_relative_peer'
+                          ? relContribIdr
+                          : totalModelFinal;
+                      const compBarColor =
+                        m.id === 'sector_specific_matrix'
+                          ? 'bg-[#D97706]'
+                          : m.id === 'multistage_rim'
+                          ? 'bg-[#059669]'
+                          : 'bg-[#0284C7]';
+                      const compTextColor =
+                        m.id === 'sector_specific_matrix'
+                          ? 'text-[#D97706] bb-amber'
+                          : m.id === 'multistage_rim'
+                          ? 'text-[#0D5C46]'
+                          : 'text-[#0284C7] bb-cyan';
+                      const compShareOfFinalPct = Math.min(
+                        100,
+                        Math.max(8, Math.round((compContribIdr / totalModelFinal) * 100))
+                      );
+
+                      const tooltipConfig =
+                        m.id === 'quantedge_ensemble'
+                          ? {
+                              title:
+                                'Quantedge Sector-Adaptive Ensemble (Model Final — Akumulasi 100%)',
+                              laymanExplanation:
+                                'Model Final yang dihitung secara presisi dari akumulasi tertimbang 45% Harga Wajar Matriks Sektor + 35% Harga Wajar Multi-Stage RIM + 20% Target Konvergensi Relative Value Peer.',
+                              practicalGuide:
+                                'Menjadi patokan utama perhitungan Margin of Safety (MoS) dan zona akumulasi karena mengintegrasikan dimensi kas sektoral, nilai buku, dan harga relatif peer.'
+                            }
+                          : m.id === 'sector_specific_matrix'
+                          ? {
+                              title: `Matriks Spesifik Sektor (${joeliardiEval.sectorPrimaryMetricLabel}) — Bobot 45%`,
+                              laymanExplanation: `Menggunakan metrik standar institusional yang paling relevan untuk sektor ${activeStock.sector} (${joeliardiEval.sectorPrimaryMetricShort}) sesuai riset Liu, Nissim & Thomas (2002), sehingga terbebas dari distorsi depresiasi non-kas atau struktur modal sektoral.`,
+                              practicalGuide: `Membandingkan ${joeliardiEval.sectorPrimaryMetricShort} aktual (${joeliardiEval.sectorPrimaryImpliedMultiple}x) terhadap ${joeliardiEval.sectorPrimaryMetricShort} wajar (${joeliardiEval.sectorPrimaryFairMultiple}x) berbasis ${joeliardiEval.sectorPrimaryPerShareLabel}.`
+                            }
+                          : m.id === 'multistage_rim'
+                          ? {
+                              title: `Multi-Stage Residual Income (Ohlson 1995 & Penman 2020, ${joeliardiEval.rimFadeYears ?? 6}Y Fade) — Bobot 35%`,
+                              laymanExplanation:
+                                'Menilai saham dari Nilai Buku Ekuitas saat ini (Anchor BVPS) ditambah nilai sekarang (present value) dari Laba Abnormal (Forward ROE di atas Cost of Equity Ke) yang meluruh secara bertahap sesuai koefisien persistensi moat (ω).',
+                              practicalGuide:
+                                'Sangat tangguh terhadap fluktuasi siklus jangka pendek karena berjangkar pada ekuitas neraca yang telah diaudit.'
+                            }
+                          : {
+                              title: `Relative Value & Statistical Arbitrage vs ${joeliardiEval.statArbPeerTicker} — Bobot 20%`,
+                              laymanExplanation:
+                                'Mengukur nilai wajar relatif berdasarkan regresi hedonis lintas emiten (Bartram & Grinblatt 2018) dan deviasi spread kointegrasi (Z-Score) terhadap saham kembar (peer twin) ber-korelasi historis tertinggi di sektor yang sama.',
+                              practicalGuide:
+                                'Mendeteksi peluang mean-reversion ketika saham tertinggal secara tidak wajar dibanding peer utamanya.'
+                            };
+
+                      return (
+                        <div
+                          key={m.id}
+                          className={`p-3 rounded-xs border transition-colors flex flex-col justify-between ${
+                            isPrimary
+                              ? 'bg-[#FFFFFF] border-[#D97706] shadow-2xs'
+                              : 'bg-[#FFFFFF]/80 border-[#E4E2DD]'
+                          }`}
+                        >
+                          <div>
+                            <div className="flex items-center justify-between gap-1.5">
+                              <span
+                                className={`text-[10px] font-bold uppercase tracking-wider ${
+                                  isPrimary ? 'text-[#D97706] bb-amber' : 'text-neutral-500'
+                                }`}
+                              >
+                                {isPrimary ? '★ MODEL FINAL' : 'KOMPONEN ENSEMBLE'}
+                              </span>
+                              <span className="text-[10px] font-mono font-semibold text-neutral-500 shrink-0">
+                                Bobot {(m.weightPct ?? 0).toFixed(0)}%
+                              </span>
                             </div>
-                            <span
-                              className={`text-[10.5px] font-mono font-bold ${
-                                m.mosPct >= 10
-                                  ? 'text-[#0D5C46]'
-                                  : m.mosPct >= 0
-                                  ? 'text-[#D97706]'
-                                  : 'text-[#9E2A2B]'
-                              }`}
-                            >
-                              {m.mosPct >= 0 ? '+' : ''}
-                              {m.mosPct.toFixed(1)}%
-                            </span>
+                            <div className="text-[11px] font-bold text-[#111315] mt-1 leading-snug break-words">
+                              <MetricTooltip
+                                label={cleanMethodName}
+                                title={tooltipConfig.title}
+                                laymanExplanation={tooltipConfig.laymanExplanation}
+                                practicalGuide={tooltipConfig.practicalGuide}
+                                align={mIdx >= 2 ? 'right' : 'left'}
+                              />
+                            </div>
                           </div>
-                          <div className="text-[10px] font-mono text-neutral-600 mt-1 leading-snug break-words">
-                            {m.metricBasis}
-                          </div>
-                          <div className="text-[10px] text-neutral-500 mt-0.5 leading-snug break-words">
-                            Aktual: {m.impliedMultipleLabel} · Wajar: {m.fairMultipleLabel}
+
+                          <div className="mt-2.5 pt-2 border-t border-[#E4E2DD]/60">
+                            <div className="flex items-baseline justify-between gap-2">
+                              <div className="text-lg sm:text-xl font-extrabold font-mono text-[#111315]">
+                                Rp {formatIdrPriceDisplay(m.fairPriceIdr)}
+                              </div>
+                              <span
+                                className={`text-[10.5px] font-mono font-bold ${
+                                  m.mosPct >= 10
+                                    ? 'text-[#0D5C46]'
+                                    : m.mosPct >= 0
+                                    ? 'text-[#D97706]'
+                                    : 'text-[#9E2A2B]'
+                                }`}
+                              >
+                                {m.mosPct >= 0 ? '+' : ''}
+                                {m.mosPct.toFixed(1)}%
+                              </span>
+                            </div>
+
+                            {/* Visual Accumulation Bar: Stacked Bar on Model Final vs Proportional Contribution Bar on Components */}
+                            {isPrimary ? (
+                              <div className="mt-1.5 mb-1.5 p-1.5 rounded-2xs bg-[#FAF9F6] border border-[#E4E2DD]">
+                                <div className="flex items-center justify-between text-[9.5px] font-mono text-neutral-600 mb-1">
+                                  <span className="font-bold text-[#111315]">
+                                    Akumulasi 3 Komponen:
+                                  </span>
+                                  <span className="font-bold text-[#D97706] bb-amber">
+                                    100% (Rp {formatIdrPriceDisplay(totalModelFinal)})
+                                  </span>
+                                </div>
+                                <div className="w-full h-2 rounded-2xs overflow-hidden flex bg-[#E4E2DD]/70 gap-0.5">
+                                  <div
+                                    className="h-full bg-[#D97706]"
+                                    style={{ width: `${secSharePct}%` }}
+                                    title={`45% Sektor: +Rp ${formatIdrPriceDisplay(secContribIdr)}`}
+                                  />
+                                  <div
+                                    className="h-full bg-[#059669]"
+                                    style={{ width: `${rimSharePct}%` }}
+                                    title={`35% RIM: +Rp ${formatIdrPriceDisplay(rimContribIdr)}`}
+                                  />
+                                  <div
+                                    className="h-full bg-[#0284C7]"
+                                    style={{ width: `${relSharePct}%` }}
+                                    title={`20% RelVal: +Rp ${formatIdrPriceDisplay(relContribIdr)}`}
+                                  />
+                                </div>
+                                <div className="flex items-center justify-between text-[9px] font-mono text-neutral-600 mt-1">
+                                  <span className="text-[#D97706] bb-amber font-semibold">
+                                    +Rp {formatIdrPriceDisplay(secContribIdr)}
+                                  </span>
+                                  <span>+</span>
+                                  <span className="text-[#0D5C46] font-semibold">
+                                    Rp {formatIdrPriceDisplay(rimContribIdr)}
+                                  </span>
+                                  <span>+</span>
+                                  <span className="text-[#0284C7] bb-cyan font-semibold">
+                                    Rp {formatIdrPriceDisplay(relContribIdr)}
+                                  </span>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="mt-1.5 mb-1.5 p-1.5 rounded-2xs bg-[#FAF9F6] border border-[#E4E2DD]">
+                                <div className="flex items-center justify-between text-[9.5px] font-mono mb-1">
+                                  <span className="text-neutral-600">
+                                    Kontribusi ({(m.weightPct ?? 0).toFixed(0)}%):
+                                  </span>
+                                  <span className={`font-extrabold ${compTextColor}`}>
+                                    +Rp {formatIdrPriceDisplay(compContribIdr)} ke Final
+                                  </span>
+                                </div>
+                                <div className="w-full h-2 rounded-2xs overflow-hidden bg-[#E4E2DD]/70">
+                                  <div
+                                    className={`h-full ${compBarColor}`}
+                                    style={{ width: `${compShareOfFinalPct}%` }}
+                                  />
+                                </div>
+                                <div className="flex items-center justify-between text-[9px] font-mono text-neutral-500 mt-1">
+                                  <span>
+                                    Rp {formatIdrPriceDisplay(m.fairPriceIdr)} ×{' '}
+                                    {(m.weightPct ?? 0).toFixed(0)}%
+                                  </span>
+                                  <span>
+                                    {compShareOfFinalPct}% dari Rp{' '}
+                                    {formatIdrPriceDisplay(totalModelFinal)}
+                                  </span>
+                                </div>
+                              </div>
+                            )}
+
+                            <div className="text-[10px] font-mono text-neutral-600 mt-1 leading-snug break-words">
+                              {m.metricBasis}
+                            </div>
+                            <div className="text-[10px] text-neutral-500 mt-0.5 leading-snug break-words">
+                              Aktual: {m.impliedMultipleLabel} · Wajar: {m.fairMultipleLabel}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+                      );
+                    })}
+                  </div>
+                );
+              })()}
 
             {/* Quantedge Statistical Arbitrage (Relative Value vs Twin Peer) & Sector Rationale Strip */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 pt-1">
@@ -1786,7 +2049,11 @@ export function EmitenFundamentalInspectorModal({
                   </div>
                 </div>
                 <p className="text-[11px] text-neutral-700 leading-relaxed text-justify">
-                  {joeliardiEval.statArbRationale}
+                  {renderHighlightedQuantRationale(
+                    joeliardiEval.statArbRationale || '',
+                    activeStock.ticker,
+                    joeliardiEval.statArbPeerTicker
+                  )}
                 </p>
               </div>
 
@@ -1802,7 +2069,11 @@ export function EmitenFundamentalInspectorModal({
                     />
                   </div>
                   <p className="text-[11px] text-neutral-700 leading-relaxed text-justify">
-                    {joeliardiEval.sectorAcademicRationale}
+                    {renderHighlightedQuantRationale(
+                      joeliardiEval.sectorAcademicRationale || '',
+                      activeStock.ticker,
+                      joeliardiEval.statArbPeerTicker
+                    )}
                   </p>
                 </div>
                 <div className="mt-2.5 pt-2 border-t border-[#E4E2DD] flex flex-wrap items-center justify-between gap-2 text-[10.5px] font-mono text-neutral-600">
