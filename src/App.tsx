@@ -1350,7 +1350,8 @@ export default function App() {
       regime,
       activeCap,
       picksPerSleeve,
-      selectionMode
+      selectionMode,
+      cashReserveIdr
     );
     const defPositions = analytics.positions.filter((p) => p.basket === 'DEFENSIVE');
     const aggPositions = analytics.positions.filter((p) => p.basket === 'AGGRESSIVE');
@@ -1616,6 +1617,7 @@ export default function App() {
                   stocks={stocks}
                   capitalIdr={capitalIdr}
                   actualPortfolioNavIdr={actualPortfolioNavIdr}
+                  availableCashIdr={cashReserveIdr}
                   onChangeCapital={setCapitalIdr}
                   onLoadIdx100Universe={handleLoadIdx100Universe}
                   onInspectTicker={(tk) => setGlobalInspectedTicker(tk)}
@@ -1689,6 +1691,7 @@ export default function App() {
         <EmitenFundamentalInspectorModal
           stock={globalInspectedStockObj}
           regimeStatus={regime.status}
+          availablePortfolioCashIdr={cashReserveIdr}
           onClose={() => setGlobalInspectedTicker(null)}
           onToggleHscFlag={handleToggleHscFlag}
           onStockSynced={handleAddStock}

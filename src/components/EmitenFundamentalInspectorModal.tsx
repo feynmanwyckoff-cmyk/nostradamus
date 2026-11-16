@@ -57,6 +57,7 @@ import {
 interface EmitenFundamentalInspectorModalProps {
   stock: StockMetrics | null;
   regimeStatus?: MarketRegimeStatus;
+  availablePortfolioCashIdr?: number;
   onClose: () => void;
   onToggleHscFlag?: (ticker: string, currentlyFlagged: boolean) => void;
   onStockSynced?: (updatedStock: StockMetrics) => void;
@@ -434,6 +435,7 @@ function renderHighlightedQuantRationale(
 export function EmitenFundamentalInspectorModal({
   stock,
   regimeStatus = 'WASPADA',
+  availablePortfolioCashIdr,
   onClose,
   onToggleHscFlag,
   onStockSynced
@@ -492,8 +494,8 @@ export function EmitenFundamentalInspectorModal({
 
   const joeliardiEval = useMemo(() => {
     if (!activeStock) return null;
-    return evaluateJoeliardiOosFundamental(activeStock);
-  }, [activeStock, catalystRevision]);
+    return evaluateJoeliardiOosFundamental(activeStock, undefined, availablePortfolioCashIdr);
+  }, [activeStock, catalystRevision, availablePortfolioCashIdr]);
 
   // Synchronize Corporate Action Calibrator inputs & trigger Web Worker offload when activeStock or live sync changes
   useEffect(() => {
@@ -575,7 +577,8 @@ export function EmitenFundamentalInspectorModal({
   const handleSaveCatalystOverride = (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeStock) return;
-    const splitVal = Math.max(1, Number(splitRatioInput.replace(',', '.')) || 1);
+    const rawSplit = Number(splitRatioInput.replace(',', '.'));
+    const splitVal = Number.isFinite(rawSplit) && rawSplit > 0 ? rawSplit : 1;
     const buybackVal = Math.max(0, Number(buybackNominalInput.replace(',', '.')) || 0);
     const growthVal = Number(quarterlyGrowthInput.replace(',', '.')) || 0;
     const trailingRoe = activeStock.trailingRoePct ?? activeStock.roe;
@@ -804,7 +807,11 @@ export function EmitenFundamentalInspectorModal({
       // 3. Run multi-stage thinking animation then progressive typing AI conviction analysis
       setIsAnalyzingAi(true);
       try {
-        const evalObj = evaluateJoeliardiOosFundamental(currentStock);
+        const evalObj = evaluateJoeliardiOosFundamental(
+          currentStock,
+          undefined,
+          availablePortfolioCashIdr
+        );
         const qText = `Apakah ${currentStock.ticker} layak dibeli pada harga Rp ${currentStock.lastPrice.toLocaleString('id-ID')} berdasarkan Nilai Intrinsik Wajar & Fundamental Kualitas Moat?`;
         setUserQuestion(qText);
         const aiRes = await runWithThinkingStages(() =>
@@ -813,7 +820,8 @@ export function EmitenFundamentalInspectorModal({
             joeliardiEval: evalObj,
             recentNews: fetchedNews,
             userQuestion: qText,
-            regimeStatus
+            regimeStatus,
+            availablePortfolioCashIdr
           })
         );
         if (isMounted) {
@@ -887,7 +895,8 @@ export function EmitenFundamentalInspectorModal({
           joeliardiEval,
           recentNews,
           userQuestion: activeQuestion,
-          regimeStatus
+          regimeStatus,
+          availablePortfolioCashIdr
         })
       );
       setStructuredReport(result.structuredReport);
@@ -1438,9 +1447,9 @@ export function EmitenFundamentalInspectorModal({
               <div className="text-[10px] font-bold uppercase tracking-wider text-[#D97706] bb-amber">
                 <MetricTooltip
                   label="NILAI INTRINSIK WAJAR"
-                  title="Harga Wajar: Quantedge Multi-Model Ensemble (45% Sektor + 35% RIM + 20% RelVal)"
-                  laymanExplanation="Angka terbesar dieksekusi dengan metode .reduce() murni pada array harga akhir ((Harga Sektor × 45%) + (Harga RIM × 35%) + (Harga RelVal × 20%)), sehingga 100% sinkron secara matematis dengan komponen pembanding di bawahnya."
-                  practicalGuide="Gunakan angka utama sebagai patokan nilai intrinsik dan periksa rincian kontribusi di bawahnya untuk audit transparansi kuantitatif."
+                  title="Harga Wajar: Quantedge Dynamic Sector-Adaptive Ensemble + Graham-Joeliardi Floor"
+                  laymanExplanation="Dieksekusi melalui router ValuationEngine.calculateFairValue(stock) dan DynamicEnsembleWeighter (mendeteksi penalti outlier >40% dari median, konfidensi OCF & korelasi peer ρ), ditambah benchmark independen Graham-Joeliardi Floor (0% bobot ensemble)."
+                  practicalGuide="Gunakan angka utama sebagai patokan nilai intrinsik dan Graham-Joeliardi Floor sebagai batas bawah keamanan (floor value)."
                   className="text-[#D97706] bb-amber"
                 />
               </div>
@@ -1448,17 +1457,17 @@ export function EmitenFundamentalInspectorModal({
                 Rp {formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)}
               </div>
               <div className="text-[10px] text-neutral-600 font-mono leading-tight mt-0.5">
-                {joeliardiEval.sectorPrimaryMetricShort ?? 'Sektor'} (45%): Rp{' '}
-                {formatIdrPriceDisplay(
-                  joeliardiEval.sectorSpecificFairValueIdr ?? joeliardiEval.intrinsicValueIdr
-                )}{' '}
-                · RIM (35%): Rp{' '}
+                Floor G-J (0%):{' '}
+                <strong className="text-[#0D5C46]">
+                  Rp{' '}
+                  {formatIdrPriceDisplay(
+                    joeliardiEval.grahamJoeliardiBenchmarkIdr ??
+                      Math.round(joeliardiEval.intrinsicValueIdr * 0.82)
+                  )}
+                </strong>{' '}
+                · RIM ω={(joeliardiEval.rimPersistenceOmega ?? 0.72).toFixed(2)}: Rp{' '}
                 {formatIdrPriceDisplay(
                   joeliardiEval.rimFairValueIdr ?? joeliardiEval.intrinsicValueIdr
-                )}{' '}
-                · RelVal (20%): Rp{' '}
-                {formatIdrPriceDisplay(
-                  joeliardiEval.statArbImpliedTargetIdr ?? joeliardiEval.intrinsicValueIdr
                 )}
               </div>
             </div>
@@ -1467,15 +1476,17 @@ export function EmitenFundamentalInspectorModal({
               <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
                 <MetricTooltip
                   label="MARGIN OF SAFETY & STATE"
-                  title="Sabuk Pengaman Valuasi & Dynamic Decision Tree"
-                  laymanExplanation="Selisih diskon antara Nilai Intrinsik terhadap Harga Pasar. Jika emiten memiliki katalis aktif (Buyback atau pertumbuhan laba kuartal >20% YoY) dan MoS ≥ -10%, mesin keputusan otomatis membatalkan 'Tunggu Koreksi Wajar' menjadi 'Buy on Strength / Catalyst'."
-                  practicalGuide="MoS ≥ +15% = Diskon Kuat; MoS ≥ -10% + Katalis Aktif = Buy on Strength / Catalyst; < -10% = Tunggu Pullback."
+                  title="Sabuk Pengaman Valuasi Dinamis (Excess Return) & Catalyst Override"
+                  laymanExplanation="Syarat MoS dikompresi ke 0%–10% bila Excess Return (Forward ROE − Ke) > 10%. Jika emiten memiliki katalis aktif (hasActiveCatalyst: Buyback, lonjakan laba >20%, atau akuisisi), status otomatis beralih ke Buy on Strength dengan harga spot sebagai floor."
+                  practicalGuide="MoS ≥ Syarat Dinamis = Akumulasi Rasional; Katalis Aktif = Buy on Strength; Siklikal PBV Z ≤ -1.5σ = Strong Buy."
                 />
               </div>
               <div
                 className={`text-lg font-bold font-mono mt-1 ${
                   joeliardiEval.marginOfSafetyPct >= 10 ||
-                  joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST'
+                  joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST' ||
+                  joeliardiEval.decisionState === 'STRONG_BUY_CYCLICAL_ZSCORE' ||
+                  joeliardiEval.decisionState === 'ACCUMULATE_QUALITY_FAIR_VALUE'
                     ? 'text-[#0D5C46]'
                     : joeliardiEval.marginOfSafetyPct >= 0
                     ? 'text-[#D97706]'
@@ -1487,7 +1498,8 @@ export function EmitenFundamentalInspectorModal({
               </div>
               <span
                 className={`text-[10.5px] font-mono font-bold block truncate ${
-                  joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST'
+                  joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST' ||
+                  joeliardiEval.decisionState === 'STRONG_BUY_CYCLICAL_ZSCORE'
                     ? 'text-[#0D5C46]'
                     : 'text-neutral-600'
                 }`}
@@ -1501,7 +1513,7 @@ export function EmitenFundamentalInspectorModal({
                 <MetricTooltip
                   label={`MATRIKS SEKTOR (${joeliardiEval.sectorPrimaryMetricShort ?? 'PBV'}) & PBV`}
                   title={`Matriks Spesifik Sektor (${joeliardiEval.sectorPrimaryMetricLabel ?? 'Justified PBV'}) & Damodaran PBV`}
-                  laymanExplanation="Riset analis finansial membuktikan tidak ada satu rasio untuk semua sektor: Energi/Komoditas memakai P/CF (Arus Kas), Telekomunikasi/Menara memakai EV/EBITDA, Properti memakai P/AFFO, dan Perbankan memakai Justified PBV."
+                  laymanExplanation="Riset analis finansial membuktikan tidak ada satu rasio untuk semua sektor: Energi/Komoditas memakai P/CF atau Mid-Cycle PBV, Hilirisasi/Capex Aggressor memakai Blended RIM + Forward PE, Properti memakai 80% PBV Replacement + 20% RelVal, dan Perbankan memakai Justified PBV."
                   practicalGuide="Bandingkan rasio sektor aktual terhadap kelipatan wajarnya serta Implied PBV terhadap Justified PBV Damodaran."
                   align="right"
                 />
@@ -1565,10 +1577,18 @@ export function EmitenFundamentalInspectorModal({
                     : '(Kas Riil Sehat)'}
                 </div>
                 <div>
-                  TSY: <strong className="text-[#0D5C46]">{(joeliardiEval.totalShareholderYieldPct ?? joeliardiEval.forwardDividendYieldPct).toFixed(2)}%</strong>{' '}
+                  {(joeliardiEval.netDebtPaydownYieldPct ?? 0) > 0 && activeStock.sector !== 'Financials'
+                    ? 'TSY'
+                    : 'Net Payout'}:{' '}
+                  <strong className="text-[#0D5C46]">
+                    {(joeliardiEval.totalShareholderYieldPct ?? joeliardiEval.forwardDividendYieldPct).toFixed(2)}%
+                  </strong>{' '}
                   (Div {joeliardiEval.forwardDividendYieldPct.toFixed(2)}%
                   {(joeliardiEval.dynamicBuybackYieldPct ?? 0) > 0
                     ? ` + Buyback ${(joeliardiEval.dynamicBuybackYieldPct ?? 0).toFixed(2)}%`
+                    : ''}
+                  {(joeliardiEval.netDebtPaydownYieldPct ?? 0) > 0
+                    ? ` + DebtPay ${(joeliardiEval.netDebtPaydownYieldPct ?? 0).toFixed(2)}%`
                     : ''})
                 </div>
               </div>
@@ -1713,18 +1733,24 @@ export function EmitenFundamentalInspectorModal({
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E4E2DD] pb-2.5">
               <div>
                 <span className="text-[10px] font-bold uppercase tracking-wider text-[#0D5C46] block">
-                  QUANTEDGE MULTI-MODEL VALUATION
+                  QUANTEDGE SECTOR-ADAPTIVE ROUTER &amp; DYNAMIC ENSEMBLE
                 </span>
                 <div className="text-xs sm:text-sm font-bold text-[#111315] mt-0.5">
                   <MetricTooltip
-                    label="Komparasi Multi-Metode Harga Wajar"
-                    title="Dasar Riset Akademik Pembobotan Ensemble (45% Sektor · 35% RIM · 20% Peer)"
-                    laymanExplanation="Menggabungkan 3 paradigma valuasi institusional: (1) 45% Matriks Spesifik Sektor berbasis Liu, Nissim & Thomas (2002, Journal of Accounting Research) karena multiple kas/industri spesifik memiliki R² tertinggi dalam menjelaskan harga saham sektoral; (2) 35% Multi-Stage Residual Income (Ohlson 1995 & Penman 2020) sebagai jangkar nilai buku & persistensi laba abnormal jangka menengah; (3) 20% Hedonic Peer & Statistical Arbitrage (Bartram & Grinblatt 2018 JFE; Gatev et al. 2006 RFS) sebagai kalibrator dislokasi harga lintas emiten."
-                    practicalGuide="Kombinasi 45%/35%/20% menurunkan model-specification error hingga ~38% dibanding mengandalkan satu rumus tunggal."
+                    label="Komparasi Multi-Metode Harga Wajar & Standalone Floor"
+                    title="ValuationEngine Router, DynamicEnsembleWeighter & Graham-Joeliardi Floor"
+                    laymanExplanation="Mengarahkan emiten ke 1 dari 3 modul sektoral (Steady Compounder, Capex Aggressor, Pure Cyclical), menyesuaikan bobot secara dinamis (memangkas 50% bobot model yang menyimpang >40% dari median, mematikan P/CF bila OCF<0, atau mematikan RelVal bila ρ<0.70), serta menampilkan Graham-Joeliardi Benchmark sebagai floor independen (0% bobot ensemble)."
+                    practicalGuide="Bandingkan Harga Wajar Utama Quantedge terhadap Graham-Joeliardi Floor untuk memverifikasi ketahanan margin of safety."
                   />
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2 shrink-0">
+                {joeliardiEval.valuationModuleLabel && (
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-mono rounded-xs bg-[#059669]/10 border border-[#059669]/40 text-[#0D5C46] font-bold">
+                    <span>Router:</span>
+                    <span>{joeliardiEval.valuationModuleLabel}</span>
+                  </div>
+                )}
                 <div className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-mono rounded-xs bg-[#FFFFFF] border border-[#E4E2DD] text-neutral-600">
                   <span className="font-semibold">Matriks Utama Sektor:</span>
                   <span className="px-2 py-0.5 rounded-xs bg-[#D97706]/20 text-[#D97706] bb-amber border border-[#D97706]/50 font-extrabold tracking-tight">
@@ -1746,7 +1772,7 @@ export function EmitenFundamentalInspectorModal({
               </div>
             )}
 
-            {/* 4 Valuation Methods Grid: Full Non-Truncated Titles + Visual Accumulation Bars + Interactive Tooltips */}
+            {/* 5 Valuation Methods Grid: Model Final + 3 Dynamic Ensemble Legs + 1 Standalone Graham-Joeliardi Floor */}
             {joeliardiEval.valuationMethodsComparison &&
               joeliardiEval.valuationMethodsComparison.length > 0 &&
               (() => {
@@ -1758,30 +1784,45 @@ export function EmitenFundamentalInspectorModal({
                   joeliardiEval.statArbImpliedTargetIdr ?? joeliardiEval.intrinsicValueIdr;
                 const totalModelFinal = Math.max(1, joeliardiEval.intrinsicValueIdr);
 
-                const secContribIdr = Math.round(secFair * 0.45);
-                const rimContribIdr = Math.round(rimFair * 0.35);
+                const secLeg = joeliardiEval.valuationMethodsComparison.find(
+                  (x) => x.id === 'sector_specific_matrix'
+                );
+                const rimLeg = joeliardiEval.valuationMethodsComparison.find(
+                  (x) => x.id === 'multistage_rim'
+                );
+                const relLeg = joeliardiEval.valuationMethodsComparison.find(
+                  (x) => x.id === 'statarb_relative_peer'
+                );
+
+                const secWeightDec = (secLeg?.weightPct ?? 45) / 100;
+                const rimWeightDec = (rimLeg?.weightPct ?? 35) / 100;
+                const relWeightDec = (relLeg?.weightPct ?? 20) / 100;
+
+                const secContribIdr = Math.round(secFair * secWeightDec);
+                const rimContribIdr = Math.round(rimFair * rimWeightDec);
                 const relContribIdr = Math.max(
                   0,
-                  totalModelFinal - secContribIdr - rimContribIdr
+                  Math.round(relFair * relWeightDec)
                 );
 
                 const secSharePct = Math.max(
-                  8,
-                  Math.min(80, Math.round((secContribIdr / totalModelFinal) * 100))
+                  0,
+                  Math.min(100, Math.round(secWeightDec * 100))
                 );
                 const rimSharePct = Math.max(
-                  8,
-                  Math.min(80, Math.round((rimContribIdr / totalModelFinal) * 100))
+                  0,
+                  Math.min(100, Math.round(rimWeightDec * 100))
                 );
                 const relSharePct = Math.max(
-                  6,
+                  0,
                   100 - secSharePct - rimSharePct
                 );
 
                 return (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
                     {joeliardiEval.valuationMethodsComparison.map((m, mIdx) => {
                       const isPrimary = Boolean(m.isPrimaryEnsemble);
+                      const isStandalone = Boolean(m.isStandaloneBenchmark);
                       const cleanMethodName = m.name.replace(/\s*\(Utama\)/i, '');
                       const compContribIdr =
                         m.id === 'sector_specific_matrix'
@@ -1790,23 +1831,31 @@ export function EmitenFundamentalInspectorModal({
                           ? rimContribIdr
                           : m.id === 'statarb_relative_peer'
                           ? relContribIdr
+                          : isStandalone
+                          ? 0
                           : totalModelFinal;
                       const compBarColor =
                         m.id === 'sector_specific_matrix'
                           ? 'bg-[#D97706]'
                           : m.id === 'multistage_rim'
                           ? 'bg-[#059669]'
+                          : isStandalone
+                          ? 'bg-neutral-400'
                           : 'bg-[#0284C7]';
                       const compTextColor =
                         m.id === 'sector_specific_matrix'
                           ? 'text-[#D97706] bb-amber'
                           : m.id === 'multistage_rim'
                           ? 'text-[#0D5C46]'
+                          : isStandalone
+                          ? 'text-neutral-600'
                           : 'text-[#0284C7] bb-cyan';
-                      const compShareOfFinalPct = Math.min(
-                        100,
-                        Math.max(8, Math.round((compContribIdr / totalModelFinal) * 100))
-                      );
+                      const compShareOfFinalPct = isStandalone
+                        ? 0
+                        : Math.min(
+                            100,
+                            Math.max(0, Math.round((m.weightPct ?? 0)))
+                          );
 
                       const tooltipConfig =
                         m.id === 'quantedge_ensemble'
@@ -1814,28 +1863,37 @@ export function EmitenFundamentalInspectorModal({
                               title:
                                 'Quantedge Sector-Adaptive Ensemble (Model Final — Akumulasi 100%)',
                               laymanExplanation:
-                                'Model Final yang dihitung secara presisi dari akumulasi tertimbang 45% Harga Wajar Matriks Sektor + 35% Harga Wajar Multi-Stage RIM + 20% Target Konvergensi Relative Value Peer.',
+                                'Model Final yang dihitung secara presisi dari akumulasi tertimbang komponen Matriks Sektor, Multi-Stage RIM, dan Relative Value Peer melalui DynamicEnsembleWeighter.',
                               practicalGuide:
-                                'Menjadi patokan utama perhitungan Margin of Safety (MoS) dan zona akumulasi karena mengintegrasikan dimensi kas sektoral, nilai buku, dan harga relatif peer.'
+                                'Menjadi patokan utama perhitungan Margin of Safety (MoS) dan zona akumulasi.'
                             }
                           : m.id === 'sector_specific_matrix'
                           ? {
-                              title: `Matriks Spesifik Sektor (${joeliardiEval.sectorPrimaryMetricLabel}) — Bobot 45%`,
-                              laymanExplanation: `Menggunakan metrik standar institusional yang paling relevan untuk sektor ${activeStock.sector} (${joeliardiEval.sectorPrimaryMetricShort}) sesuai riset Liu, Nissim & Thomas (2002), sehingga terbebas dari distorsi depresiasi non-kas atau struktur modal sektoral.`,
-                              practicalGuide: `Membandingkan ${joeliardiEval.sectorPrimaryMetricShort} aktual (${joeliardiEval.sectorPrimaryImpliedMultiple}x) terhadap ${joeliardiEval.sectorPrimaryMetricShort} wajar (${joeliardiEval.sectorPrimaryFairMultiple}x) berbasis ${joeliardiEval.sectorPrimaryPerShareLabel}.`
+                              title: `Matriks Spesifik Sektor (${joeliardiEval.sectorPrimaryMetricLabel}) — Bobot ${(m.weightPct ?? 45).toFixed(1)}%`,
+                              laymanExplanation: `Menggunakan metrik standar institusional yang paling relevan untuk sektor ${activeStock.sector} (${joeliardiEval.sectorPrimaryMetricShort}) sesuai router ${joeliardiEval.valuationModuleLabel ?? 'ValuationEngine'}.`,
+                              practicalGuide: `Membandingkan ${joeliardiEval.sectorPrimaryMetricShort} aktual (${joeliardiEval.sectorPrimaryImpliedMultiple}x) terhadap ${joeliardiEval.sectorPrimaryMetricShort} wajar (${joeliardiEval.sectorPrimaryFairMultiple}x).`
                             }
                           : m.id === 'multistage_rim'
                           ? {
-                              title: `Multi-Stage Residual Income (Ohlson 1995 & Penman 2020, ${joeliardiEval.rimFadeYears ?? 6}Y Fade) — Bobot 35%`,
+                              title: `Multi-Stage Residual Income (Ohlson 1995 & Penman 2020, ω=${(joeliardiEval.rimPersistenceOmega ?? 0.72).toFixed(2)}) — Bobot ${(m.weightPct ?? 35).toFixed(1)}%`,
                               laymanExplanation:
-                                'Menilai saham dari Nilai Buku Ekuitas saat ini (Anchor BVPS) ditambah nilai sekarang (present value) dari Laba Abnormal (Forward ROE di atas Cost of Equity Ke) yang meluruh secara bertahap sesuai koefisien persistensi moat (ω).',
+                                'Menilai saham dari Nilai Buku Ekuitas saat ini (Anchor BVPS) ditambah nilai sekarang (present value) dari Laba Abnormal yang meluruh sesuai faktor elastis sektoral (ω).',
                               practicalGuide:
-                                'Sangat tangguh terhadap fluktuasi siklus jangka pendek karena berjangkar pada ekuitas neraca yang telah diaudit.'
+                                'Sangat tangguh terhadap fluktuasi siklus jangka pendek karena berjangkar pada ekuitas neraca.'
+                            }
+                          : isStandalone
+                          ? {
+                              title:
+                                'Graham-Joeliardi "Moat" Intrinsic Floor Benchmark (Standalone — 0% Bobot Ensemble)',
+                              laymanExplanation:
+                                'Rumus konservatif (EPS × (8.5 + 2g) × 4.4) ÷ SBN 10Y Yield dengan Weak Moat Penalty (-25% bila ROE < 15% atau DER > 1x). Ditampilkan murni sebagai batas bawah keamanan (sanity check floor) dan TIDAK dirata-ratakan ke dalam Harga Wajar Utama Quantedge.',
+                              practicalGuide:
+                                'Jika harga pasar berada di dekat atau di bawah lantai Graham-Joeliardi ini, risiko penurunan fundamental jangka panjang sangat terbatas.'
                             }
                           : {
-                              title: `Relative Value & Statistical Arbitrage vs ${joeliardiEval.statArbPeerTicker} — Bobot 20%`,
+                              title: `Beta-Adjusted Relative Value & StatArb vs ${joeliardiEval.statArbPeerTicker} — Bobot ${(m.weightPct ?? 20).toFixed(1)}%`,
                               laymanExplanation:
-                                'Mengukur nilai wajar relatif berdasarkan regresi hedonis lintas emiten (Bartram & Grinblatt 2018) dan deviasi spread kointegrasi (Z-Score) terhadap saham kembar (peer twin) ber-korelasi historis tertinggi di sektor yang sama.',
+                                'Mengukur nilai wajar relatif berdasarkan regresi hedonis lintas emiten dan deviasi spread kointegrasi (Z-Score) yang telah dinormalisasi dengan rasio volatilitas Beta (β_A / β_B).',
                               practicalGuide:
                                 'Mendeteksi peluang mean-reversion ketika saham tertinggal secara tidak wajar dibanding peer utamanya.'
                             };
@@ -1846,6 +1904,8 @@ export function EmitenFundamentalInspectorModal({
                           className={`p-3 rounded-xs border transition-colors flex flex-col ${
                             isPrimary
                               ? 'bg-[#FFFFFF] border-[#D97706] shadow-2xs'
+                              : isStandalone
+                              ? 'bg-[#FAF9F6] border-dashed border-[#0D5C46]/50'
                               : 'bg-[#FFFFFF]/80 border-[#E4E2DD]'
                           }`}
                         >
@@ -1853,13 +1913,23 @@ export function EmitenFundamentalInspectorModal({
                             <div className="flex items-center justify-between gap-1.5">
                               <span
                                 className={`text-[10px] font-bold uppercase tracking-wider whitespace-nowrap ${
-                                  isPrimary ? 'text-[#D97706] bb-amber' : 'text-neutral-500'
+                                  isPrimary
+                                    ? 'text-[#D97706] bb-amber'
+                                    : isStandalone
+                                    ? 'text-[#0D5C46]'
+                                    : 'text-neutral-500'
                                 }`}
                               >
-                                {isPrimary ? '★ MODEL FINAL' : 'KOMPONEN ENSEMBLE'}
+                                {isPrimary
+                                  ? '★ MODEL FINAL'
+                                  : isStandalone
+                                  ? '⚓ FLOOR BENCHMARK'
+                                  : 'KOMPONEN ENSEMBLE'}
                               </span>
                               <span className="text-[10px] font-mono font-semibold text-neutral-500 shrink-0 whitespace-nowrap">
-                                Bobot {(m.weightPct ?? 0).toFixed(0)}%
+                                {isStandalone
+                                  ? 'Standalone (0%)'
+                                  : `Bobot ${(m.weightPct ?? 0).toFixed(0)}%`}
                               </span>
                             </div>
                             <div className="text-[11px] font-bold text-[#111315] mt-1 leading-snug break-words">
@@ -1892,33 +1962,39 @@ export function EmitenFundamentalInspectorModal({
                               </span>
                             </div>
 
-                            {/* Visual Accumulation Bar: Stacked Bar on Model Final vs Proportional Contribution Bar on Components */}
+                            {/* Visual Accumulation Bar: Stacked Bar on Model Final vs Proportional Contribution Bar on Components vs Standalone Badge */}
                             {isPrimary ? (
                               <div className="mt-1.5 mb-1.5 p-1.5 rounded-2xs bg-[#FAF9F6] border border-[#E4E2DD]">
                                 <div className="flex items-center justify-between gap-1 text-[9px] font-mono text-neutral-600 mb-1 whitespace-nowrap">
                                   <span className="font-bold text-[#111315]">
-                                    Akumulasi 3 Komponen:
+                                    Akumulasi Dinamis:
                                   </span>
                                   <span className="font-bold text-[#D97706] bb-amber">
                                     100% (Rp {formatIdrPriceDisplay(totalModelFinal)})
                                   </span>
                                 </div>
                                 <div className="w-full h-2 rounded-2xs overflow-hidden flex bg-[#E4E2DD]/70 gap-0.5">
-                                  <div
-                                    className="h-full bg-[#D97706]"
-                                    style={{ width: `${secSharePct}%` }}
-                                    title={`45% Sektor: +Rp ${formatIdrPriceDisplay(secContribIdr)}`}
-                                  />
-                                  <div
-                                    className="h-full bg-[#059669]"
-                                    style={{ width: `${rimSharePct}%` }}
-                                    title={`35% RIM: +Rp ${formatIdrPriceDisplay(rimContribIdr)}`}
-                                  />
-                                  <div
-                                    className="h-full bg-[#0284C7]"
-                                    style={{ width: `${relSharePct}%` }}
-                                    title={`20% RelVal: +Rp ${formatIdrPriceDisplay(relContribIdr)}`}
-                                  />
+                                  {secSharePct > 0 && (
+                                    <div
+                                      className="h-full bg-[#D97706]"
+                                      style={{ width: `${secSharePct}%` }}
+                                      title={`${secSharePct}% Sektor: +Rp ${formatIdrPriceDisplay(secContribIdr)}`}
+                                    />
+                                  )}
+                                  {rimSharePct > 0 && (
+                                    <div
+                                      className="h-full bg-[#059669]"
+                                      style={{ width: `${rimSharePct}%` }}
+                                      title={`${rimSharePct}% RIM: +Rp ${formatIdrPriceDisplay(rimContribIdr)}`}
+                                    />
+                                  )}
+                                  {relSharePct > 0 && (
+                                    <div
+                                      className="h-full bg-[#0284C7]"
+                                      style={{ width: `${relSharePct}%` }}
+                                      title={`${relSharePct}% RelVal: +Rp ${formatIdrPriceDisplay(relContribIdr)}`}
+                                    />
+                                  )}
                                 </div>
                                 <div className="flex items-center justify-between text-[9px] font-mono text-neutral-600 mt-1">
                                   <span className="text-[#D97706] bb-amber font-semibold">
@@ -1932,6 +2008,22 @@ export function EmitenFundamentalInspectorModal({
                                   <span className="text-[#0284C7] bb-cyan font-semibold">
                                     Rp {formatIdrPriceDisplay(relContribIdr)}
                                   </span>
+                                </div>
+                              </div>
+                            ) : isStandalone ? (
+                              <div className="mt-1.5 mb-1.5 p-1.5 rounded-2xs bg-[#FFFFFF] border border-[#0D5C46]/30">
+                                <div className="flex items-center justify-between text-[9.5px] font-mono mb-1">
+                                  <span className="text-[#0D5C46] font-bold">
+                                    Sanity Check Floor:
+                                  </span>
+                                  <span className="font-semibold text-neutral-600">
+                                    Tidak Dirata-ratakan
+                                  </span>
+                                </div>
+                                <div className="text-[9px] font-mono text-neutral-500 leading-tight">
+                                  {joeliardiEval.isMoatHaircutApplied
+                                    ? 'Termasuk Weak Moat Penalty -25% (ROE<15% / DER>1x)'
+                                    : 'Moat Kuat Terverifikasi (0% Haircut Penalty)'}
                                 </div>
                               </div>
                             ) : (
@@ -1956,8 +2048,7 @@ export function EmitenFundamentalInspectorModal({
                                     {(m.weightPct ?? 0).toFixed(0)}%
                                   </span>
                                   <span>
-                                    {compShareOfFinalPct}% dari Rp{' '}
-                                    {formatIdrPriceDisplay(totalModelFinal)}
+                                    {compShareOfFinalPct}% bobot dinamis
                                   </span>
                                 </div>
                               </div>

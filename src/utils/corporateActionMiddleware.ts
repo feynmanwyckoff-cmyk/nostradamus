@@ -7,7 +7,7 @@ import {
 
 export interface BuiltInCorporateActionCatalogEntry {
   ticker: string;
-  splitRatioDivisor: number; // 1 = no unadjusted split; >1 = stock split ratio divisor (e.g. 2 for 1:2, 5 for 1:5)
+  splitRatioDivisor: number; // 1 = no unadjusted split; >1 = stock split ratio divisor (e.g. 2 for 1:2, 5 for 1:5); <1 = reverse split
   hasActiveBuyback: boolean;
   buybackNominalBillionIdr: number; // Active OJK/RUPS share buyback mandate in Billion IDR (Rp Miliar)
   liveMarketCapTrillionIdr: number; // Calibrated reference Market Cap in Trillion IDR (Rp Triliun) at baseline price
@@ -306,6 +306,20 @@ export const IDX_CORPORATE_ACTION_CATALYST_REGISTRY: Record<
     earningsGrowthYoYPct: 21.0,
     catalystSummary:
       'Efisiensi Pabrik Keramik Plant 5C & Mandat Buyback Rp 150 Miliar Menjaga Price Floor Dividen'
+  },
+  ADMR: {
+    ticker: 'ADMR',
+    splitRatioDivisor: 1,
+    hasActiveBuyback: false,
+    buybackNominalBillionIdr: 0,
+    liveMarketCapTrillionIdr: 56.4,
+    baselineRefPriceIdr: 1380,
+    latestQuarterLabel: 'Q3-2026 (9M26 Annualized)',
+    trailingRoePct: 26.4,
+    latestQuarterAnnualizedRoePct: 29.2,
+    earningsGrowthYoYPct: 24.5,
+    catalystSummary:
+      'Ekspansi Coking Coal & Fase Konstruksi Smelter Aluminium (CWIP > 25% Aset) Memicu Step-Function Growth'
   }
 };
 
@@ -376,20 +390,60 @@ export interface InterceptedCorporateActionState {
   forwardAnnualizedRoePct: number;
   earningsGrowthYoYPct: number;
   latestQuarterLabel: string;
+  detectedQuarter: 1 | 2 | 3 | 4;
+  annualizationFactor: number;
   catalystValuationBoostPct: number; // Capped at +15.0% per architectural policy
   catalystValuationMultiplier: number; // 1.00 to 1.15
   isCatalystActive: boolean;
+  hasActiveCatalyst: boolean; // Triggered by buyback, earnings surge >20%, or acquisition
   catalystBadgeLabel?: string;
   catalystNarrative: string;
   isManualOverride: boolean;
 }
 
 /**
+ * Helper middleware that divides static per-share variables (BVPS, EPS, Target Price, and ADTV)
+ * by the dynamic stock split (>1) or reverse split (0 < ratio < 1) divisor before valuation execution.
+ */
+export function applyDynamicCorporateActionDivisor(params: {
+  rawBvpsIdr: number;
+  rawEpsIdr: number;
+  rawTargetPriceIdr: number;
+  rawAdtv20dIdr: number;
+  splitRatioDivisor: number;
+}): {
+  bvpsIdr: number;
+  epsIdr: number;
+  targetPriceIdr: number;
+  adtv20dIdr: number;
+} {
+  const { rawBvpsIdr, rawEpsIdr, rawTargetPriceIdr, rawAdtv20dIdr, splitRatioDivisor } = params;
+  const ratio = Number(splitRatioDivisor) > 0 ? Number(splitRatioDivisor) : 1;
+
+  if (Math.abs(ratio - 1) < 1e-4) {
+    return {
+      bvpsIdr: Math.max(10, Math.round(rawBvpsIdr)),
+      epsIdr: Math.max(1, Math.round(rawEpsIdr)),
+      targetPriceIdr: Math.max(50, Math.round(rawTargetPriceIdr)),
+      adtv20dIdr: Math.max(250_000_000, Math.round(rawAdtv20dIdr))
+    };
+  }
+
+  // Divide static per-share metrics (BVPS, EPS, Target Price) and calibrate ADTV capacity by split ratio
+  return {
+    bvpsIdr: Math.max(10, Math.round(rawBvpsIdr / ratio)),
+    epsIdr: Math.max(1, Math.round(rawEpsIdr / ratio)),
+    targetPriceIdr: Math.max(50, Math.round(rawTargetPriceIdr / ratio)),
+    adtv20dIdr: Math.max(250_000_000, Math.round(rawAdtv20dIdr / Math.pow(ratio, 0.35)))
+  };
+}
+
+/**
  * 1. CORPORATE ACTION INTERCEPTOR & 2. FORWARD-LOOKING ANNUALIZER (Pure Functional Middleware)
  * Intercepts stock metrics and baseline anchors BEFORE they enter the valuation models:
- * - Applies stock split divisor (`splitRatioDivisor`) to historical anchor prices and calibrates ADTV capacity limits.
+ * - Applies stock split or reverse split divisor (`splitRatioDivisor`) to historical anchor prices, BVPS, EPS, and ADTV limits.
  * - Computes dynamic Buyback Yield (`Nominal Buyback / Live Market Cap`) for full pass-through into TSY.
- * - Proportionally annualizes latest quarterly earnings to produce `forwardAnnualizedRoePct` and `earningsGrowthYoYPct`.
+ * - Intercepts quarterly YTD earnings (Q1 x4/1, Q2 x4/2, Q3 x4/3) to produce `forwardAnnualizedRoePct` and `earningsGrowthYoYPct`.
  * - Caps the direct valuation multiple boost from buybacks & quarterly earnings acceleration at +15% (`1.15x`).
  */
 export function interceptCorporateActionAndAnnualize(params: {
@@ -406,34 +460,44 @@ export function interceptCorporateActionAndAnnualize(params: {
   const builtIn = IDX_CORPORATE_ACTION_CATALYST_REGISTRY[clean];
 
   // Heuristic detection if a stock is not in the explicit registry/override:
-  // Detects automatic stock split unit scale mismatch (e.g. if catalog anchor is >= 2.2x spot price while 30D return is normal)
+  // Detects automatic stock split (>1) or reverse split (<1) unit scale mismatch
   let autoSplitDivisor = 1;
-  if (!custom?.splitRatioDivisor && !builtIn?.splitRatioDivisor && rawAnchorPriceIdr > spotPrice * 2.15) {
-    const rawRatio = rawAnchorPriceIdr / spotPrice;
-    const candidateRatios = [2, 4, 5, 10];
-    for (const r of candidateRatios) {
-      if (Math.abs(rawRatio - r) / r <= 0.28) {
-        autoSplitDivisor = r;
-        break;
+  if (!custom?.splitRatioDivisor && !builtIn?.splitRatioDivisor) {
+    if (rawAnchorPriceIdr > spotPrice * 2.15) {
+      const rawRatio = rawAnchorPriceIdr / spotPrice;
+      const candidateRatios = [2, 4, 5, 10];
+      for (const r of candidateRatios) {
+        if (Math.abs(rawRatio - r) / r <= 0.28) {
+          autoSplitDivisor = r;
+          break;
+        }
+      }
+    } else if (spotPrice > rawAnchorPriceIdr * 2.15) {
+      // Reverse split heuristic (e.g. 1:5 reverse split -> divisor 0.2)
+      const invRatio = spotPrice / Math.max(50, rawAnchorPriceIdr);
+      const candidateReverse = [2, 4, 5, 10];
+      for (const r of candidateReverse) {
+        if (Math.abs(invRatio - r) / r <= 0.25) {
+          autoSplitDivisor = Number((1 / r).toFixed(4));
+          break;
+        }
       }
     }
   }
 
-  const splitRatioDivisor = Math.max(
-    1,
-    Number(custom?.splitRatioDivisor ?? builtIn?.splitRatioDivisor ?? autoSplitDivisor) || 1
+  const rawDivisor = Number(
+    custom?.splitRatioDivisor ?? builtIn?.splitRatioDivisor ?? stock.splitRatioDivisor ?? autoSplitDivisor
   );
+  const splitRatioDivisor = rawDivisor > 0 ? rawDivisor : 1;
 
-  // Divide historical anchor price by splitRatioDivisor if unadjusted
+  // Divide historical anchor price & ADTV by splitRatioDivisor (supports both split >1 and reverse split <1)
   const adjustedAnchorPriceIdr =
-    splitRatioDivisor > 1
+    Math.abs(splitRatioDivisor - 1) > 1e-4
       ? Math.max(50, Math.round(rawAnchorPriceIdr / splitRatioDivisor))
       : Math.max(50, rawAnchorPriceIdr);
 
-  // Post-split liquidity calibration: stock split broadens retail/institutional tick participation,
-  // while preserving accurate IDR value capacity (divided if historical share price unit was unadjusted)
   const adjustedAdtv20dIdr =
-    splitRatioDivisor > 1
+    Math.abs(splitRatioDivisor - 1) > 1e-4
       ? Math.max(250_000_000, Math.round(rawAdtv20dIdr / Math.pow(splitRatioDivisor, 0.35)))
       : rawAdtv20dIdr;
 
@@ -446,8 +510,6 @@ export function interceptCorporateActionAndAnnualize(params: {
   );
 
   // Live quarterly feed & momentum heuristic when not explicitly overridden:
-  // If an issuer has strong operating margin, positive 30D/YTD price-earnings breakout, and clean cashflow,
-  // proportionally annualize its Q3/Q4 run-rate.
   const heuristicQuarterlyGrowthPct = (() => {
     if (stock.isHscFlagged) return 0;
     const opMargin = stock.operatingMargin || 12;
@@ -471,16 +533,29 @@ export function interceptCorporateActionAndAnnualize(params: {
     ).toFixed(1)
   );
 
-  // Proportionally annualize the latest quarter earnings into Forward ROE
-  const derivedForwardRoeFromGrowth =
-    earningsGrowthYoYPct > 0
-      ? Number(
-          Math.min(
-            38.0,
-            trailingRoePct * (1 + Math.min(0.48, (earningsGrowthYoYPct / 100) * 0.78))
-          ).toFixed(2)
-        )
-      : trailingRoePct;
+  const latestQuarterLabel =
+    custom?.latestQuarterLabel || builtIn?.latestQuarterLabel || 'Q3-2026 (9M26 Annualized)';
+
+  // Detect Quarter (Q1/Q2/Q3/Q4) and apply (4 / Quarter) annualizer multiplier
+  const upperQ = latestQuarterLabel.toUpperCase();
+  const detectedQuarter: 1 | 2 | 3 | 4 = upperQ.includes('Q1') || upperQ.includes('3M')
+    ? 1
+    : upperQ.includes('Q2') || upperQ.includes('6M') || upperQ.includes('1H')
+    ? 2
+    : upperQ.includes('Q4') || upperQ.includes('FY')
+    ? 4
+    : 3;
+  const annualizationFactor = Number((4 / detectedQuarter).toFixed(4));
+
+  // Proportionally annualize the latest quarter YTD earnings into Forward ROE (Q3 * 4/3, Q2 * 4/2, Q1 * 4/1)
+  const ytdRunRateRoe =
+    (trailingRoePct * (detectedQuarter / 4)) *
+    (earningsGrowthYoYPct > 0
+      ? 1 + Math.min(0.48, (earningsGrowthYoYPct / 100) * 0.78)
+      : 1);
+  const derivedForwardRoeFromAnnualizer = Number(
+    Math.min(38.0, ytdRunRateRoe * annualizationFactor).toFixed(2)
+  );
 
   const forwardAnnualizedRoePct = Math.max(
     0.5,
@@ -489,7 +564,7 @@ export function interceptCorporateActionAndAnnualize(params: {
         custom?.forwardAnnualizedRoePct ??
         builtIn?.latestQuarterAnnualizedRoePct ??
         stock.forwardAnnualizedRoePct ??
-        derivedForwardRoeFromGrowth
+        derivedForwardRoeFromAnnualizer
       ).toFixed(2)
     )
   );
@@ -532,9 +607,17 @@ export function interceptCorporateActionAndAnnualize(params: {
       ? Number(Math.min(14.5, (buybackNominalIdr / liveMarketCapIdr) * 100).toFixed(2))
       : 0;
 
-  const isCatalystActive =
+  const hasActiveAcquisition = Boolean(custom?.hasActiveAcquisition);
+
+  // Explicit Catalyst Override Flag (triggered by buyback, earnings surge >20%, split/reverse-split, or acquisition)
+  const hasActiveCatalyst =
     !stock.isHscFlagged &&
-    (hasActiveBuyback || earningsGrowthYoYPct > 20.0 || splitRatioDivisor > 1);
+    (hasActiveBuyback ||
+      earningsGrowthYoYPct > 20.0 ||
+      hasActiveAcquisition ||
+      Math.abs(splitRatioDivisor - 1) > 1e-4);
+
+  const isCatalystActive = hasActiveCatalyst;
 
   // Valuation Boost Multiplier capped strictly at +15% (1.15x) per user architecture specification
   const rawBuybackBoostPct = hasActiveBuyback ? Math.min(8.5, Math.max(2.0, dynamicBuybackYieldPct * 1.45)) : 0;
@@ -550,9 +633,6 @@ export function interceptCorporateActionAndAnnualize(params: {
     : Number(Math.min(15.0, rawBuybackBoostPct + rawEarningsMomentumBoostPct).toFixed(2));
   const catalystValuationMultiplier = Number((1 + catalystValuationBoostPct / 100).toFixed(4));
 
-  const latestQuarterLabel =
-    custom?.latestQuarterLabel || builtIn?.latestQuarterLabel || 'Q3-2026 (9M26 Annualized)';
-
   // Build concise badge & narrative
   const badgeParts: string[] = [];
   if (hasActiveBuyback) {
@@ -567,6 +647,11 @@ export function interceptCorporateActionAndAnnualize(params: {
   }
   if (splitRatioDivisor > 1) {
     badgeParts.push(`SPLIT 1:${splitRatioDivisor}`);
+  } else if (splitRatioDivisor < 1) {
+    badgeParts.push(`REV SPLIT ${Math.round(1 / splitRatioDivisor)}:1`);
+  }
+  if (hasActiveAcquisition) {
+    badgeParts.push('AKUISISI STRATEGIS');
   }
 
   const catalystBadgeLabel = isCatalystActive
@@ -577,8 +662,8 @@ export function interceptCorporateActionAndAnnualize(params: {
     custom?.catalystNote ||
     builtIn?.catalystSummary ||
     (isCatalystActive
-      ? `Terdeteksi katalis aktif (${badgeParts.join(', ')}) yang mengangkat Forward Annualized ROE dari ${trailingRoePct.toFixed(1)}% menjadi ${forwardAnnualizedRoePct.toFixed(1)}%.`
-      : `Kinerja fundamental berjalan stabil dengan Forward Annualized ROE ${forwardAnnualizedRoePct.toFixed(1)}% (${latestQuarterLabel}).`);
+      ? `Terdeteksi katalis aktif (${badgeParts.join(', ')}) dengan faktor penyetahunan Q${detectedQuarter} (${annualizationFactor.toFixed(2)}x) yang mengangkat Forward Annualized ROE dari ${trailingRoePct.toFixed(1)}% menjadi ${forwardAnnualizedRoePct.toFixed(1)}%.`
+      : `Kinerja fundamental berjalan stabil dengan Forward Annualized ROE ${forwardAnnualizedRoePct.toFixed(1)}% (${latestQuarterLabel}, annualizer ${annualizationFactor.toFixed(2)}x).`);
 
   return {
     ticker: clean,
@@ -593,9 +678,12 @@ export function interceptCorporateActionAndAnnualize(params: {
     forwardAnnualizedRoePct,
     earningsGrowthYoYPct,
     latestQuarterLabel,
+    detectedQuarter,
+    annualizationFactor,
     catalystValuationBoostPct,
     catalystValuationMultiplier,
     isCatalystActive,
+    hasActiveCatalyst,
     catalystBadgeLabel,
     catalystNarrative,
     isManualOverride: Boolean(custom)
@@ -604,10 +692,8 @@ export function interceptCorporateActionAndAnnualize(params: {
 
 /**
  * 3. TYPE-SAFE ENSEMBLE VALUATION AGGREGATOR (.reduce() Enforcement)
- * Guarantees that the primary ensemble intrinsic value is strictly the pure mathematical weighted sum
- * of the final displayed comparator prices:
- *   (Price_Sector * 0.45) + (Price_RIM * 0.35) + (Price_RelVal * 0.20)
- * Eliminates any discrepancy between the UI formula label and the printed Intrinsic Fair Value.
+ * Supports dynamic weights from DynamicEnsembleWeighter while guaranteeing that the printed
+ * Primary Ensemble Fair Value matches the exact mathematical weighted average on the UI card.
  */
 export function computeTypeSafeEnsembleFairValue(
   legs: readonly [EnsembleValuationLeg, EnsembleValuationLeg, EnsembleValuationLeg],
@@ -618,7 +704,6 @@ export function computeTypeSafeEnsembleFairValue(
   intrinsicValueIdr: number;
   ensembleFormulaAudit: string;
 } {
-  // Pure .reduce() over isolated final method prices and weights
   const totalWeight = legs.reduce((acc, leg) => acc + leg.weight, 0);
   const normalizedWeightFactor = totalWeight > 0 ? 1 / totalWeight : 1;
 
@@ -630,9 +715,14 @@ export function computeTypeSafeEnsembleFairValue(
   const discountedRaw = rawWeightedSumIdr * hscDiscountMultiplier;
   const intrinsicValueIdr = tickRounder(Math.max(50, discountedRaw));
 
-  const formulaParts = legs.map(
-    (leg) => `(Rp ${leg.priceIdr.toLocaleString('id-ID')} × ${Math.round(leg.weight * 100)}%)`
-  );
+  const formulaParts = legs
+    .filter((leg) => leg.weight * normalizedWeightFactor > 0.001)
+    .map(
+      (leg) =>
+        `(Rp ${leg.priceIdr.toLocaleString('id-ID')} × ${Math.round(
+          leg.weight * normalizedWeightFactor * 100
+        )}%)`
+    );
   const ensembleFormulaAudit = `${formulaParts.join(' + ')}${
     hscDiscountMultiplier < 0.999 ? ` × HSC ${hscDiscountMultiplier.toFixed(2)}` : ''
   } = Rp ${intrinsicValueIdr.toLocaleString('id-ID')}`;
@@ -645,19 +735,24 @@ export function computeTypeSafeEnsembleFairValue(
 }
 
 /**
- * 4. STATE-BASED RECOMMENDATION ENGINE (Dynamic Decision Tree)
- * Prevents the "Value Trap Detector / Irrational Wait for Pullback" bug when an issuer is experiencing
- * a fundamental earnings breakout (`earningsGrowthYoYPct > 20%`) or price floor liquidity injection
- * (`hasActiveBuyback === true`).
- * Per user-confirmed rule:
- * - Overrides "Tunggu Koreksi Wajar" to "Buy on Strength / Catalyst" whenever an active catalyst is present
- *   AND Margin of Safety (MoS) is at least -10.0% (`marginOfSafetyPct >= -10`).
+ * 4. STATE-BASED RECOMMENDATION ENGINE (Dynamic Decision Tree, Dynamic MoS & Catalyst Override)
+ * Implements:
+ * - Dynamic Margin of Safety (MoS) Tolerance: Links required MoS to Excess Return (Forward ROE - Cost of Equity).
+ *   If Excess Return > 10%, compresses required MoS threshold to 0% - 10% (premium compounder at Fair Value = rational accumulate).
+ * - Catalyst Override Flag (`hasActiveCatalyst`): Triggered by buyback program, earnings surge > 20%, or acquisition.
+ *   If true, reactively switches status from "Tunggu Koreksi Wajar" to "Buy on Strength" and shifts accumulation zone to spot price floor.
+ * - Pure Cyclical PBV Z-Score Anchor: Triggers "STRONG BUY" if Current PBV Z-Score <= -1.5σ.
  */
 export function evaluateDynamicDecisionTree(params: {
   isHscFlagged: boolean;
   isDefensiveDiscountAnomaly: boolean;
+  isCyclicalStrongBuyZScore?: boolean;
+  pbvZScore?: number;
   hasActiveBuyback: boolean;
+  hasActiveCatalyst?: boolean;
   earningsGrowthYoYPct: number;
+  forwardRoePct?: number;
+  costOfEquityPct?: number;
   marginOfSafetyPct: number;
   dmuCompositeScore: number;
   lastPriceIdr: number;
@@ -670,18 +765,36 @@ export function evaluateDynamicDecisionTree(params: {
   idealBuyLowIdr: number;
   idealBuyHighIdr: number;
   formattedAccumulationZone: string;
+  dynamicRequiredMosPct: number;
+  excessReturnSpreadPct: number;
 } {
   const {
     isHscFlagged,
     isDefensiveDiscountAnomaly,
+    isCyclicalStrongBuyZScore = false,
+    pbvZScore,
     hasActiveBuyback,
+    hasActiveCatalyst: explicitCatalystFlag,
     earningsGrowthYoYPct,
+    forwardRoePct = 15.0,
+    costOfEquityPct = 11.5,
     marginOfSafetyPct,
     dmuCompositeScore,
     lastPriceIdr,
     intrinsicValueIdr,
     tickRounder
   } = params;
+
+  // Dynamic Margin of Safety (MoS) Compression linked to Excess Return (Forward ROE - Cost of Equity)
+  const excessReturnSpreadPct = Number((forwardRoePct - costOfEquityPct).toFixed(2));
+  const dynamicRequiredMosPct = Number(
+    (excessReturnSpreadPct > 10.0
+      ? Math.max(0.0, Math.min(10.0, 10.0 - (excessReturnSpreadPct - 10.0) * 0.8))
+      : excessReturnSpreadPct >= 5.0
+      ? 12.0
+      : 20.0
+    ).toFixed(1)
+  );
 
   if (isHscFlagged) {
     return {
@@ -691,13 +804,34 @@ export function evaluateDynamicDecisionTree(params: {
         'Hindari pembelian baru (Block Buy) & alihkan modal ke saham berfundamental sehat.',
       idealBuyLowIdr: 0,
       idealBuyHighIdr: 0,
-      formattedAccumulationZone: 'Tidak direkomendasikan (Blokir HSC — risiko spekulasi tinggi)'
+      formattedAccumulationZone: 'Tidak direkomendasikan (Blokir HSC — risiko spekulasi tinggi)',
+      dynamicRequiredMosPct,
+      excessReturnSpreadPct
     };
   }
 
-  const hasMomentumOrBuybackCatalyst = hasActiveBuyback || earningsGrowthYoYPct > 20.0;
+  const hasActiveCatalyst =
+    explicitCatalystFlag !== undefined
+      ? explicitCatalystFlag
+      : hasActiveBuyback || earningsGrowthYoYPct > 20.0;
 
-  // Dynamic Decision Tree Branch 1: Defensive Discount Anomaly (Beta < 0.5 & Skor Value > 9.0)
+  // Branch 1: Pure Cyclical PBV Z-Score <= -1.5σ Strong Buy Anchor
+  if (isCyclicalStrongBuyZScore) {
+    const low = tickRounder(lastPriceIdr * 0.97);
+    const high = tickRounder(Math.max(lastPriceIdr * 1.03, Math.min(intrinsicValueIdr * 0.90, lastPriceIdr * 1.08)));
+    return {
+      decisionState: 'STRONG_BUY_CYCLICAL_ZSCORE',
+      decisionActionLabel: 'STRONG BUY // CYCLICAL PBV Z-SCORE ≤ -1.5σ',
+      recommendedActionText: `Strong Buy Siklikal (PBV Z-Score ${pbvZScore?.toFixed(2) ?? '-1.50'}σ ≤ -1.5σ dari rata-rata 10 tahun) — Emiten komoditas/siklikal berbiaya rendah dengan neraca sehat (DER ≤ 1x) berada di dasar siklus valuasi buku.`,
+      idealBuyLowIdr: Math.min(low, high),
+      idealBuyHighIdr: Math.max(low, high),
+      formattedAccumulationZone: `Rentang Beli Siklikal (Z ≤ -1.5σ): Rp ${Math.min(low, high).toLocaleString('id-ID')} – Rp ${Math.max(low, high).toLocaleString('id-ID')} | Nilai Wajar Siklus: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): STRONG BUY DASAR SIKLUS (MoS ${marginOfSafetyPct >= 0 ? '+' : ''}${marginOfSafetyPct.toFixed(1)}%)`,
+      dynamicRequiredMosPct,
+      excessReturnSpreadPct
+    };
+  }
+
+  // Branch 2: Defensive Discount Anomaly (Beta < 0.5 & Skor Value > 9.0)
   if (isDefensiveDiscountAnomaly) {
     const ceiling = tickRounder(Math.max(lastPriceIdr, intrinsicValueIdr * 0.88));
     const low = tickRounder(lastPriceIdr * 0.96);
@@ -709,39 +843,63 @@ export function evaluateDynamicDecisionTree(params: {
         'Anomali Aset Defensif Terdiskon — Akumulasi Bertahap (Buy on Weakness 2–3 Tahap) pada harga spot yang sudah berada di zona diskon dalam.',
       idealBuyLowIdr: low,
       idealBuyHighIdr: high,
-      formattedAccumulationZone: `Rentang Beli Ideal: Rp ${low.toLocaleString('id-ID')} – Rp ${high.toLocaleString('id-ID')} | Nilai Wajar: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): ANOMALI DISKON DEFENSIF (MoS ${marginOfSafetyPct >= 0 ? '+' : ''}${marginOfSafetyPct.toFixed(1)}%)`
+      formattedAccumulationZone: `Rentang Beli Ideal: Rp ${low.toLocaleString('id-ID')} – Rp ${high.toLocaleString('id-ID')} | Nilai Wajar: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): ANOMALI DISKON DEFENSIF (MoS ${marginOfSafetyPct >= 0 ? '+' : ''}${marginOfSafetyPct.toFixed(1)}%)`,
+      dynamicRequiredMosPct,
+      excessReturnSpreadPct
     };
   }
 
-  // Dynamic Decision Tree Branch 2: Active Catalyst (Buyback or >20% Earnings Surge) with MoS >= -10%
-  if (hasMomentumOrBuybackCatalyst && marginOfSafetyPct >= -10.0) {
-    // Instead of demanding a 30-40% pullback below market when guarded by a buyback floor or earnings breakout,
-    // anchor the accumulation zone around the live buyback/momentum support band [0.97 * Spot, max(1.02 * Spot, 0.95 * FairValue)]
-    const buyOnStrengthLow = tickRounder(lastPriceIdr * 0.97);
-    const buyOnStrengthHigh = tickRounder(
-      Math.max(lastPriceIdr * 1.02, Math.min(intrinsicValueIdr, lastPriceIdr * 1.06))
+  // Branch 3: Active Catalyst Intervention (`hasActiveCatalyst === true` with MoS >= -10%)
+  // Reactively overrides "Tunggu Koreksi Wajar" -> "Buy on Strength" and shifts accumulation zone to current spot price floor
+  if (hasActiveCatalyst && marginOfSafetyPct >= -10.0) {
+    const spotFloorLow = tickRounder(lastPriceIdr);
+    const spotFloorHigh = tickRounder(
+      Math.max(lastPriceIdr * 1.03, Math.min(intrinsicValueIdr, lastPriceIdr * 1.06))
     );
     const catalystReasons: string[] = [];
     if (hasActiveBuyback) catalystReasons.push('Price Floor Buyback Aktif');
     if (earningsGrowthYoYPct > 20.0) {
       catalystReasons.push(`Lonjakan Laba Kuartal +${earningsGrowthYoYPct.toFixed(1)}% YoY`);
     }
+    if (catalystReasons.length === 0) {
+      catalystReasons.push('Katalis Korporasi Aktif');
+    }
 
     return {
       decisionState: 'BUY_ON_STRENGTH_CATALYST',
-      decisionActionLabel: 'BUY ON STRENGTH / CATALYST // ACTIVE MOMENTUM',
-      recommendedActionText: `Buy on Strength / Catalyst (${catalystReasons.join(' + ')}) — Status "Tunggu Koreksi Wajar" dibatalkan otomatis karena momentum fundamental & price floor menjaga harga spot (MoS ${marginOfSafetyPct >= 0 ? '+' : ''}${marginOfSafetyPct.toFixed(1)}% ≥ batas toleransi -10%).`,
-      idealBuyLowIdr: Math.min(buyOnStrengthLow, buyOnStrengthHigh),
-      idealBuyHighIdr: Math.max(buyOnStrengthLow, buyOnStrengthHigh),
-      formattedAccumulationZone: `Rentang Akumulasi Catalyst (Buy on Strength): Rp ${Math.min(buyOnStrengthLow, buyOnStrengthHigh).toLocaleString('id-ID')} – Rp ${Math.max(buyOnStrengthLow, buyOnStrengthHigh).toLocaleString('id-ID')} | Nilai Wajar Forward: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): BUY ON STRENGTH / CATALYST (${catalystReasons.join(' · ')}, MoS ${marginOfSafetyPct >= 0 ? '+' : ''}${marginOfSafetyPct.toFixed(1)}%)`
+      decisionActionLabel: 'Buy on Strength',
+      recommendedActionText: `Buy on Strength (${catalystReasons.join(' + ')}) — Status "Tunggu Koreksi Wajar" diubah reaktif menjadi "Buy on Strength" dengan zona akumulasi digeser ke harga pasar spot saat ini (Rp ${spotFloorLow.toLocaleString('id-ID')}) sebagai price floor.`,
+      idealBuyLowIdr: Math.min(spotFloorLow, spotFloorHigh),
+      idealBuyHighIdr: Math.max(spotFloorLow, spotFloorHigh),
+      formattedAccumulationZone: `Zona Akumulasi Price Floor Spot (Buy on Strength): Rp ${Math.min(spotFloorLow, spotFloorHigh).toLocaleString('id-ID')} – Rp ${Math.max(spotFloorLow, spotFloorHigh).toLocaleString('id-ID')} | Nilai Wajar Forward: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): BUY ON STRENGTH (${catalystReasons.join(' · ')}, MoS ${marginOfSafetyPct >= 0 ? '+' : ''}${marginOfSafetyPct.toFixed(1)}%)`,
+      dynamicRequiredMosPct,
+      excessReturnSpreadPct
     };
   }
 
-  // Dynamic Decision Tree Branch 3: Standard Deep Margin of Safety Accumulation
-  const intrinsicAccumulationCeiling = tickRounder(intrinsicValueIdr * 0.88);
+  // Branch 4: Dynamic Margin of Safety (MoS) Compression for High Excess Return (>10% Excess Return -> 0%-10% MoS threshold)
+  const intrinsicAccumulationCeiling = tickRounder(
+    intrinsicValueIdr * (1 - dynamicRequiredMosPct / 100)
+  );
   const isUndercutDeepDiscount = lastPriceIdr <= intrinsicAccumulationCeiling;
 
-  if (marginOfSafetyPct >= 12.0 && dmuCompositeScore >= 6.5) {
+  if (excessReturnSpreadPct > 10.0 && marginOfSafetyPct >= dynamicRequiredMosPct && dmuCompositeScore >= 6.2) {
+    const low = tickRounder(lastPriceIdr * 0.98);
+    const high = tickRounder(Math.max(lastPriceIdr * 1.02, intrinsicValueIdr));
+    return {
+      decisionState: 'ACCUMULATE_QUALITY_FAIR_VALUE',
+      decisionActionLabel: 'ACCUMULATE // PREMIUM FAIR VALUE (EXCESS RETURN > 10%)',
+      recommendedActionText: `Akumulasi Rasional di Nilai Wajar — Excess Return tinggi (+${excessReturnSpreadPct.toFixed(1)}% di atas Ke ${costOfEquityPct.toFixed(2)}%) mengompresi syarat batas aman MoS menjadi ${dynamicRequiredMosPct.toFixed(1)}% (0%–10%). Emiten compounder premium pada Fair Value adalah sinyal akumulasi rasional.`,
+      idealBuyLowIdr: Math.min(low, high),
+      idealBuyHighIdr: Math.max(low, high),
+      formattedAccumulationZone: `Rentang Akumulasi Fair Value (Kompresi MoS ≥ ${dynamicRequiredMosPct.toFixed(1)}%): Rp ${Math.min(low, high).toLocaleString('id-ID')} – Rp ${Math.max(low, high).toLocaleString('id-ID')} | Nilai Wajar: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): AKUMULASI RASIONAL (Excess Return +${excessReturnSpreadPct.toFixed(1)}%, MoS ${marginOfSafetyPct >= 0 ? '+' : ''}${marginOfSafetyPct.toFixed(1)}%)`,
+      dynamicRequiredMosPct,
+      excessReturnSpreadPct
+    };
+  }
+
+  // Branch 5: Standard Deep Margin of Safety Accumulation
+  if (marginOfSafetyPct >= Math.max(12.0, dynamicRequiredMosPct) && dmuCompositeScore >= 6.5) {
     const low = isUndercutDeepDiscount
       ? tickRounder(lastPriceIdr * 0.96)
       : tickRounder(Math.min(lastPriceIdr * 0.98, intrinsicAccumulationCeiling * 0.96));
@@ -756,23 +914,27 @@ export function evaluateDynamicDecisionTree(params: {
         'Akumulasi Bertahap (Buy on Weakness / Cicil 2–3 Tahap) di area diskon nilai wajar.',
       idealBuyLowIdr: low,
       idealBuyHighIdr: high,
-      formattedAccumulationZone: `Rentang Beli Ideal: Rp ${low.toLocaleString('id-ID')} – Rp ${high.toLocaleString('id-ID')} | Nilai Wajar: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): TERDISKON / MURAH (Harga saat ini ${marginOfSafetyPct.toFixed(1)}% di bawah Nilai Wajar, sangat wajar untuk akumulasi bertahap)`
+      formattedAccumulationZone: `Rentang Beli Ideal: Rp ${low.toLocaleString('id-ID')} – Rp ${high.toLocaleString('id-ID')} | Nilai Wajar: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): TERDISKON / MURAH (Harga saat ini ${marginOfSafetyPct.toFixed(1)}% di bawah Nilai Wajar, melampaui syarat MoS ${dynamicRequiredMosPct.toFixed(1)}%)`,
+      dynamicRequiredMosPct,
+      excessReturnSpreadPct
     };
   }
 
-  // Dynamic Decision Tree Branch 4: Wait for Pullback (No Active Catalyst or MoS < -10%)
+  // Branch 6: Wait for Pullback (No Active Catalyst & MoS below dynamic threshold)
   const pullbackLow = tickRounder(intrinsicValueIdr * 0.82);
   const pullbackHigh = Math.max(pullbackLow, intrinsicAccumulationCeiling);
   return {
     decisionState: 'WAIT_FOR_PULLBACK',
-    decisionActionLabel: 'HOLD // TUNGGU KOREKSI WAJAR',
+    decisionActionLabel: 'Tunggu Koreksi Wajar',
     recommendedActionText:
-      'Tunggu Koreksi Wajar (Buy on Pullback) agar mendapatkan ruang Margin of Safety yang lebih aman.',
+      'Tunggu Koreksi Wajar (Buy on Pullback) agar mendapatkan ruang Margin of Safety yang sesuai dengan profil Excess Return emiten.',
     idealBuyLowIdr: pullbackLow,
     idealBuyHighIdr: pullbackHigh,
     formattedAccumulationZone:
       marginOfSafetyPct >= 0
-        ? `Rentang Beli Ideal: Rp ${pullbackLow.toLocaleString('id-ID')} – Rp ${pullbackHigh.toLocaleString('id-ID')} | Nilai Wajar: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): WAJAR (Diskon tipis +${marginOfSafetyPct.toFixed(1)}% tanpa katalis buyback/lonjakan laba >20%, idealnya cicil beli saat koreksi ke rentang akumulasi)`
-        : `Rentang Beli Ideal: Rp ${pullbackLow.toLocaleString('id-ID')} – Rp ${pullbackHigh.toLocaleString('id-ID')} | Nilai Wajar: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): MAHAL / PREMIUM (Harga saat ini ${Math.abs(marginOfSafetyPct).toFixed(1)}% di atas Nilai Wajar, tunggu koreksi ke rentang beli ideal)`
+        ? `Rentang Beli Ideal: Rp ${pullbackLow.toLocaleString('id-ID')} – Rp ${pullbackHigh.toLocaleString('id-ID')} | Nilai Wajar: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): WAJAR (MoS +${marginOfSafetyPct.toFixed(1)}% < syarat MoS dinamis ${dynamicRequiredMosPct.toFixed(1)}% tanpa katalis aktif, tunggu koreksi ke rentang akumulasi)`
+        : `Rentang Beli Ideal: Rp ${pullbackLow.toLocaleString('id-ID')} – Rp ${pullbackHigh.toLocaleString('id-ID')} | Nilai Wajar: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): MAHAL / PREMIUM (Harga saat ini ${Math.abs(marginOfSafetyPct).toFixed(1)}% di atas Nilai Wajar, tunggu koreksi ke rentang beli ideal)`,
+    dynamicRequiredMosPct,
+    excessReturnSpreadPct
   };
 }

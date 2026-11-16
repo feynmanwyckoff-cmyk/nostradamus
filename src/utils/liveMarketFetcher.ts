@@ -3301,8 +3301,16 @@ function buildDeepAnalyticalConvictionReport(params: {
   recentNews: NewsSentimentItem[];
   userQuestion: string;
   regimeStatus: string;
+  availablePortfolioCashIdr?: number;
 }): StructuredAiConvictionReport {
-  const { stock, joeliardiEval, recentNews, userQuestion, regimeStatus } = params;
+  const {
+    stock,
+    joeliardiEval,
+    recentNews,
+    userQuestion,
+    regimeStatus,
+    availablePortfolioCashIdr
+  } = params;
   const fwdDivCalc = calculateForwardDividend(stock, joeliardiEval.estimatedEpsIdr);
   const forwardDivYield =
     joeliardiEval.forwardDividendYieldPct ?? fwdDivCalc.forwardDividendYieldPct;
@@ -3312,6 +3320,13 @@ function buildDeepAnalyticalConvictionReport(params: {
     joeliardiEval.netBuybackDebtPaydownYieldPct ?? fwdDivCalc.netBuybackDebtPaydownYieldPct;
   const totalShareholderYieldPct =
     joeliardiEval.totalShareholderYieldPct ?? fwdDivCalc.totalShareholderYieldPct;
+  const netPayoutYieldPct =
+    joeliardiEval.netPayoutYieldPct ?? fwdDivCalc.netPayoutYieldPct ?? totalShareholderYieldPct;
+  const shareholderYieldLabel =
+    (joeliardiEval.netDebtPaydownYieldPct ?? fwdDivCalc.netDebtPaydownYieldPct ?? 0) > 0 &&
+    stock.sector !== 'Financials'
+      ? 'Total Shareholder Yield'
+      : 'Net Payout Yield';
 
   // 5-Pillar Academic Quantitative Metrics
   const gpToAssets =
@@ -3379,16 +3394,21 @@ function buildDeepAnalyticalConvictionReport(params: {
   const statArbRho = joeliardiEval.statArbCorrelation ?? 0.85;
   const statArbTargetIdr = joeliardiEval.statArbImpliedTargetIdr ?? joeliardiEval.intrinsicValueIdr;
   const secPerShareIdr = joeliardiEval.sectorPrimaryPerShareIdr ?? joeliardiEval.estimatedEpsIdr;
+  const gjFloorIdr =
+    joeliardiEval.grahamJoeliardiBenchmarkIdr ??
+    Math.round(joeliardiEval.intrinsicValueIdr * 0.82);
+  const valModuleLabel =
+    joeliardiEval.valuationModuleLabel ?? 'Steady Compounder Module';
 
   const secLower = stock.sector.toLowerCase();
   const sectorEconomicsNote = secLower.includes('financial')
     ? `Di sektor Perbankan dan Keuangan, matriks utama adalah Damodaran Justified PBV (${joeliardiEval.impliedPbv}x vs Wajar ${justPbv}x) yang diukur dari konsistensi ROE (${stock.roe.toFixed(1)}%) di atas Dynamic Cost of Equity Ke (${dynKe.toFixed(2)}%) serta kualitas kas OCF/NI ${ocfNi.toFixed(2)}x.`
     : secLower.includes('energy') || secLower.includes('basic') || secLower.includes('industrial')
-    ? `Di sektor Energi, Komoditas & Barang Modal (${stock.sector}), riset finansial menuntut matriks Price-to-Cash Flow (${secShort} ${secMult}x vs Wajar ${secFairMult}x, OCF/Saham ~Rp ${secPerShareIdr.toLocaleString('id-ID')}) yang diuji terhadap GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}% dan rasio akrual OCF/NI ${ocfNi.toFixed(2)}x.`
+    ? `Di sektor Energi, Komoditas & Barang Modal (${stock.sector}), riset finansial menuntut matriks ${secShort} (${secMult}x vs Wajar ${secFairMult}x, Basis/Saham ~Rp ${secPerShareIdr.toLocaleString('id-ID')}) yang diuji terhadap GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}% dan rasio akrual OCF/NI ${ocfNi.toFixed(2)}x.`
     : secLower.includes('infra') || secLower.includes('tech') || secLower.includes('tele')
     ? `Di sektor Telekomunikasi, Menara & Infrastruktur (${stock.sector}), beban depresiasi jaringan yang masif membuat EPS terdistorsi sehingga valuasi difokuskan pada matriks ${secShort} (${secMult}x vs Wajar ${secFairMult}x, EBITDA/Saham ~Rp ${secPerShareIdr.toLocaleString('id-ID')}) serta kualitas kas OCF/NI ${ocfNi.toFixed(2)}x.`
     : secLower.includes('propert') || secLower.includes('real estate')
-    ? `Di sektor Properti & REITs (${stock.sector}), laba bersih akuntansi kerap terdistorsi revaluasi aset non-kas sehingga valuasi difokuskan pada Price-to-AFFO (${secShort} ${secMult}x vs Wajar ${secFairMult}x, AFFO/Saham ~Rp ${secPerShareIdr.toLocaleString('id-ID')}) dan nilai buku RNAV.`
+    ? `Di sektor Properti & REITs (${stock.sector}), laba bersih akuntansi kerap terdistorsi revaluasi aset non-kas sehingga valuasi difokuskan pada PBV Replacement & ${secShort} (${secMult}x vs Wajar ${secFairMult}x, AFFO/Saham ~Rp ${secPerShareIdr.toLocaleString('id-ID')}) dengan bobot 80% PBV Replacement + 20% RelVal.`
     : `Di sektor Konsumen & Kesehatan (${stock.sector}), daya saing struktural diukur melalui matriks ${secShort} (${secMult}x vs Wajar ${secFairMult}x) yang ditopang GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}%, ROA murni ${impliedRoaPct}%, serta konversi kas OCF/NI ${ocfNi.toFixed(2)}x.`;
 
   // Defensive Discount Anomaly Override (Beta < 0.5 AND Skor Value > 9.0)
@@ -3457,12 +3477,21 @@ function buildDeepAnalyticalConvictionReport(params: {
   const earningsGrowthYoYPct = joeliardiEval.earningsGrowthYoYPct ?? stock.earningsGrowthYoYPct ?? 0;
   const forwardRoePct = joeliardiEval.forwardAnnualizedRoePct ?? stock.forwardAnnualizedRoePct ?? stock.roe;
   const trailingRoePct = joeliardiEval.trailingRoePct ?? stock.trailingRoePct ?? stock.roe;
+  const excessReturnPct =
+    joeliardiEval.excessReturnSpreadPct ?? Number((forwardRoePct - dynKe).toFixed(2));
 
   const decisionTree = evaluateDynamicDecisionTree({
     isHscFlagged: Boolean(stock.isHscFlagged),
     isDefensiveDiscountAnomaly,
+    isCyclicalStrongBuyZScore:
+      joeliardiEval.valuationModuleRoute === 'PURE_CYCLICAL' &&
+      (joeliardiEval.pbvZScore ?? stock.pbvZScore ?? 0) <= -1.5,
+    pbvZScore: joeliardiEval.pbvZScore ?? stock.pbvZScore,
     hasActiveBuyback,
+    hasActiveCatalyst: Boolean(joeliardiEval.isCatalystActive ?? stock.hasActiveCatalyst),
     earningsGrowthYoYPct,
+    forwardRoePct,
+    costOfEquityPct: dynKe,
     marginOfSafetyPct: joeliardiEval.marginOfSafetyPct,
     dmuCompositeScore: stock.dmuCompositeScore,
     lastPriceIdr: stock.lastPrice,
@@ -3471,6 +3500,8 @@ function buildDeepAnalyticalConvictionReport(params: {
   });
 
   const isBuyOnStrengthCatalyst = decisionTree.decisionState === 'BUY_ON_STRENGTH_CATALYST';
+  const isCyclicalStrongBuy = decisionTree.decisionState === 'STRONG_BUY_CYCLICAL_ZSCORE';
+  const isQualityFairValue = decisionTree.decisionState === 'ACCUMULATE_QUALITY_FAIR_VALUE';
 
   // Verdict determination
   let verdictBadge = 'HOLD // WAIT FOR BETTER MOS';
@@ -3481,9 +3512,15 @@ function buildDeepAnalyticalConvictionReport(params: {
   } else if (isDefensiveDiscountAnomaly) {
     verdictBadge = 'STRONG ACCUMULATE // DEFENSIVE DISCOUNT ANOMALY';
     verdictTitle = `Anomali Aset Defensif Terdiskon pada ${stock.ticker} (Beta ${stock.beta1Y.toFixed(2)}x, Cap 1/β ≤${betaCap.toFixed(1)}% & Skor Value ${stock.dmuValueScore.toFixed(1)}/10) dengan Forward Dividend Yield (Est) ${forwardDivYield.toFixed(2)}%`;
+  } else if (isCyclicalStrongBuy) {
+    verdictBadge = 'STRONG BUY // CYCLICAL PBV Z-SCORE ≤ -1.5σ';
+    verdictTitle = `Strong Buy Siklikal pada ${stock.ticker}: PBV Z-Score 10Y (${(joeliardiEval.pbvZScore ?? -1.5).toFixed(2)}σ) terdiskon ekstrem di bawah rata-rata siklus dengan dukungan Mid-Cycle Normalized EPS`;
   } else if (isBuyOnStrengthCatalyst) {
     verdictBadge = 'BUY ON STRENGTH // CATALYST ACTIVE';
-    verdictTitle = `Buy on Strength / Catalyst pada ${stock.ticker}: ${joeliardiEval.catalystBadgeLabel || 'Momentum Laba & Buyback Aktif'} (Forward ROE ${forwardRoePct.toFixed(1)}% vs Trailing ${trailingRoePct.toFixed(1)}% · TSY ${totalShareholderYieldPct.toFixed(2)}%) membatalkan instruksi tunggu koreksi`;
+    verdictTitle = `Buy on Strength pada ${stock.ticker}: ${joeliardiEval.catalystBadgeLabel || 'Momentum Laba & Buyback Aktif'} (Forward ROE ${forwardRoePct.toFixed(1)}% vs Trailing ${trailingRoePct.toFixed(1)}% · ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%) menggeser zona akumulasi ke harga spot`;
+  } else if (isQualityFairValue) {
+    verdictBadge = 'ACCUMULATE // PREMIUM COMPOUNDER AT FAIR VALUE';
+    verdictTitle = `Akumulasi Rasional Compounder Premium ${stock.ticker}: Excess Return +${excessReturnPct.toFixed(1)}% di atas Ke mengompresi syarat MoS ke 0%–10% pada Nilai Wajar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')}`;
   } else if (isValueTrapCandidate) {
     verdictBadge = 'CAUTION // VALUE TRAP ALERT';
     verdictTitle = isStructuralUnderperformer
@@ -3507,17 +3544,17 @@ function buildDeepAnalyticalConvictionReport(params: {
   } else if (isAskingTrapOrHsc) {
     directAnswerSummary = isValueTrapCandidate && !isBuyOnStrengthCatalyst
       ? `Hasil Audit Value Trap & Anti-Junk QMJ: Meskipun ${stock.ticker} bersih dari indikasi saham gorengan (HSC) dan tampak murah di atas kertas (Implied PER ${joeliardiEval.impliedPer}x, Implied PBV ${joeliardiEval.impliedPbv}x vs Justified PBV ${justPbv}x, Margin of Safety +${joeliardiEval.marginOfSafetyPct}%), komite mencatat risiko Value Trap karena ${isStructuralUnderperformer ? `ROE (${stock.roe}%) berada di bawah Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}% (Spot Rf ${sbnBlended.toFixed(2)}%)` : `pergerakan harga 30 hari masih melemah (${stock.return30D}%) dengan rasio kas operasi OCF/NI ${ocfNi.toFixed(2)}x`}. Sebaiknya tunggu tekanan jual mereda sebelum mencicil beli.`
-      : `Hasil Audit Value Trap & Anti-Junk QMJ: Emiten ${stock.ticker} bersih dari indikasi spekulatif (HSC) dan terbukti BUKAN VALUE TRAP${isDefensiveDiscountAnomaly ? ' (Strong Buy: Anomali Aset Defensif Terdiskon)' : isBuyOnStrengthCatalyst ? ' (Buy on Strength / Catalyst Active)' : ''}. Diskon harga ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}% terhadap Nilai Intrinsik Wajar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (Justified PBV ${justPbv}x · Wajar PER ${joeliardiEval.joeliardiFairPer}x) ditopang oleh Forward ROE ${forwardRoePct.toFixed(1)}% (Trailing ${trailingRoePct.toFixed(1)}%), GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}%, konversi kas riil OCF/NI ${ocfNi.toFixed(2)}x (${accrualPen === 0 ? '0 Penalti Akrual' : `Penalti -${accrualPen} pts`}), serta Total Shareholder Yield ${totalShareholderYieldPct.toFixed(2)}%.`;
+      : `Hasil Audit Value Trap & Anti-Junk QMJ: Emiten ${stock.ticker} bersih dari indikasi spekulatif (HSC) dan terbukti BUKAN VALUE TRAP${isDefensiveDiscountAnomaly ? ' (Strong Buy: Anomali Aset Defensif Terdiskon)' : isBuyOnStrengthCatalyst ? ' (Buy on Strength / Catalyst Active)' : ''}. Diskon harga ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}% terhadap Nilai Intrinsik Wajar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (Graham-Joeliardi Floor Rp ${gjFloorIdr.toLocaleString('id-ID')} · Justified PBV ${justPbv}x) ditopang oleh Forward ROE ${forwardRoePct.toFixed(1)}% (Trailing ${trailingRoePct.toFixed(1)}%), GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}%, konversi kas riil OCF/NI ${ocfNi.toFixed(2)}x, serta ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%.`;
   } else if (isAskingNews) {
     const topHeadlines = recentNews
       .slice(0, 2)
       .map((n) => `"${stripRawMarkdownArtifacts(n.title)}"`)
       .join(' serta ');
-    directAnswerSummary = `Hasil Evaluasi Dampak Berita & Aksi Korporasi: Sentimen utama ${stock.ticker} dalam 3 bulan terakhir berfokus pada ${topHeadlines || 'perkembangan kinerja operasional dan pembagian dividen'}. ${joeliardiEval.catalystNarrative || ''} Dari kacamata fundamental kuantitatif, katalis tersebut memperkokoh Forward ROE ${forwardRoePct.toFixed(1)}% dan GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}% (Forward EPS ~Rp ${joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')}/saham) sehingga menjaga Earnings Yield di level ${earningsYieldPct}% dan Total Shareholder Yield ${totalShareholderYieldPct.toFixed(2)}% terhadap Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}%.`;
+    directAnswerSummary = `Hasil Evaluasi Dampak Berita & Aksi Korporasi: Sentimen utama ${stock.ticker} dalam 3 bulan terakhir berfokus pada ${topHeadlines || 'perkembangan kinerja operasional dan pembagian dividen'}. ${joeliardiEval.catalystNarrative || ''} Dari kacamata fundamental kuantitatif, katalis tersebut memperkokoh Forward ROE ${forwardRoePct.toFixed(1)}% dan GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}% (Forward EPS ~Rp ${joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')}/saham) sehingga menjaga Earnings Yield di level ${earningsYieldPct}% dan ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}% terhadap Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}%.`;
   } else if (isAskingDividendOrCash) {
-    directAnswerSummary = `Hasil Bedah Kualitas Dividen, Buyback & Arus Kas Anti-Junk: Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, Forward Dividend Yield (Est) ${stock.ticker} diestimasi sebesar ${forwardDivYield.toFixed(2)}% (Annualized EPS Q3 Rp ${fwdDivCalc.annualizedEpsQ3Idr.toLocaleString('id-ID')} × DPR 3Y ${historicalDpr3Y.toFixed(0)}%) ditambah Buyback & Debt Paydown Yield ${buybackPaydownYield.toFixed(2)}% (Buyback Aktif +${(joeliardiEval.dynamicBuybackYieldPct ?? 0).toFixed(2)}%) menghasilkan Total Shareholder Yield murni ${totalShareholderYieldPct}%. Rasio arus kas operasi terhadap laba bersih (OCF/NI) tercatat ${ocfNi.toFixed(2)}x dengan GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}%. ${isDividendTrapRisk && !isBuyOnStrengthCatalyst ? `Waspadai potensi Dividend Trap karena tren harga 30D masih tertekan (${stock.return30D}%)` : `Aliran kas pemegang saham ini sangat sehat karena dibiayai dari kas operasi riil (OCF/NI ${ocfNi.toFixed(2)}x) dan posisi utang yang terjaga (DER ${stock.debtToEquity}x).`}`;
+    directAnswerSummary = `Hasil Bedah Kualitas Dividen, Buyback & Arus Kas Anti-Junk: Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, Forward Dividend Yield (Est) ${stock.ticker} diestimasi sebesar ${forwardDivYield.toFixed(2)}% (Annualized EPS Rp ${fwdDivCalc.annualizedEpsQ3Idr.toLocaleString('id-ID')} × DPR 3Y ${historicalDpr3Y.toFixed(0)}%${fwdDivCalc.isDividendOutlierSanitized ? ' · Outlier Dividen Spesial Disanitasi' : ''}) ditambah Buyback Yield +${(joeliardiEval.dynamicBuybackYieldPct ?? 0).toFixed(2)}% (Net Payout Yield ${netPayoutYieldPct.toFixed(2)}%) menghasilkan ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%. Rasio arus kas operasi terhadap laba bersih (OCF/NI) tercatat ${ocfNi.toFixed(2)}x dengan GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}%. ${isDividendTrapRisk && !isBuyOnStrengthCatalyst ? `Waspadai potensi Dividend Trap karena tren harga 30D masih tertekan (${stock.return30D}%)` : `Aliran kas pemegang saham ini sangat sehat karena dibiayai dari kas operasi riil (OCF/NI ${ocfNi.toFixed(2)}x) dan posisi utang yang terjaga (DER ${stock.debtToEquity}x).`}`;
   } else {
-    directAnswerSummary = `Hasil Analisis Nostradamus: Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, tim riset menilai ${stock.ticker} ${isDefensiveDiscountAnomaly ? 'LAYAK DIAKUMULASI BERTAHAP (Strong Buy: Anomali Aset Defensif Terdiskon)' : isBuyOnStrengthCatalyst ? `LAYAK BUY ON STRENGTH / CATALYST (${joeliardiEval.catalystBadgeLabel || 'Momentum Laba & Buyback Aktif'})` : joeliardiEval.marginOfSafetyPct >= 12 && !isValueTrapCandidate ? 'LAYAK DIAKUMULASI BERTAHAP' : joeliardiEval.marginOfSafetyPct >= 0 ? 'LAYAK KOLEKSI SELEKTIF SAAT KOREKSI' : 'LEBIH TEPAT DITUNGGU PADA AREA PULLBACK'}. Pasar menghargai ${stock.ticker} pada Implied PBV ${joeliardiEval.impliedPbv}x (vs Damodaran Justified PBV ${justPbv}x) dan Implied PER ${joeliardiEval.impliedPer}x (Earnings Yield ${earningsYieldPct}% vs Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}%), padahal perusahaan mencetak Forward Annualized ROE ${forwardRoePct.toFixed(1)}% (vs Trailing ${trailingRoePct.toFixed(1)}%, pertumbuhan laba kuartal +${earningsGrowthYoYPct.toFixed(1)}% YoY), GP/A ${gpToAssets.toFixed(1)}%, kualitas kas OCF/NI ${ocfNi.toFixed(2)}x, serta Total Shareholder Yield ${totalShareholderYieldPct.toFixed(2)}%. Nilai Intrinsik Wajar Ensemble ditetapkan pada Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (${joeliardiEval.ensembleFormulaAudit || `MoS ${joeliardiEval.marginOfSafetyPct}%`}) dengan batas alokasi 1/β Barbell ≤${betaCap.toFixed(1)}% portofolio.`;
+    directAnswerSummary = `Hasil Analisis Nostradamus: Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, tim riset menilai ${stock.ticker} (${valModuleLabel}) ${isDefensiveDiscountAnomaly ? 'LAYAK DIAKUMULASI BERTAHAP (Strong Buy: Anomali Aset Defensif Terdiskon)' : isCyclicalStrongBuy ? 'LAYAK STRONG BUY SIKLIKAL (PBV Z-Score ≤ -1.5σ)' : isBuyOnStrengthCatalyst ? `LAYAK BUY ON STRENGTH (${joeliardiEval.catalystBadgeLabel || 'Momentum Laba & Buyback Aktif'})` : isQualityFairValue ? 'LAYAK AKUMULASI RASIONAL DI NILAI WAJAR (Excess Return > 10%)' : joeliardiEval.marginOfSafetyPct >= 12 && !isValueTrapCandidate ? 'LAYAK DIAKUMULASI BERTAHAP' : joeliardiEval.marginOfSafetyPct >= 0 ? 'LAYAK KOLEKSI SELEKTIF SAAT KOREKSI' : 'LEBIH TEPAT DITUNGGU PADA AREA PULLBACK'}. Pasar menghargai ${stock.ticker} pada Implied PBV ${joeliardiEval.impliedPbv}x (vs Damodaran Justified PBV ${justPbv}x) dan Implied PER ${joeliardiEval.impliedPer}x (Earnings Yield ${earningsYieldPct}% vs Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}%), padahal perusahaan mencetak Forward Annualized ROE ${forwardRoePct.toFixed(1)}% (Excess Return ${excessReturnPct >= 0 ? '+' : ''}${excessReturnPct.toFixed(1)}% · Syarat MoS Dinamis ≥${decisionTree.dynamicRequiredMosPct.toFixed(1)}%), GP/A ${gpToAssets.toFixed(1)}%, kualitas kas OCF/NI ${ocfNi.toFixed(2)}x, serta ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%. Nilai Intrinsik Wajar Ensemble ditetapkan pada Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (${joeliardiEval.ensembleFormulaAudit || `MoS ${joeliardiEval.marginOfSafetyPct}%`}) dengan Graham-Joeliardi Floor Benchmark di Rp ${gjFloorIdr.toLocaleString('id-ID')} dan batas alokasi 1/β Barbell ≤${betaCap.toFixed(1)}% portofolio.`;
   }
 
   // BEI Tick-Aware Dynamic Accumulation Zone driven by State-Based Decision Tree
@@ -3528,7 +3565,7 @@ function buildDeepAnalyticalConvictionReport(params: {
   const riskStopPrice = roundToIdxTick(stock.lastPrice * (stock.beta1Y > 1.1 ? 0.91 : 0.93));
   const formattedAccumulationZone = decisionTree.formattedAccumulationZone;
 
-  // 20D ADTV & 5% Daily Market Liquidity Cap + 1/Beta Barbell Position Sizing Cap
+  // 20D ADTV & 5% Daily Market Liquidity Cap + 1/Beta Barbell Position Sizing Cap bounded by Real Portfolio Cash
   const adtv20dIdr =
     joeliardiEval.adtv20dIdr ||
     stock.adtv20dIdr ||
@@ -3539,21 +3576,33 @@ function buildDeepAnalyticalConvictionReport(params: {
   const isBasket1Core = stock.beta1Y <= 0.96;
   const targetMaxPct = Number(betaCap.toFixed(1));
   const targetMinPct = Number(Math.max(3.0, targetMaxPct * 0.5).toFixed(1));
-  // Institutional reference active equity capital (Rp 2,0 Miliar) + dynamic cap check
   const referenceActiveEquityIdr = 2_000_000_000;
-  const targetMaxNominalIdr = Math.round(referenceActiveEquityIdr * (targetMaxPct / 100));
-  const isLiquidityCapped = !stock.isHscFlagged && targetMaxNominalIdr > maxSafeAllocationIdr;
+  const rawTargetMaxNominalIdr = Math.round(referenceActiveEquityIdr * (targetMaxPct / 100));
+  const realCashAvailableIdr =
+    typeof availablePortfolioCashIdr === 'number' && availablePortfolioCashIdr > 0
+      ? Math.round(availablePortfolioCashIdr)
+      : typeof joeliardiEval.availablePortfolioCashIdr === 'number' && joeliardiEval.availablePortfolioCashIdr > 0
+      ? Math.round(joeliardiEval.availablePortfolioCashIdr)
+      : rawTargetMaxNominalIdr;
+  const realCashCappedAllocationIdr = Math.max(
+    0,
+    Math.min(rawTargetMaxNominalIdr, realCashAvailableIdr, maxSafeAllocationIdr)
+  );
+  const isLiquidityCapped = !stock.isHscFlagged && Math.min(rawTargetMaxNominalIdr, realCashAvailableIdr) > maxSafeAllocationIdr;
   const adtvMillionsStr = (adtv20dIdr / 1_000_000).toLocaleString('id-ID', {
     maximumFractionDigits: 0
   });
   const maxSafeMillionsStr = (maxSafeAllocationIdr / 1_000_000).toLocaleString('id-ID', {
     maximumFractionDigits: 1
   });
+  const realCashCappedMillionsStr = (realCashCappedAllocationIdr / 1_000_000).toLocaleString('id-ID', {
+    maximumFractionDigits: 1
+  });
 
   const liquidityWarningBadge = !stock.isHscFlagged
     ? isLiquidityCapped
-      ? `⚠️ LIQUIDITY CAP WARNING: Target 1/β Cap ≤${targetMaxPct}% (Rp ${(targetMaxNominalIdr / 1_000_000).toLocaleString('id-ID', { maximumFractionDigits: 0 })} Jt) > 5% ADTV 20D (Maks Rp ${maxSafeMillionsStr} Jt/hari dari ADTV Rp ${adtvMillionsStr} Jt)`
-      : `✓ LIQUIDITY VERIFIED: Kapasitas 5% ADTV 20D (Maks Rp ${maxSafeMillionsStr} Jt/hari dari ADTV Rp ${adtvMillionsStr} Jt) Aman Menyerap Alokasi 1/β Cap ≤${targetMaxPct}%`
+      ? `⚠️ LIQUIDITY CAP WARNING: Target Alokasi Kas (Rp ${(Math.min(rawTargetMaxNominalIdr, realCashAvailableIdr) / 1_000_000).toLocaleString('id-ID', { maximumFractionDigits: 1 })} Jt) > 5% ADTV 20D (Maks Rp ${maxSafeMillionsStr} Jt/hari dari ADTV Rp ${adtvMillionsStr} Jt)`
+      : `✓ LIQUIDITY & CASH VERIFIED: Eksekusi Maks Rp ${realCashCappedMillionsStr} Jt (min Kas Riil & 5% ADTV Rp ${maxSafeMillionsStr} Jt/hari dari ADTV Rp ${adtvMillionsStr} Jt)`
     : undefined;
 
   return {
@@ -3562,22 +3611,22 @@ function buildDeepAnalyticalConvictionReport(params: {
     directAnswerSummary,
     convictionScore: joeliardiEval.totalConvictionScore,
     chainOfThoughtSteps: [
-      `01. Audit Profitabilitas Kas (GP/A & Anti-Junk OCF/NI): GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}% (ROA murni ${impliedRoaPct}% × Lev ${equityMultiplier}x, ROE ${stock.roe}%) dengan konversi kas operasi OCF/NI ${ocfNi.toFixed(2)}x (${accrualPen > 0 ? `Penalti Akrual -${accrualPen} pts` : '0 Penalti · Kas Riil Valid'}) -> ${isHighQualityOrganicRoe ? 'Mesin Kas Riil Berdaya Saing Kuat (Anti-Junk).' : isLeveragedRoe ? 'Laba Ditopang Leverage / Pantau Kas Operasi.' : 'Profitabilitas Operasional Terjaga.'}`,
-      `02. Multi-Metode Harga Wajar (${secShort}, RIM ${rimFadeYrs}Y & Kurva SBN): Matriks Spesifik Sektor ${secShort} ${secMult}x (Wajar ${secFairMult}x → Rp ${secFairValIdr.toLocaleString('id-ID')}), Multi-Stage RIM ${rimFadeYrs}Y (Ke ${dynKe.toFixed(2)}% → Rp ${rimFairValIdr.toLocaleString('id-ID')}), dan RelVal Peer (Rp ${statArbTargetIdr.toLocaleString('id-ID')}) -> Harga Wajar Utama Quantedge Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%).`,
-      `03. Relative Value (Statistical Arbitrage ${stock.ticker}↔${peerTicker}) & Value Trap: Korelasi historis ρ=${statArbRho.toFixed(2)} mencatat Z-Score ${statArbZ >= 0 ? '+' : ''}${statArbZ.toFixed(2)}σ (Target Konvergensi Rp ${statArbTargetIdr.toLocaleString('id-ID')}) dengan Skor Value ${stock.dmuValueScore}/10 & Beta ${stock.beta1Y}x -> ${isDefensiveDiscountAnomaly ? 'Strong Buy: Anomali Aset Defensif Terdiskon' : joeliardiEval.statArbSignal === 'MEAN_REVERSION_BUY' ? `Anomali Diskon Relatif vs ${peerTicker} (Mean-Reversion Buy).` : isValueTrapCandidate ? 'Harga Masih Tertekan / Tunggu Konfirmasi Akumulasi.' : isInstitutionalReRating ? 'Konfirmasi Akumulasi & Tren Sehat.' : 'Fase Ekuilibrium Relatif Wajar.'}`,
-      `04. Sizing 1/β Barbell, Dividen & Likuiditas ADTV: Propensitas 1/β ${betaPropensity.toFixed(2)}x menetapkan Batas Alokasi Maks (1/β Cap) ≤${targetMaxPct}% portofolio, didukung Forward Dividend Yield (Est) ${forwardDivYield.toFixed(2)}% (Total Shareholder Yield ${totalShareholderYieldPct}%) & kapasitas 5% ADTV 20D (Maks Rp ${maxSafeMillionsStr} Jt/hari) -> ${stock.isHscFlagged ? 'Hindari Eksposur Spekulatif.' : isLiquidityCapped ? 'Wajib Pecah Order Sesuai Batas 5% ADTV.' : `Eksekusi Disiplin Sesuai Plafon 1/β ≤${targetMaxPct}%.`}`
+      `01. Audit Profitabilitas Kas (GP/A & Anti-Junk OCF/NI): GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}% (ROA murni ${impliedRoaPct}% × Lev ${equityMultiplier}x, Fwd ROE ${forwardRoePct.toFixed(1)}%) dengan konversi kas operasi OCF/NI ${ocfNi.toFixed(2)}x (${accrualPen > 0 ? `Penalti Akrual -${accrualPen} pts` : '0 Penalti · Kas Riil Valid'}) -> ${isHighQualityOrganicRoe ? 'Mesin Kas Riil Berdaya Saing Kuat (Anti-Junk).' : isLeveragedRoe ? 'Laba Ditopang Leverage / Pantau Kas Operasi.' : 'Profitabilitas Operasional Terjaga.'}`,
+      `02. Router ${valModuleLabel} & Ensemble Dinamis: Matriks Sektor ${secShort} (Rp ${secFairValIdr.toLocaleString('id-ID')}), Multi-Stage RIM ${rimFadeYrs}Y ω=${(joeliardiEval.rimPersistenceOmega ?? 0.72).toFixed(2)} (Rp ${rimFairValIdr.toLocaleString('id-ID')}), dan RelVal Peer (Rp ${statArbTargetIdr.toLocaleString('id-ID')}) + Floor Graham-Joeliardi Rp ${gjFloorIdr.toLocaleString('id-ID')} -> Harga Wajar Utama Quantedge Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}% vs Syarat Dinamis ≥${decisionTree.dynamicRequiredMosPct.toFixed(1)}%).`,
+      `03. Beta-Adjusted StatArb (${stock.ticker}↔${peerTicker}, β-Ratio ${(joeliardiEval.statArbBetaRatio ?? 1).toFixed(2)}x): Korelasi historis ρ=${statArbRho.toFixed(2)} mencatat Z-Score ${statArbZ >= 0 ? '+' : ''}${statArbZ.toFixed(2)}σ (Target Konvergensi Rp ${statArbTargetIdr.toLocaleString('id-ID')}) -> ${isDefensiveDiscountAnomaly ? 'Strong Buy: Anomali Aset Defensif Terdiskon' : isCyclicalStrongBuy ? 'Strong Buy Siklikal (PBV Z-Score ≤ -1.5σ).' : isBuyOnStrengthCatalyst ? 'Buy on Strength: Katalis Aktif Menggeser Floor ke Harga Spot.' : joeliardiEval.statArbSignal === 'MEAN_REVERSION_BUY' ? `Anomali Diskon Relatif vs ${peerTicker} (Mean-Reversion Buy).` : isValueTrapCandidate ? 'Harga Masih Tertekan / Tunggu Konfirmasi Akumulasi.' : 'Fase Ekuilibrium Relatif Wajar.'}`,
+      `04. Sizing 1/β Barbell, ${shareholderYieldLabel} & Kas Riil Portofolio: Propensitas 1/β ${betaPropensity.toFixed(2)}x menetapkan Batas Alokasi Maks (1/β Cap) ≤${targetMaxPct}% portofolio, didukung ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}% (Net Payout ${netPayoutYieldPct.toFixed(2)}%) & batas eksekusi min(Kas Riil, 5% ADTV) Rp ${realCashCappedMillionsStr} Jt/hari -> ${stock.isHscFlagged ? 'Hindari Eksposur Spekulatif.' : isLiquidityCapped ? 'Wajib Pecah Order Sesuai Batas 5% ADTV.' : `Eksekusi Disiplin Sesuai Plafon 1/β ≤${targetMaxPct}%.`}`
     ],
     sections: [
       {
         id: 'fundamental-moat',
         badge: `01. GP/A & ANTI-JUNK // SKOR ${joeliardiEval.businessQualityScore}/100`,
-        title: 'Bedah Gross Profitability (Novy-Marx), Kualitas Kas OCF/NI (QMJ) & Forward Dividend',
-        keyMetricHighlight: `GP/A ${gpToAssets.toFixed(1)}% · OCF/NI ${ocfNi.toFixed(2)}x (${accrualPen === 0 ? 'Kas Valid' : `Penalti -${accrualPen} pts`}) · ROE ${stock.roe.toFixed(1)}% · Fwd Div ${forwardDivYield.toFixed(2)}%`,
-        reasoningParagraph: `${sectorEconomicsNote} Berdasarkan kerangka Novy-Marx (2013) dan Quality Minus Junk (Asness et al. 2019), ${stock.ticker} mencatatkan Gross Profitability to Assets (GP/A) sebesar ${gpToAssets.toFixed(1)}% dan rasio arus kas operasi terhadap laba bersih (OCF/NI) sebesar ${ocfNi.toFixed(2)}x (${accrualPen === 0 ? 'bebas penalti akrual, menandakan laba akuntansi terkonversi penuh menjadi kas riil' : `terkena pengurang skor kualitas -${accrualPen} poin akibat selisih akrual kas`}). Dari dekomposisi DuPont, ROE ${stock.roe.toFixed(1)}% ditopang oleh ROA murni ${impliedRoaPct}% dan Equity Multiplier ${equityMultiplier}x (DER ${stock.debtToEquity.toFixed(2)}x).`,
+        title: `Bedah Gross Profitability (Novy-Marx), Kualitas Kas OCF/NI & ${shareholderYieldLabel}`,
+        keyMetricHighlight: `GP/A ${gpToAssets.toFixed(1)}% · OCF/NI ${ocfNi.toFixed(2)}x · Fwd ROE ${forwardRoePct.toFixed(1)}% · ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%`,
+        reasoningParagraph: `${sectorEconomicsNote} Berdasarkan kerangka Novy-Marx (2013) dan Quality Minus Junk (Asness et al. 2019), ${stock.ticker} mencatatkan Gross Profitability to Assets (GP/A) sebesar ${gpToAssets.toFixed(1)}% dan rasio arus kas operasi terhadap laba bersih (OCF/NI) sebesar ${ocfNi.toFixed(2)}x (${accrualPen === 0 ? 'bebas penalti akrual, menandakan laba akuntansi terkonversi penuh menjadi kas riil' : `terkena pengurang skor kualitas -${accrualPen} poin akibat selisih akrual kas`}). Dari dekomposisi DuPont, Forward ROE ${forwardRoePct.toFixed(1)}% (Excess Return ${excessReturnPct >= 0 ? '+' : ''}${excessReturnPct.toFixed(1)}% vs Ke ${dynKe.toFixed(2)}%) ditopang oleh ROA murni ${impliedRoaPct}% dan Equity Multiplier ${equityMultiplier}x (DER ${stock.debtToEquity.toFixed(2)}x).`,
         bulletPoints: [
-          `Kualitas Profitabilitas Kas (GP/A & OCF/NI): GP/A sebesar ${gpToAssets.toFixed(1)}% berpadu dengan OCF/NI ${ocfNi.toFixed(2)}x serta EPS ~Rp ${joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')} (Annualized EPS Q3-2026 ~Rp ${fwdDivCalc.annualizedEpsQ3Idr.toLocaleString('id-ID')}, BVPS ~Rp ${joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')}).`,
-          `Kesehatan Neraca & Solvabilitas: Rasio DER ${stock.debtToEquity.toFixed(2)}x (Equity Multiplier ${equityMultiplier}x) ${stock.debtToEquity <= 0.5 ? 'menunjukkan neraca sangat konservatif dan minim risiko gagal bayar' : stock.debtToEquity <= 1.0 ? 'masih berada dalam batas aman bagi standar investasi jangka panjang' : 'perlu dipantau secara berkala terhadap beban bunga'}.`,
-          `Proyeksi Kas Forward Dividend: Forward Dividend Yield (Est) sebesar ${forwardDivYield.toFixed(2)}% (~Rp ${fwdDivCalc.estimatedForwardDpsIdr.toLocaleString('id-ID')}/saham dari DPR 3Y ${historicalDpr3Y.toFixed(0)}%) ditambah Net Buyback & Debt Paydown Yield ${buybackPaydownYield.toFixed(2)}% menghasilkan Total Shareholder Yield murni ${totalShareholderYieldPct}%.`
+          `Kualitas Profitabilitas Kas & Annualizer: GP/A sebesar ${gpToAssets.toFixed(1)}% berpadu dengan OCF/NI ${ocfNi.toFixed(2)}x serta Forward EPS ~Rp ${joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')} (${joeliardiEval.latestQuarterLabel || `Annualized EPS Rp ${fwdDivCalc.annualizedEpsQ3Idr.toLocaleString('id-ID')}`}, BVPS ~Rp ${joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')}).`,
+          `Kesehatan Neraca & Solvabilitas: Rasio DER ${stock.debtToEquity.toFixed(2)}x (Equity Multiplier ${equityMultiplier}x) ${stock.debtToEquity <= 0.5 ? 'menunjukkan neraca sangat konservatif dan minim risiko gagal bayar' : stock.debtToEquity <= 1.0 ? 'masih berada dalam batas aman bagi standar investasi jangka panjang' : 'perlu dipantau secara berkala terhadap beban bunga (QMJ Cyclical Filter)'}.`,
+          `Rincian ${shareholderYieldLabel} (Anti-Double Count): Forward Dividend Yield (Est) sebesar ${forwardDivYield.toFixed(2)}% (~Rp ${fwdDivCalc.estimatedForwardDpsIdr.toLocaleString('id-ID')}/saham${fwdDivCalc.isDividendOutlierSanitized ? ' · TTM Special Dividend Disanitasi' : ''}) + Buyback Yield +${(joeliardiEval.dynamicBuybackYieldPct ?? 0).toFixed(2)}% = Net Payout Yield ${netPayoutYieldPct.toFixed(2)}%${(joeliardiEval.netDebtPaydownYieldPct ?? 0) > 0 ? ` (+ Net Debt Paydown Yield +${(joeliardiEval.netDebtPaydownYieldPct ?? 0).toFixed(2)}% → TSY ${totalShareholderYieldPct.toFixed(2)}%)` : ''}.`
         ],
         sentimentTone:
           joeliardiEval.businessQualityScore >= 75 && joeliardiEval.balanceSheetHealthScore >= 75
@@ -3588,17 +3637,17 @@ function buildDeepAnalyticalConvictionReport(params: {
       },
       {
         id: 'oos-valuation',
-        badge: `02. MULTI-METODE & STAT-ARB // MOS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%`,
-        title: `Komparasi Multi-Metode Harga Wajar (${secShort} · RIM ${rimFadeYrs}Y · StatArb ${stock.ticker}↔${peerTicker})`,
-        keyMetricHighlight: `Utama Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} · ${secShort} Rp ${secFairValIdr.toLocaleString('id-ID')} · RIM Rp ${rimFairValIdr.toLocaleString('id-ID')} · RelVal Rp ${statArbTargetIdr.toLocaleString('id-ID')}`,
-        reasoningParagraph: `Mengacu pada praktik institusional kuantitatif (Quantedge) dan kurva Spot SBN Fabozzi (Blended Spot Rf ${sbnBlended.toFixed(2)}% → Dynamic Ke ${dynKe.toFixed(2)}%), Harga Wajar Utama ditetapkan sebesar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} melalui konvergensi 3 model pembanding: (1) Matriks Spesifik Sektor ${secShort} (${secMult}x vs Wajar ${secFairMult}x = Rp ${secFairValIdr.toLocaleString('id-ID')}), (2) Multi-Stage Residual Income Model ${rimFadeYrs} Tahun (ω=${(joeliardiEval.rimPersistenceOmega ?? 0.72).toFixed(2)} = Rp ${rimFairValIdr.toLocaleString('id-ID')}), serta (3) Relative Value / Statistical Arbitrage terhadap ${peerTicker} (ρ=${statArbRho.toFixed(2)}, Z-Score ${statArbZ >= 0 ? '+' : ''}${statArbZ.toFixed(2)}σ = Rp ${statArbTargetIdr.toLocaleString('id-ID')}).`,
+        badge: `02. ${valModuleLabel.toUpperCase()} // MOS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%`,
+        title: `Router ${valModuleLabel}, Ensemble Dinamis & Standalone Graham-Joeliardi Floor`,
+        keyMetricHighlight: `Utama Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} · Floor G-J Rp ${gjFloorIdr.toLocaleString('id-ID')} · RIM ω=${(joeliardiEval.rimPersistenceOmega ?? 0.72).toFixed(2)}`,
+        reasoningParagraph: `${joeliardiEval.sectorAcademicRationale || ''} Mengacu pada DynamicEnsembleWeighter dan kurva Spot SBN Fabozzi (Blended Spot Rf ${sbnBlended.toFixed(2)}% → Dynamic Ke ${dynKe.toFixed(2)}%), Harga Wajar Utama ditetapkan sebesar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (${joeliardiEval.ensembleFormulaAudit || ''}). Sebagai jangkar konservatif terpisah (0% bobot ensemble), Graham-Joeliardi "Moat" Floor Benchmark berada di Rp ${gjFloorIdr.toLocaleString('id-ID')}${joeliardiEval.isMoatHaircutApplied ? ' (termasuk Weak Moat Penalty -25%)' : ''}.`,
         bulletPoints: [
-          `Komparasi Multi-Metode Harga Wajar: Acuan Utama Quantedge Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}%) disandingkan dengan pembanding Matriks Sektor (${secShort}) Rp ${secFairValIdr.toLocaleString('id-ID')}, Multi-Stage RIM ${rimFadeYrs}Y Rp ${rimFairValIdr.toLocaleString('id-ID')}, dan Relative Value Peer Rp ${statArbTargetIdr.toLocaleString('id-ID')}.`,
-          `Statistical Arbitrage & Relative Value (${stock.ticker} vs ${peerTicker}): ${joeliardiEval.statArbRationale ?? `Korelasi historis ρ=${statArbRho.toFixed(2)} dengan Z-Score ${statArbZ.toFixed(2)}σ mengindikasikan target konvergensi relatif Rp ${statArbTargetIdr.toLocaleString('id-ID')}.`}`,
-          `Uji Silang Momentum & Value Trap: ${isDefensiveDiscountAnomaly ? `Strong Buy: Anomali Aset Defensif Terdiskon — karena Beta sangat rendah (${stock.beta1Y.toFixed(2)}x < 0,50) dan Skor Value sangat tinggi (${stock.dmuValueScore.toFixed(1)}/10 > 9,0), koreksi harga 30D (${stock.return30D}%) merupakan anomali diskon beli terbaik.` : isValueTrapCandidate ? 'Meskipun valuasinya murah, tren harga jangka pendek atau ROE terhadap Ke menuntut akumulasi bertahap sambil menunggu konfirmasi teknikal.' : isMomentumOverextended ? 'Harga saham sudah naik melampaui estimasi nilai wajarnya; hindari mengejar harga di pucuk.' : `Valuasi diskon ${perDiscountPct}% terhadap PER wajar didukung oleh kualitas kas operasi nyata.`}`
+          `Komparasi Multi-Metode & Bobot Dinamis: Acuan Utama Quantedge Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}% vs Syarat MoS Dinamis ≥${decisionTree.dynamicRequiredMosPct.toFixed(1)}%) disandingkan dengan Matriks Sektor (${secShort}) Rp ${secFairValIdr.toLocaleString('id-ID')}, Multi-Stage RIM ${rimFadeYrs}Y Rp ${rimFairValIdr.toLocaleString('id-ID')}, RelVal Peer Rp ${statArbTargetIdr.toLocaleString('id-ID')}, serta Standalone Floor Graham-Joeliardi Rp ${gjFloorIdr.toLocaleString('id-ID')}.`,
+          `Beta-Adjusted Statistical Arbitrage (${stock.ticker} vs ${peerTicker}): ${joeliardiEval.statArbRationale ?? `Korelasi historis ρ=${statArbRho.toFixed(2)} dengan Z-Score ${statArbZ.toFixed(2)}σ mengindikasikan target konvergensi relatif Rp ${statArbTargetIdr.toLocaleString('id-ID')}.`}`,
+          `Keputusan MoS Dinamis & Katalis: ${decisionTree.recommendedActionText || (isDefensiveDiscountAnomaly ? `Strong Buy: Anomali Aset Defensif Terdiskon — karena Beta sangat rendah (${stock.beta1Y.toFixed(2)}x < 0,50) dan Skor Value sangat tinggi (${stock.dmuValueScore.toFixed(1)}/10 > 9,0), koreksi harga 30D (${stock.return30D}%) merupakan anomali diskon beli terbaik.` : isValueTrapCandidate ? 'Meskipun valuasinya murah, tren harga jangka pendek atau ROE terhadap Ke menuntut akumulasi bertahap sambil menunggu konfirmasi teknikal.' : isMomentumOverextended ? 'Harga saham sudah naik melampaui estimasi nilai wajarnya; hindari mengejar harga di pucuk.' : `Valuasi diskon ${perDiscountPct}% terhadap PER wajar didukung oleh kualitas kas operasi nyata.`)}`
         ],
         sentimentTone:
-          isDefensiveDiscountAnomaly || (joeliardiEval.marginOfSafetyPct >= 15 && !isValueTrapCandidate)
+          isDefensiveDiscountAnomaly || isCyclicalStrongBuy || isBuyOnStrengthCatalyst || (joeliardiEval.marginOfSafetyPct >= 15 && !isValueTrapCandidate)
             ? 'POSITIVE'
             : joeliardiEval.marginOfSafetyPct >= 0
             ? 'NEUTRAL'
@@ -3650,13 +3699,13 @@ function buildDeepAnalyticalConvictionReport(params: {
       },
       {
         id: 'regime-momentum-fit',
-        badge: `04. 1/β BARBELL SIZING & TREN IHSG // ${regimeStatus}`,
-        title: 'Penjatahan Porsi 1/β Barbell (Qian & Taleb), Volatilitas & Batas Likuiditas ADTV',
-        keyMetricHighlight: `Propensitas 1/β ${betaPropensity.toFixed(2)}x · Cap 1/β ≤${targetMaxPct}% · Beta ${stock.beta1Y.toFixed(2)}x · Volatilitas ${stock.volatilityAnn.toFixed(1)}%`,
-        reasoningParagraph: `Sesuai prinsip Risk Parity (Qian 2005) dan Barbell Antifragile (Taleb 2012), saham dengan Beta 1Y ${stock.beta1Y.toFixed(2)}x dan volatilitas tahunan ${stock.volatilityAnn.toFixed(1)}% memiliki Propensitas Bobot 1/β sebesar ${betaPropensity.toFixed(2)}x dengan Batas Alokasi Maksimum (1/β Cap) ≤${targetMaxPct}% dari modal portofolio. ${isDefensiveDiscountAnomaly ? `Karena Beta sangat rendah (${stock.beta1Y.toFixed(2)}x < 0,50) dan Skor Value mencapai ${stock.dmuValueScore.toFixed(1)}/10 (> 9,0), sistem mengaktifkan sinyal Strong Buy: Anomali Aset Defensif Terdiskon.` : `Perubahan harga 30 hari terakhir sebesar ${stock.return30D >= 0 ? '+' : ''}${stock.return30D.toFixed(2)}% (Skor Momentum ${stock.dmuMomScore.toFixed(1)}/10) mencerminkan ${stock.return30D >= 3 ? 'minat beli pasar yang sejalan dengan kinerja fundamentalnya' : stock.return30D <= -5 ? 'adanya koreksi harga yang membuka ruang cicil beli sesuai plafon 1/β' : 'pergerakan mendatar yang sehat sambil menunggu katalis baru'}.`}`,
+        badge: `04. 1/β BARBELL SIZING & KAS RIIL // ${regimeStatus}`,
+        title: 'Penjatahan Porsi 1/β Barbell (Qian & Taleb), Kas Riil Portofolio & Batas 5% ADTV',
+        keyMetricHighlight: `Propensitas 1/β ${betaPropensity.toFixed(2)}x · Cap 1/β ≤${targetMaxPct}% · Eksekusi Maks Rp ${realCashCappedMillionsStr} Jt`,
+        reasoningParagraph: `Sesuai prinsip Risk Parity (Qian 2005) dan Barbell Antifragile (Taleb 2012), saham dengan Beta 1Y ${stock.beta1Y.toFixed(2)}x dan volatilitas tahunan ${stock.volatilityAnn.toFixed(1)}% memiliki Propensitas Bobot 1/β sebesar ${betaPropensity.toFixed(2)}x dengan Batas Alokasi Maksimum (1/β Cap) ≤${targetMaxPct}% dari modal portofolio. Berdasarkan validasi likuiditas terhadap sisa kas riil portofolio dan 5% ADTV 20D, batas serapan harian ditetapkan sebesar Rp ${realCashCappedMillionsStr} Juta.`,
         bulletPoints: [
           `Penempatan Portofolio Barbell & Plafon 1/β: ${isBasket1Core ? `Ideal ditempatkan di Keranjang 1 (Defensive Core — Propensitas 1/β ${betaPropensity.toFixed(2)}x, porsi ${targetMinPct}%–${targetMaxPct}% ekuitas).` : `Ditempatkan di Keranjang 2 (Tactical Alpha — Propensitas 1/β ${betaPropensity.toFixed(2)}x membatasi porsi maksimum di ${targetMinPct}%–${targetMaxPct}% ekuitas untuk mencegah tail-risk).`}`,
-          `Pembatas Likuiditas Eksekusi (5% ADTV Rule): Alokasi ${targetMinPct}%–${targetMaxPct}% (1/β Cap ≤${targetMaxPct}%) wajib dibatasi maksimal ≤ 5% dari ADTV 20D (Rp ${maxSafeMillionsStr} Juta per sesi dari ADTV Rp ${adtvMillionsStr} Juta) guna mencegah dampak harga (market impact & slippage).`,
+          `Validasi Kas Riil & 5% ADTV Rule: Alokasi dibatasi pada minimum antara sisa kas riil portofolio dan 5% ADTV 20D (Maks Rp ${realCashCappedMillionsStr} Juta per sesi dari kapasitas 5% ADTV Rp ${maxSafeMillionsStr} Juta) guna mencegah dampak harga (slippage) dan over-allocation.`,
           `Disiplin Hold & Efisiensi Fee: Selama peringkat kuantitatif saham ini bertahan di zona Buffer ≤40% (saat ini Top ${stock.dmuRankPct}%), posisi layak dipertahankan untuk menghemat biaya transaksi sekuritas.`
         ],
         sentimentTone:
@@ -3670,12 +3719,12 @@ function buildDeepAnalyticalConvictionReport(params: {
       idealEntryZone: formattedAccumulationZone,
       InvalidationOrRiskLimit: stock.isHscFlagged
         ? 'Batasi porsi maksimal 0% dari portofolio.'
-        : `Tinjau ulang posisi jika harga turun di bawah Rp ${riskStopPrice.toLocaleString('id-ID')} disertai penurunan GP/A < 10%, OCF/NI < 0,65x, atau keluar dari zona Top 40% Buffer.`,
+        : `Tinjau ulang posisi jika harga turun di bawah Rp ${riskStopPrice.toLocaleString('id-ID')} (Graham-Joeliardi Floor: Rp ${gjFloorIdr.toLocaleString('id-ID')}) disertai penurunan GP/A < 10%, OCF/NI < 0,65x, atau keluar dari zona Top 40% Buffer.`,
       portfolioAllocationGuide: stock.isHscFlagged
         ? '0% Modal Portofolio (Diblokir oleh filter perlindungan modal)'
         : isBasket1Core
-        ? `Keranjang 1 (Defensive Core · 1/β ${betaPropensity.toFixed(2)}x): Alokasikan ${targetMinPct}% – ${targetMaxPct}% (1/β Cap ≤${targetMaxPct}%). WAJIB BATAS LIKUIDITAS ≤ 5% ADTV 20D (Maks Rp ${maxSafeMillionsStr} Jt/hari dari ADTV Rp ${adtvMillionsStr} Jt).`
-        : `Keranjang 2 (Tactical Alpha · 1/β ${betaPropensity.toFixed(2)}x): Alokasikan ${targetMinPct}% – ${targetMaxPct}% (1/β Cap ≤${targetMaxPct}%). WAJIB BATAS LIKUIDITAS ≤ 5% ADTV 20D (Maks Rp ${maxSafeMillionsStr} Jt/hari dari ADTV Rp ${adtvMillionsStr} Jt).`,
+        ? `Keranjang 1 (Defensive Core · 1/β ${betaPropensity.toFixed(2)}x): Alokasikan ${targetMinPct}% – ${targetMaxPct}% (1/β Cap ≤${targetMaxPct}%). BATAS EKSEKUSI KAS RIIL & 5% ADTV ≤ Rp ${realCashCappedMillionsStr} Jt/hari (5% ADTV Rp ${maxSafeMillionsStr} Jt dari ADTV Rp ${adtvMillionsStr} Jt).`
+        : `Keranjang 2 (Tactical Alpha · 1/β ${betaPropensity.toFixed(2)}x): Alokasikan ${targetMinPct}% – ${targetMaxPct}% (1/β Cap ≤${targetMaxPct}%). BATAS EKSEKUSI KAS RIIL & 5% ADTV ≤ Rp ${realCashCappedMillionsStr} Jt/hari (5% ADTV Rp ${maxSafeMillionsStr} Jt dari ADTV Rp ${adtvMillionsStr} Jt).`,
       isUndercutDeepDiscount,
       isLiquidityCapped,
       liquidityWarningBadge,
@@ -3696,13 +3745,14 @@ export async function requestEmitenAiInspection(params: {
   recentNews: NewsSentimentItem[];
   userQuestion: string;
   regimeStatus: string;
+  availablePortfolioCashIdr?: number;
 }): Promise<{
   analysis: string;
   structuredReport: StructuredAiConvictionReport;
   isAiGenerated: boolean;
   generatedAt: string;
 }> {
-  const { stock, joeliardiEval, recentNews, userQuestion, regimeStatus } = params;
+  const { stock, joeliardiEval, recentNews, userQuestion, regimeStatus, availablePortfolioCashIdr } = params;
   const fallbackReport = buildDeepAnalyticalConvictionReport(params);
 
   if (canUseExpressOnDemandApi()) {
@@ -3715,7 +3765,8 @@ export async function requestEmitenAiInspection(params: {
           joeliardiEval,
           recentNews,
           userQuestion,
-          regimeStatus
+          regimeStatus,
+          availablePortfolioCashIdr
         })
       });
       if (res.ok) {

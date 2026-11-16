@@ -18,6 +18,7 @@ interface BarbellAllocatorCardProps {
   stocks: StockMetrics[];
   capitalIdr: number;
   actualPortfolioNavIdr?: number;
+  availableCashIdr?: number;
   onChangeCapital: (capital: number) => void;
   onLoadIdx100Universe?: () => void;
   onInspectTicker?: (ticker: string) => void;
@@ -33,6 +34,7 @@ export function BarbellAllocatorCard({
   stocks,
   capitalIdr,
   actualPortfolioNavIdr,
+  availableCashIdr,
   onChangeCapital,
   onInspectTicker,
   onTriggerSweetAlert
@@ -55,9 +57,10 @@ export function BarbellAllocatorCard({
         regime,
         capitalIdr,
         picksPerSleeve,
-        selectionMode
+        selectionMode,
+        availableCashIdr
       ),
-    [stocks, regime, capitalIdr, picksPerSleeve, selectionMode]
+    [stocks, regime, capitalIdr, picksPerSleeve, selectionMode, availableCashIdr]
   );
 
   const lowVolCorePositions = analytics.positions.filter((p) => p.basket === 'DEFENSIVE');

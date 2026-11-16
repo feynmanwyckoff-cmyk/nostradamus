@@ -116,23 +116,42 @@ export interface StockMetrics {
   buybackNominalIdr?: number;          // Total active buyback mandate allocation in IDR
   liveMarketCapIdr?: number;           // Live or calibrated market capitalization in IDR
   dynamicBuybackYieldPct?: number;     // (buybackNominalIdr / liveMarketCapIdr) * 100
-  splitRatioDivisor?: number;          // Stock split divisor (e.g. 5 for 1:5 split) applied to anchor BVPS/EPS/ADTV
-  isCatalystActive?: boolean;          // True when hasActiveBuyback || earningsGrowthYoYPct > 20 || splitRatioDivisor > 1
+  splitRatioDivisor?: number;          // Stock split (>1) or reverse split (<1) divisor applied to BVPS/EPS/ADTV
+  isCatalystActive?: boolean;          // True when hasActiveBuyback || earningsGrowthYoYPct > 20 || splitRatioDivisor !== 1
+  hasActiveCatalyst?: boolean;         // Explicit boolean flag for Catalyst Override in Decision Tree
   catalystBadgeLabel?: string;         // Short badge label e.g. "CATALYST ACTIVE · BUYBACK +4,2% / Q-EPS +34%"
+  cwipToAssetsRatio?: number;          // Capital Work in Progress / Total Assets ratio (0.0 - 1.0) for Capex Aggressors
+  historicalEps7YAvgIdr?: number;      // 7Y-10Y Mid-Cycle Normalized EPS in IDR for Pure Cyclicals
+  pbv10YMean?: number;                 // 10-year historical mean PBV multiple
+  pbv10YStdDev?: number;               // 10-year historical PBV standard deviation
+  pbvZScore?: number;                  // Current PBV Z-Score vs 10-year mean
+  longTermDebtPrevYearIdr?: number;    // Prior year long-term debt (IDR) for Net Debt Paydown calculation
+  longTermDebtCurrYearIdr?: number;    // Current year long-term debt (IDR) for Net Debt Paydown calculation
+  netPayoutYieldPct?: number;          // Pure (Forward Dividend Yield + Buyback Yield) without Debt Paydown
 }
 
 export type RecommendationDecisionState =
   | 'AVOID_HSC_BLOCK'
   | 'STRONG_BUY_DEFENSIVE_ANOMALY'
+  | 'STRONG_BUY_CYCLICAL_ZSCORE'
   | 'BUY_ON_STRENGTH_CATALYST'
   | 'ACCUMULATE_DEEP_MOS'
+  | 'ACCUMULATE_QUALITY_FAIR_VALUE'
   | 'WAIT_FOR_PULLBACK';
+
+export type ValuationModuleRoute =
+  | 'STEADY_COMPOUNDER'
+  | 'CAPEX_AGGRESSOR'
+  | 'PURE_CYCLICAL';
 
 export interface EnsembleValuationLeg {
   id: 'SECTOR_PRIMARY' | 'MULTI_STAGE_RIM' | 'STATARB_RELVAL';
   label: string;
   priceIdr: number;
-  weight: 0.45 | 0.35 | 0.2;
+  weight: number;
+  baseWeight?: number;
+  isOutlierSlashed?: boolean;
+  isDisabledByConfidence?: boolean;
 }
 
 export interface CorporateActionOverrideInput {
@@ -146,6 +165,8 @@ export interface CorporateActionOverrideInput {
   forwardAnnualizedRoePct?: number;
   earningsGrowthYoYPct?: number;
   catalystNote?: string;
+  cwipToAssetsRatio?: number;
+  hasActiveAcquisition?: boolean;
 }
 
 export interface SyncTelemetryReport {
@@ -160,6 +181,9 @@ export interface SyncTelemetryReport {
 }
 
 export type SectorValuationArchetype =
+  | 'STEADY_COMPOUNDER_PBV'
+  | 'CAPEX_AGGRESSOR_BLENDED'
+  | 'PURE_CYCLICAL_NORMALIZED'
   | 'ENERGY_MATERIALS_PCF'
   | 'TELCO_INFRA_EVEBITDA'
   | 'PROPERTY_REIT_PAFFO'
@@ -184,6 +208,7 @@ export interface ValuationMethodComparisonItem {
   weightPct: number;
   isPrimaryEnsemble?: boolean;
   isSectorPrimary?: boolean;
+  isStandaloneBenchmark?: boolean;
 }
 
 export interface JoeliardiOosEvaluation {
@@ -205,8 +230,11 @@ export interface JoeliardiOosEvaluation {
   historicalDpr3YPct: number;
   estimatedForwardDpsIdr: number;
   forwardDividendYieldPct: number;
+  netPayoutYieldPct?: number;
   netBuybackDebtPaydownYieldPct: number;
+  netDebtPaydownYieldPct?: number;
   totalShareholderYieldPct: number;
+  isDividendOutlierSanitized?: boolean;
   rawSbnSpreadPct: number;
   erpBenchmarkPct: number;
   netErpSpreadPct: number;
@@ -229,6 +257,30 @@ export interface JoeliardiOosEvaluation {
   rimFadeYears?: number;
   rimPersistenceOmega?: number;
   rimTerminalRoePct?: number;
+  // Modular ValuationEngine Router Telemetry (Steady Compounder, Capex Aggressor, Pure Cyclical)
+  valuationModuleRoute?: ValuationModuleRoute;
+  valuationModuleLabel?: string;
+  cwipToAssetsRatio?: number;
+  normalizedEps7YIdr?: number;
+  normalizedRoePct?: number;
+  pbv10YMean?: number;
+  pbv10YStdDev?: number;
+  pbvZScore?: number;
+  isCyclicalDerPenalized?: boolean;
+  // Standalone Graham-Joeliardi "Moat" Intrinsic Value Benchmark (Floor Value)
+  grahamJoeliardiBenchmarkIdr?: number;
+  grahamJoeliardiRawIdr?: number;
+  isMoatHaircutApplied?: boolean;
+  moatHaircutReason?: string;
+  // Dynamic Ensemble Weighter Telemetry
+  ensembleOutlierPenalizedLeg?: string;
+  ensembleConfidenceNotes?: string[];
+  // Dynamic MoS & Real Portfolio Cash Sizing
+  excessReturnSpreadPct?: number;
+  dynamicRequiredMosPct?: number;
+  hasActiveCatalyst?: boolean;
+  availablePortfolioCashIdr?: number;
+  realCashCappedAllocationIdr?: number;
   // Sector-Specific Institutional Valuation Matrix (P/CF, EV/EBITDA, P/AFFO, Justified PBV, Quality P/E)
   sectorValuationArchetype?: SectorValuationArchetype;
   sectorPrimaryMetricShort?: string;       // e.g. 'P/CF', 'EV/EBITDA', 'P/AFFO', 'Justified PBV', 'Quality P/E'
@@ -245,6 +297,7 @@ export interface JoeliardiOosEvaluation {
   statArbPeerTicker?: string;
   statArbPeerName?: string;
   statArbCorrelation?: number;
+  statArbBetaRatio?: number;
   statArbSpread1DPct?: number;
   statArbSpread30DPct?: number;
   statArbZScore?: number;
