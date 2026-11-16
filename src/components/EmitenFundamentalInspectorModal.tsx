@@ -1730,8 +1730,8 @@ export function EmitenFundamentalInspectorModal({
 
           {/* Multi-Method Fair Value Comparison & Quantedge Statistical Arbitrage (Relative Value) */}
           <div className="p-4 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs space-y-3.5">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E4E2DD] pb-2.5">
-              <div>
+            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 border-b border-[#E4E2DD] pb-2.5">
+              <div className="min-w-0 flex-1">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-[#0D5C46] block">
                   QUANTEDGE SECTOR-ADAPTIVE ROUTER &amp; DYNAMIC ENSEMBLE
                 </span>
@@ -1744,19 +1744,19 @@ export function EmitenFundamentalInspectorModal({
                   />
                 </div>
               </div>
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
-                {joeliardiEval.valuationModuleLabel && (
-                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-mono rounded-xs bg-[#059669]/10 border border-[#059669]/40 text-[#0D5C46] font-bold">
-                    <span>Router:</span>
-                    <span>{joeliardiEval.valuationModuleLabel}</span>
-                  </div>
-                )}
+              <div className="flex flex-col sm:items-end gap-1.5 shrink-0">
                 <div className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-mono rounded-xs bg-[#FFFFFF] border border-[#E4E2DD] text-neutral-600">
                   <span className="font-semibold">Matriks Utama Sektor:</span>
                   <span className="px-2 py-0.5 rounded-xs bg-[#D97706]/20 text-[#D97706] bb-amber border border-[#D97706]/50 font-extrabold tracking-tight">
                     {joeliardiEval.sectorPrimaryMetricLabel ?? 'Justified PBV'}
                   </span>
                 </div>
+                {joeliardiEval.valuationModuleLabel && (
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-mono rounded-xs bg-[#059669]/10 border border-[#059669]/40 text-[#0D5C46] font-bold">
+                    <span>Router:</span>
+                    <span>{joeliardiEval.valuationModuleLabel}</span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1772,7 +1772,7 @@ export function EmitenFundamentalInspectorModal({
               </div>
             )}
 
-            {/* 5 Valuation Methods Grid: Model Final + 3 Dynamic Ensemble Legs + 1 Standalone Graham-Joeliardi Floor */}
+            {/* 4 Valuation Methods Grid (Model Final + 3 Dynamic Ensemble Legs) + Full-Width Standalone Floor Bar Below */}
             {joeliardiEval.valuationMethodsComparison &&
               joeliardiEval.valuationMethodsComparison.length > 0 &&
               (() => {
@@ -1818,252 +1818,290 @@ export function EmitenFundamentalInspectorModal({
                   100 - secSharePct - rimSharePct
                 );
 
+                const ensembleCards = joeliardiEval.valuationMethodsComparison.filter(
+                  (m) => !m.isStandaloneBenchmark
+                );
+                const standaloneFloorMethod = joeliardiEval.valuationMethodsComparison.find(
+                  (m) => Boolean(m.isStandaloneBenchmark)
+                );
+
                 return (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
-                    {joeliardiEval.valuationMethodsComparison.map((m, mIdx) => {
-                      const isPrimary = Boolean(m.isPrimaryEnsemble);
-                      const isStandalone = Boolean(m.isStandaloneBenchmark);
-                      const cleanMethodName = m.name.replace(/\s*\(Utama\)/i, '');
-                      const compContribIdr =
-                        m.id === 'sector_specific_matrix'
-                          ? secContribIdr
-                          : m.id === 'multistage_rim'
-                          ? rimContribIdr
-                          : m.id === 'statarb_relative_peer'
-                          ? relContribIdr
-                          : isStandalone
-                          ? 0
-                          : totalModelFinal;
-                      const compBarColor =
-                        m.id === 'sector_specific_matrix'
-                          ? 'bg-[#D97706]'
-                          : m.id === 'multistage_rim'
-                          ? 'bg-[#059669]'
-                          : isStandalone
-                          ? 'bg-neutral-400'
-                          : 'bg-[#0284C7]';
-                      const compTextColor =
-                        m.id === 'sector_specific_matrix'
-                          ? 'text-[#D97706] bb-amber'
-                          : m.id === 'multistage_rim'
-                          ? 'text-[#0D5C46]'
-                          : isStandalone
-                          ? 'text-neutral-600'
-                          : 'text-[#0284C7] bb-cyan';
-                      const compShareOfFinalPct = isStandalone
-                        ? 0
-                        : Math.min(
-                            100,
-                            Math.max(0, Math.round((m.weightPct ?? 0)))
-                          );
+                  <div className="space-y-2.5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                      {ensembleCards.map((m, mIdx) => {
+                        const isPrimary = Boolean(m.isPrimaryEnsemble);
+                        const cleanMethodName = m.name.replace(/\s*\(Utama\)/i, '');
+                        const compContribIdr =
+                          m.id === 'sector_specific_matrix'
+                            ? secContribIdr
+                            : m.id === 'multistage_rim'
+                            ? rimContribIdr
+                            : m.id === 'statarb_relative_peer'
+                            ? relContribIdr
+                            : totalModelFinal;
+                        const compBarColor =
+                          m.id === 'sector_specific_matrix'
+                            ? 'bg-[#D97706]'
+                            : m.id === 'multistage_rim'
+                            ? 'bg-[#059669]'
+                            : 'bg-[#0284C7]';
+                        const compTextColor =
+                          m.id === 'sector_specific_matrix'
+                            ? 'text-[#D97706] bb-amber'
+                            : m.id === 'multistage_rim'
+                            ? 'text-[#0D5C46]'
+                            : 'text-[#0284C7] bb-cyan';
+                        const compShareOfFinalPct = Math.min(
+                          100,
+                          Math.max(0, Math.round(m.weightPct ?? 0))
+                        );
 
-                      const tooltipConfig =
-                        m.id === 'quantedge_ensemble'
-                          ? {
-                              title:
-                                'Quantedge Sector-Adaptive Ensemble (Model Final — Akumulasi 100%)',
-                              laymanExplanation:
-                                'Model Final yang dihitung secara presisi dari akumulasi tertimbang komponen Matriks Sektor, Multi-Stage RIM, dan Relative Value Peer melalui DynamicEnsembleWeighter.',
-                              practicalGuide:
-                                'Menjadi patokan utama perhitungan Margin of Safety (MoS) dan zona akumulasi.'
-                            }
-                          : m.id === 'sector_specific_matrix'
-                          ? {
-                              title: `Matriks Spesifik Sektor (${joeliardiEval.sectorPrimaryMetricLabel}) — Bobot ${(m.weightPct ?? 45).toFixed(1)}%`,
-                              laymanExplanation: `Menggunakan metrik standar institusional yang paling relevan untuk sektor ${activeStock.sector} (${joeliardiEval.sectorPrimaryMetricShort}) sesuai router ${joeliardiEval.valuationModuleLabel ?? 'ValuationEngine'}.`,
-                              practicalGuide: `Membandingkan ${joeliardiEval.sectorPrimaryMetricShort} aktual (${joeliardiEval.sectorPrimaryImpliedMultiple}x) terhadap ${joeliardiEval.sectorPrimaryMetricShort} wajar (${joeliardiEval.sectorPrimaryFairMultiple}x).`
-                            }
-                          : m.id === 'multistage_rim'
-                          ? {
-                              title: `Multi-Stage Residual Income (Ohlson 1995 & Penman 2020, ω=${(joeliardiEval.rimPersistenceOmega ?? 0.72).toFixed(2)}) — Bobot ${(m.weightPct ?? 35).toFixed(1)}%`,
-                              laymanExplanation:
-                                'Menilai saham dari Nilai Buku Ekuitas saat ini (Anchor BVPS) ditambah nilai sekarang (present value) dari Laba Abnormal yang meluruh sesuai faktor elastis sektoral (ω).',
-                              practicalGuide:
-                                'Sangat tangguh terhadap fluktuasi siklus jangka pendek karena berjangkar pada ekuitas neraca.'
-                            }
-                          : isStandalone
-                          ? {
-                              title:
-                                'Graham-Joeliardi "Moat" Intrinsic Floor Benchmark (Standalone — 0% Bobot Ensemble)',
-                              laymanExplanation:
-                                'Rumus konservatif (EPS × (8.5 + 2g) × 4.4) ÷ SBN 10Y Yield dengan Weak Moat Penalty (-25% bila ROE < 15% atau DER > 1x). Ditampilkan murni sebagai batas bawah keamanan (sanity check floor) dan TIDAK dirata-ratakan ke dalam Harga Wajar Utama Quantedge.',
-                              practicalGuide:
-                                'Jika harga pasar berada di dekat atau di bawah lantai Graham-Joeliardi ini, risiko penurunan fundamental jangka panjang sangat terbatas.'
-                            }
-                          : {
-                              title: `Beta-Adjusted Relative Value & StatArb vs ${joeliardiEval.statArbPeerTicker} — Bobot ${(m.weightPct ?? 20).toFixed(1)}%`,
-                              laymanExplanation:
-                                'Mengukur nilai wajar relatif berdasarkan regresi hedonis lintas emiten dan deviasi spread kointegrasi (Z-Score) yang telah dinormalisasi dengan rasio volatilitas Beta (β_A / β_B).',
-                              practicalGuide:
-                                'Mendeteksi peluang mean-reversion ketika saham tertinggal secara tidak wajar dibanding peer utamanya.'
-                            };
+                        const tooltipConfig =
+                          m.id === 'quantedge_ensemble'
+                            ? {
+                                title:
+                                  'Quantedge Sector-Adaptive Ensemble (Model Final — Akumulasi 100%)',
+                                laymanExplanation:
+                                  'Model Final yang dihitung secara presisi dari akumulasi tertimbang komponen Matriks Sektor, Multi-Stage RIM, dan Relative Value Peer melalui DynamicEnsembleWeighter.',
+                                practicalGuide:
+                                  'Menjadi patokan utama perhitungan Margin of Safety (MoS) dan zona akumulasi.'
+                              }
+                            : m.id === 'sector_specific_matrix'
+                            ? {
+                                title: `Matriks Spesifik Sektor (${joeliardiEval.sectorPrimaryMetricLabel}) — Bobot ${(m.weightPct ?? 45).toFixed(1)}%`,
+                                laymanExplanation: `Menggunakan metrik standar institusional yang paling relevan untuk sektor ${activeStock.sector} (${joeliardiEval.sectorPrimaryMetricShort}) sesuai router ${joeliardiEval.valuationModuleLabel ?? 'ValuationEngine'}.`,
+                                practicalGuide: `Membandingkan ${joeliardiEval.sectorPrimaryMetricShort} aktual (${joeliardiEval.sectorPrimaryImpliedMultiple}x) terhadap ${joeliardiEval.sectorPrimaryMetricShort} wajar (${joeliardiEval.sectorPrimaryFairMultiple}x).`
+                              }
+                            : m.id === 'multistage_rim'
+                            ? {
+                                title: `Multi-Stage Residual Income (Ohlson 1995 & Penman 2020, ω=${(joeliardiEval.rimPersistenceOmega ?? 0.72).toFixed(2)}) — Bobot ${(m.weightPct ?? 35).toFixed(1)}%`,
+                                laymanExplanation:
+                                  'Menilai saham dari Nilai Buku Ekuitas saat ini (Anchor BVPS) ditambah nilai sekarang (present value) dari Laba Abnormal yang meluruh sesuai faktor elastis sektoral (ω).',
+                                practicalGuide:
+                                  'Sangat tangguh terhadap fluktuasi siklus jangka pendek karena berjangkar pada ekuitas neraca.'
+                              }
+                            : {
+                                title: `Beta-Adjusted Relative Value & StatArb vs ${joeliardiEval.statArbPeerTicker} — Bobot ${(m.weightPct ?? 20).toFixed(1)}%`,
+                                laymanExplanation:
+                                  'Mengukur nilai wajar relatif berdasarkan regresi hedonis lintas emiten dan deviasi spread kointegrasi (Z-Score) yang telah dinormalisasi dengan rasio volatilitas Beta (β_A / β_B).',
+                                practicalGuide:
+                                  'Mendeteksi peluang mean-reversion ketika saham tertinggal secara tidak wajar dibanding peer utamanya.'
+                              };
 
-                      return (
-                        <div
-                          key={m.id}
-                          className={`p-3 rounded-xs border transition-colors flex flex-col ${
-                            isPrimary
-                              ? 'bg-[#FFFFFF] border-[#D97706] shadow-2xs'
-                              : isStandalone
-                              ? 'bg-[#FAF9F6] border-dashed border-[#0D5C46]/50'
-                              : 'bg-[#FFFFFF]/80 border-[#E4E2DD]'
-                          }`}
-                        >
-                          <div className="min-h-[48px] flex flex-col justify-start">
-                            <div className="flex items-center justify-between gap-1.5">
-                              <span
-                                className={`text-[10px] font-bold uppercase tracking-wider whitespace-nowrap ${
-                                  isPrimary
-                                    ? 'text-[#D97706] bb-amber'
-                                    : isStandalone
-                                    ? 'text-[#0D5C46]'
-                                    : 'text-neutral-500'
-                                }`}
-                              >
-                                {isPrimary
-                                  ? '★ MODEL FINAL'
-                                  : isStandalone
-                                  ? '⚓ FLOOR BENCHMARK'
-                                  : 'KOMPONEN ENSEMBLE'}
-                              </span>
-                              <span className="text-[10px] font-mono font-semibold text-neutral-500 shrink-0 whitespace-nowrap">
-                                {isStandalone
-                                  ? 'Standalone (0%)'
-                                  : `Bobot ${(m.weightPct ?? 0).toFixed(0)}%`}
-                              </span>
+                        return (
+                          <div
+                            key={m.id}
+                            className={`p-3 rounded-xs border transition-colors flex flex-col ${
+                              isPrimary
+                                ? 'bg-[#FFFFFF] border-[#D97706] shadow-2xs'
+                                : 'bg-[#FFFFFF]/80 border-[#E4E2DD]'
+                            }`}
+                          >
+                            <div className="min-h-[48px] flex flex-col justify-start">
+                              <div className="flex items-center justify-between gap-2">
+                                <span
+                                  className={`text-[10px] font-bold uppercase tracking-wider whitespace-nowrap ${
+                                    isPrimary
+                                      ? 'text-[#D97706] bb-amber'
+                                      : 'text-neutral-500'
+                                  }`}
+                                >
+                                  {isPrimary ? '★ MODEL FINAL' : 'KOMPONEN ENSEMBLE'}
+                                </span>
+                                <span className="text-[10px] font-mono font-semibold text-neutral-500 shrink-0 whitespace-nowrap">
+                                  Bobot {(m.weightPct ?? 0).toFixed(0)}%
+                                </span>
+                              </div>
+                              <div className="text-[11px] font-bold text-[#111315] mt-1 leading-snug break-words">
+                                <MetricTooltip
+                                  label={cleanMethodName}
+                                  title={tooltipConfig.title}
+                                  laymanExplanation={tooltipConfig.laymanExplanation}
+                                  practicalGuide={tooltipConfig.practicalGuide}
+                                  align={mIdx >= 2 ? 'right' : 'left'}
+                                />
+                              </div>
                             </div>
-                            <div className="text-[11px] font-bold text-[#111315] mt-1 leading-snug break-words">
-                              <MetricTooltip
-                                label={cleanMethodName}
-                                title={tooltipConfig.title}
-                                laymanExplanation={tooltipConfig.laymanExplanation}
-                                practicalGuide={tooltipConfig.practicalGuide}
-                                align={mIdx >= 2 ? 'right' : 'left'}
-                              />
+
+                            <div className="mt-2 pt-2 border-t border-[#E4E2DD]/60 flex-1 flex flex-col">
+                              <div className="flex items-baseline justify-between gap-2">
+                                <div className="text-lg sm:text-xl font-extrabold font-mono text-[#111315] whitespace-nowrap">
+                                  Rp {formatIdrPriceDisplay(m.fairPriceIdr)}
+                                </div>
+                                <span
+                                  className={`text-[10.5px] font-mono font-bold whitespace-nowrap ${
+                                    m.mosPct >= 10
+                                      ? 'text-[#0D5C46]'
+                                      : m.mosPct >= 0
+                                      ? 'text-[#D97706]'
+                                      : 'text-[#9E2A2B]'
+                                  }`}
+                                >
+                                  {m.mosPct >= 0 ? '+' : ''}
+                                  {m.mosPct.toFixed(1)}%
+                                </span>
+                              </div>
+
+                              {/* Visual Accumulation Bar: Stacked Bar on Model Final vs Proportional Contribution Bar on Components */}
+                              {isPrimary ? (
+                                <div className="mt-1.5 mb-1.5 p-1.5 rounded-2xs bg-[#FAF9F6] border border-[#E4E2DD]">
+                                  <div className="flex items-center justify-between gap-1 text-[9px] font-mono text-neutral-600 mb-1 whitespace-nowrap">
+                                    <span className="font-bold text-[#111315]">
+                                      Akumulasi Dinamis:
+                                    </span>
+                                    <span className="font-bold text-[#D97706] bb-amber">
+                                      100% (Rp {formatIdrPriceDisplay(totalModelFinal)})
+                                    </span>
+                                  </div>
+                                  <div className="w-full h-2 rounded-2xs overflow-hidden flex bg-[#E4E2DD]/70 gap-0.5">
+                                    {secSharePct > 0 && (
+                                      <div
+                                        className="h-full bg-[#D97706]"
+                                        style={{ width: `${secSharePct}%` }}
+                                        title={`${secSharePct}% Sektor: +Rp ${formatIdrPriceDisplay(secContribIdr)}`}
+                                      />
+                                    )}
+                                    {rimSharePct > 0 && (
+                                      <div
+                                        className="h-full bg-[#059669]"
+                                        style={{ width: `${rimSharePct}%` }}
+                                        title={`${rimSharePct}% RIM: +Rp ${formatIdrPriceDisplay(rimContribIdr)}`}
+                                      />
+                                    )}
+                                    {relSharePct > 0 && (
+                                      <div
+                                        className="h-full bg-[#0284C7]"
+                                        style={{ width: `${relSharePct}%` }}
+                                        title={`${relSharePct}% RelVal: +Rp ${formatIdrPriceDisplay(relContribIdr)}`}
+                                      />
+                                    )}
+                                  </div>
+                                  <div className="flex items-center justify-between text-[9px] font-mono text-neutral-600 mt-1">
+                                    <span className="text-[#D97706] bb-amber font-semibold">
+                                      +Rp {formatIdrPriceDisplay(secContribIdr)}
+                                    </span>
+                                    <span>+</span>
+                                    <span className="text-[#0D5C46] font-semibold">
+                                      Rp {formatIdrPriceDisplay(rimContribIdr)}
+                                    </span>
+                                    <span>+</span>
+                                    <span className="text-[#0284C7] bb-cyan font-semibold">
+                                      Rp {formatIdrPriceDisplay(relContribIdr)}
+                                    </span>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="mt-1.5 mb-1.5 p-1.5 rounded-2xs bg-[#FAF9F6] border border-[#E4E2DD]">
+                                  <div className="flex items-center justify-between text-[9.5px] font-mono mb-1">
+                                    <span className="text-neutral-600">
+                                      Kontribusi ({(m.weightPct ?? 0).toFixed(0)}%):
+                                    </span>
+                                    <span className={`font-extrabold ${compTextColor}`}>
+                                      +Rp {formatIdrPriceDisplay(compContribIdr)} ke Final
+                                    </span>
+                                  </div>
+                                  <div className="w-full h-2 rounded-2xs overflow-hidden bg-[#E4E2DD]/70">
+                                    <div
+                                      className={`h-full ${compBarColor}`}
+                                      style={{ width: `${compShareOfFinalPct}%` }}
+                                    />
+                                  </div>
+                                  <div className="flex items-center justify-between text-[9px] font-mono text-neutral-500 mt-1">
+                                    <span>
+                                      Rp {formatIdrPriceDisplay(m.fairPriceIdr)} ×{' '}
+                                      {(m.weightPct ?? 0).toFixed(0)}%
+                                    </span>
+                                    <span>
+                                      {compShareOfFinalPct}% bobot dinamis
+                                    </span>
+                                  </div>
+                                </div>
+                              )}
+
+                              <div className="text-[10px] font-mono text-neutral-600 mt-1 leading-snug break-words">
+                                {m.metricBasis}
+                              </div>
+                              <div className="text-[10px] text-neutral-500 mt-0.5 leading-snug break-words">
+                                Aktual: {m.impliedMultipleLabel} · Wajar: {m.fairMultipleLabel}
+                              </div>
                             </div>
                           </div>
+                        );
+                      })}
+                    </div>
 
-                          <div className="mt-2 pt-2 border-t border-[#E4E2DD]/60 flex-1 flex flex-col">
-                            <div className="flex items-baseline justify-between gap-2">
-                              <div className="text-lg sm:text-xl font-extrabold font-mono text-[#111315] whitespace-nowrap">
-                                Rp {formatIdrPriceDisplay(m.fairPriceIdr)}
-                              </div>
-                              <span
-                                className={`text-[10.5px] font-mono font-bold whitespace-nowrap ${
-                                  m.mosPct >= 10
-                                    ? 'text-[#0D5C46]'
-                                    : m.mosPct >= 0
-                                    ? 'text-[#D97706]'
-                                    : 'text-[#9E2A2B]'
-                                }`}
-                              >
-                                {m.mosPct >= 0 ? '+' : ''}
-                                {m.mosPct.toFixed(1)}%
-                              </span>
-                            </div>
-
-                            {/* Visual Accumulation Bar: Stacked Bar on Model Final vs Proportional Contribution Bar on Components vs Standalone Badge */}
-                            {isPrimary ? (
-                              <div className="mt-1.5 mb-1.5 p-1.5 rounded-2xs bg-[#FAF9F6] border border-[#E4E2DD]">
-                                <div className="flex items-center justify-between gap-1 text-[9px] font-mono text-neutral-600 mb-1 whitespace-nowrap">
-                                  <span className="font-bold text-[#111315]">
-                                    Akumulasi Dinamis:
-                                  </span>
-                                  <span className="font-bold text-[#D97706] bb-amber">
-                                    100% (Rp {formatIdrPriceDisplay(totalModelFinal)})
-                                  </span>
-                                </div>
-                                <div className="w-full h-2 rounded-2xs overflow-hidden flex bg-[#E4E2DD]/70 gap-0.5">
-                                  {secSharePct > 0 && (
-                                    <div
-                                      className="h-full bg-[#D97706]"
-                                      style={{ width: `${secSharePct}%` }}
-                                      title={`${secSharePct}% Sektor: +Rp ${formatIdrPriceDisplay(secContribIdr)}`}
-                                    />
-                                  )}
-                                  {rimSharePct > 0 && (
-                                    <div
-                                      className="h-full bg-[#059669]"
-                                      style={{ width: `${rimSharePct}%` }}
-                                      title={`${rimSharePct}% RIM: +Rp ${formatIdrPriceDisplay(rimContribIdr)}`}
-                                    />
-                                  )}
-                                  {relSharePct > 0 && (
-                                    <div
-                                      className="h-full bg-[#0284C7]"
-                                      style={{ width: `${relSharePct}%` }}
-                                      title={`${relSharePct}% RelVal: +Rp ${formatIdrPriceDisplay(relContribIdr)}`}
-                                    />
-                                  )}
-                                </div>
-                                <div className="flex items-center justify-between text-[9px] font-mono text-neutral-600 mt-1">
-                                  <span className="text-[#D97706] bb-amber font-semibold">
-                                    +Rp {formatIdrPriceDisplay(secContribIdr)}
-                                  </span>
-                                  <span>+</span>
-                                  <span className="text-[#0D5C46] font-semibold">
-                                    Rp {formatIdrPriceDisplay(rimContribIdr)}
-                                  </span>
-                                  <span>+</span>
-                                  <span className="text-[#0284C7] bb-cyan font-semibold">
-                                    Rp {formatIdrPriceDisplay(relContribIdr)}
-                                  </span>
-                                </div>
-                              </div>
-                            ) : isStandalone ? (
-                              <div className="mt-1.5 mb-1.5 p-1.5 rounded-2xs bg-[#FFFFFF] border border-[#0D5C46]/30">
-                                <div className="flex items-center justify-between text-[9.5px] font-mono mb-1">
-                                  <span className="text-[#0D5C46] font-bold">
-                                    Sanity Check Floor:
-                                  </span>
-                                  <span className="font-semibold text-neutral-600">
-                                    Tidak Dirata-ratakan
-                                  </span>
-                                </div>
-                                <div className="text-[9px] font-mono text-neutral-500 leading-tight">
-                                  {joeliardiEval.isMoatHaircutApplied
-                                    ? 'Termasuk Weak Moat Penalty -25% (ROE<15% / DER>1x)'
-                                    : 'Moat Kuat Terverifikasi (0% Haircut Penalty)'}
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="mt-1.5 mb-1.5 p-1.5 rounded-2xs bg-[#FAF9F6] border border-[#E4E2DD]">
-                                <div className="flex items-center justify-between text-[9.5px] font-mono mb-1">
-                                  <span className="text-neutral-600">
-                                    Kontribusi ({(m.weightPct ?? 0).toFixed(0)}%):
-                                  </span>
-                                  <span className={`font-extrabold ${compTextColor}`}>
-                                    +Rp {formatIdrPriceDisplay(compContribIdr)} ke Final
-                                  </span>
-                                </div>
-                                <div className="w-full h-2 rounded-2xs overflow-hidden bg-[#E4E2DD]/70">
-                                  <div
-                                    className={`h-full ${compBarColor}`}
-                                    style={{ width: `${compShareOfFinalPct}%` }}
-                                  />
-                                </div>
-                                <div className="flex items-center justify-between text-[9px] font-mono text-neutral-500 mt-1">
-                                  <span>
-                                    Rp {formatIdrPriceDisplay(m.fairPriceIdr)} ×{' '}
-                                    {(m.weightPct ?? 0).toFixed(0)}%
-                                  </span>
-                                  <span>
-                                    {compShareOfFinalPct}% bobot dinamis
-                                  </span>
-                                </div>
-                              </div>
-                            )}
-
-                            <div className="text-[10px] font-mono text-neutral-600 mt-1 leading-snug break-words">
-                              {m.metricBasis}
-                            </div>
-                            <div className="text-[10px] text-neutral-500 mt-0.5 leading-snug break-words">
-                              Aktual: {m.impliedMultipleLabel} · Wajar: {m.fairMultipleLabel}
-                            </div>
+                    {/* Full-Width Horizontal Bar for Graham-Joeliardi Standalone Floor Benchmark */}
+                    {standaloneFloorMethod && (
+                      <div className="w-full p-3 rounded-xs bg-[#FAF9F6] border border-dashed border-[#0D5C46]/50 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                        <div className="min-w-0 lg:w-[34%] shrink-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-[#0D5C46]">
+                              ⚓ FLOOR BENCHMARK
+                            </span>
+                            <span className="text-[10px] font-mono text-neutral-500">
+                              · Standalone (0% Bobot Ensemble)
+                            </span>
+                          </div>
+                          <div className="text-xs font-bold text-[#111315] mt-0.5 leading-snug">
+                            <MetricTooltip
+                              label={standaloneFloorMethod.name.replace(/\s*\(Utama\)/i, '')}
+                              title='Graham-Joeliardi "Moat" Intrinsic Floor Benchmark (Standalone — 0% Bobot Ensemble)'
+                              laymanExplanation="Rumus konservatif (EPS × (8.5 + 2g) × 4.4) ÷ SBN 10Y Yield dengan Weak Moat Penalty (-25% bila ROE < 15% atau DER > 1x). Ditampilkan murni sebagai batas bawah keamanan (sanity check floor) dan TIDAK dirata-ratakan ke dalam Harga Wajar Utama Quantedge."
+                              practicalGuide="Jika harga pasar berada di dekat atau di bawah lantai Graham-Joeliardi ini, risiko penurunan fundamental jangka panjang sangat terbatas."
+                              align="left"
+                            />
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[9.5px] font-mono">
+                            <span className="text-[#0D5C46] font-bold">
+                              Sanity Check Floor (Tidak Dirata-ratakan):
+                            </span>
+                            <span className="text-neutral-600 font-semibold">
+                              {joeliardiEval.isMoatHaircutApplied
+                                ? 'Termasuk Weak Moat Penalty -25% (ROE<15% / DER>1x)'
+                                : 'Moat Kuat Terverifikasi (0% Haircut Penalty)'}
+                            </span>
                           </div>
                         </div>
-                      );
-                    })}
+
+                        <div className="min-w-0 flex-1 lg:border-l lg:border-r border-[#E4E2DD] lg:px-3.5 py-0.5">
+                          <div className="text-[10px] font-mono text-[#111315] leading-relaxed break-words">
+                            {standaloneFloorMethod.metricBasis}
+                          </div>
+                          <div className="text-[10px] font-mono text-neutral-500 mt-0.5">
+                            Aktual: {standaloneFloorMethod.impliedMultipleLabel} · Wajar:{' '}
+                            {standaloneFloorMethod.fairMultipleLabel}
+                          </div>
+                        </div>
+
+                        <div className="flex sm:flex-row lg:flex-col items-baseline lg:items-end justify-between gap-2 shrink-0 lg:min-w-[165px]">
+                          <div className="flex items-baseline gap-2">
+                            <span className="text-lg sm:text-xl font-extrabold font-mono text-[#111315] whitespace-nowrap">
+                              Rp {formatIdrPriceDisplay(standaloneFloorMethod.fairPriceIdr)}
+                            </span>
+                            <span
+                              className={`text-[11px] font-mono font-bold whitespace-nowrap ${
+                                standaloneFloorMethod.mosPct >= 10
+                                  ? 'text-[#0D5C46]'
+                                  : standaloneFloorMethod.mosPct >= 0
+                                  ? 'text-[#D97706]'
+                                  : 'text-[#9E2A2B]'
+                              }`}
+                            >
+                              {standaloneFloorMethod.mosPct >= 0 ? '+' : ''}
+                              {standaloneFloorMethod.mosPct.toFixed(1)}%
+                            </span>
+                          </div>
+                          <span className="text-[9.5px] font-mono text-neutral-500">
+                            Selisih vs Model Final:{' '}
+                            <strong className="text-[#111315]">
+                              {standaloneFloorMethod.fairPriceIdr <= totalModelFinal
+                                ? `Floor -${Math.round(((totalModelFinal - standaloneFloorMethod.fairPriceIdr) / Math.max(1, totalModelFinal)) * 100)}% di bawah Final`
+                                : `Floor +${Math.round(((standaloneFloorMethod.fairPriceIdr - totalModelFinal) / Math.max(1, totalModelFinal)) * 100)}% di atas Final`}
+                            </strong>
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })()}
