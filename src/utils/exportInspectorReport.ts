@@ -1755,7 +1755,11 @@ export function renderInspectorReportCanvas(
       lines: [
         `GP/A (Novy-Marx): ${gpToAssets.toFixed(1)}% (Fwd ROE ${fwdRoeVal.toFixed(1)}%)`,
         `OCF/NI (Anti-Junk): ${ocfNi.toFixed(2)}x ${
-          accrualPen > 0 ? `(Penalti -${accrualPen} pts)` : '(Kas Riil Sehat)'
+          accrualPen > 0
+            ? `(Penalti -${accrualPen} pts)`
+            : (joeliardiEval.effectiveModule ?? joeliardiEval.valuationReport?.applied_module) === 'Capex_Aggressor'
+            ? '(Lolos Rule B >0,50x)'
+            : '(Kas Riil Sehat >0,80x)'
         }`,
         `${tsyOrNetPayoutLabel}: ${totalTsyPct.toFixed(2)}% (Div ${joeliardiEval.forwardDividendYieldPct.toFixed(2)}%${buybackPart}${debtPayPart})`
       ]
@@ -2758,7 +2762,12 @@ export function renderInspectorReportCanvas(
     {
       label: 'ANTI-JUNK (QMJ ACCRUAL)',
       mainVal: `OCF/NI ${ocfNi.toFixed(2)}x`,
-      subVal: accrualPen > 0 ? `(Penalti Akrual -${accrualPen} pts)` : '(0 Penalti · Kas Riil Valid)',
+      subVal:
+        accrualPen > 0
+          ? `(Penalti Akrual -${accrualPen} pts)`
+          : (joeliardiEval.effectiveModule ?? joeliardiEval.valuationReport?.applied_module) === 'Capex_Aggressor'
+          ? '(0 Penalti · Rule B Capex >0,50x)'
+          : '(0 Penalti · Rule A Kas >0,80x)',
       color: accrualPen === 0 ? '#34D399' : '#FBBF24'
     },
     {

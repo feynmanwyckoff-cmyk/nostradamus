@@ -42,6 +42,7 @@ import {
   annualizeQuarterlyEarnings,
   calculateGrahamJoeliardiBenchmark,
   DynamicEnsembleWeighter,
+  resolveContextualOcfNiPolicy,
   resolveSectorOmegaFadeFactor,
   ValuationEngine
 } from './valuationEngine';
@@ -576,7 +577,8 @@ export function evaluateHscIndication(
   divYield: number,
   ocfToNetIncomeRatio: number = 1.0,
   grossProfitabilityToAssets: number = 16.0,
-  accrualPenaltyScore: number = 0
+  accrualPenaltyScore: number = 0,
+  effectiveModule?: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical'
 ): {
   isHscFlagged: boolean;
   hscSource: 'MANUAL' | 'KSEI_OFFICIAL' | 'AUTO_QUANT' | 'NONE';
@@ -705,10 +707,11 @@ export function evaluateHscIndication(
   }
 
   if (!isInst) {
+    const minSuspectOcfThreshold = effectiveModule === 'Capex_Aggressor' ? 0.50 : 0.68;
     // Signal 1: Speculative price spike / ARA anomaly without cashflow (OCF/NI) or dividend backing
     if (
       (Math.abs(item.change1D) >= 7.5 || item.return30D >= 18.0) &&
-      (dmuValueScore < 6.4 || item.roe < 10.5 || ocfToNetIncomeRatio < 0.68) &&
+      (dmuValueScore < 6.4 || item.roe < 10.5 || ocfToNetIncomeRatio <= minSuspectOcfThreshold) &&
       divYield < 1.5
     ) {
       return {
@@ -768,24 +771,31 @@ export function evaluateHscIndication(
 
 /**
  * Novy-Marx (2013) Gross Profitability to Assets (GP/A = Gross Profit / Total Assets)
- * & Asness, Frazzini, Pedersen (2019) Quality Minus Junk (QMJ) Accrual Penalty Calculator.
- * Per user preference: High accruals / negative OCF while Net Income > 0 applies a graduated
- * quality score penalty without automatically blocking the stock.
+ * & Asness, Frazzini, Pedersen (2019) Contextual Quality Minus Junk (QMJ) Accrual Penalty Calculator.
+ * Context-aware based on `effective_module`:
+ * - Rule A (Strict: 'Compounder' | 'Pure_Cyclical'): Healthy OCF/NI > 0.80x to 1.00x.
+ * - Rule B (Tolerant: 'Capex_Aggressor'): Healthy OCF/NI > 0.50x (zero penalty above 0.50x).
  */
 export function computeGrossProfitabilityAndAccruals(
   item: RawStockInput,
-  divYield: number = 0
+  divYield: number = 0,
+  effectiveModule?: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical'
 ): {
   grossProfitabilityToAssets: number;
   ocfToNetIncomeRatio: number;
   accrualRatioToAssets: number;
   accrualPenaltyScore: number;
+  effectiveModule: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical';
+  ocfHealthyThreshold: number;
 } {
   const roe = Number(item.roe || 0);
   const der = Math.max(0.05, Number(item.debtToEquity || 0.4));
   const opMargin = Number(item.operatingMargin || 12);
   const clean = item.ticker.trim().toUpperCase().replace(/\.JK$/i, '');
   const isInst = isInstitutionalLiquidCandidate(clean);
+
+  const resolvedEffectiveModule: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical' =
+    effectiveModule ?? ValuationEngine.resolveRoute(item as unknown as StockMetrics).applied_module;
 
   // Unlevered Return on Assets (DuPont ROA = ROE / (1 + DER), adjusted for financial vs non-financial asset structure)
   const effectiveAssetLeverage =
@@ -859,24 +869,22 @@ export function computeGrossProfitabilityAndAccruals(
       : Math.max(0, (1 - ocfToNetIncomeRatio) * 4.5);
   const accrualRatioToAssets = Number(rawAccrualToAssets.toFixed(2));
 
-  // Anti-Junk Graduated Penalty (Asness et al. 2019 QMJ):
-  // Penalizes quality score when OCF < Net Income (ocfToNetIncomeRatio < 0.90) or OCF is negative while accounting profit > 0.
-  // Never auto-blocks on its own (graduated penalty 0.0 to 2.4 pts on 0-10 scale).
-  let accrualPenaltyScore = 0;
-  if (roe > 0 && ocfToNetIncomeRatio < 0) {
-    accrualPenaltyScore = Math.min(2.4, 1.45 + Math.abs(ocfToNetIncomeRatio) * 0.85);
-  } else if (ocfToNetIncomeRatio < 0.88 || accrualRatioToAssets > 1.5) {
-    const shortfallPenalty = Math.max(0, (0.88 - ocfToNetIncomeRatio) * 2.1);
-    const accrualExcessPenalty = Math.max(0, (accrualRatioToAssets - 1.5) * 0.18);
-    accrualPenaltyScore = Math.min(2.1, shortfallPenalty + accrualExcessPenalty);
-  }
-  accrualPenaltyScore = Number(accrualPenaltyScore.toFixed(2));
+  // Contextual Anti-Junk Penalty (Rule A Strict >0.80x vs Rule B Tolerant >0.50x):
+  const contextualPolicy = resolveContextualOcfNiPolicy({
+    effectiveModule: resolvedEffectiveModule,
+    ocfToNetIncomeRatio,
+    accrualRatioToAssets,
+    roePct: roe
+  });
+  const accrualPenaltyScore = contextualPolicy.accrualPenaltyScore;
 
   return {
     grossProfitabilityToAssets,
     ocfToNetIncomeRatio,
     accrualRatioToAssets,
-    accrualPenaltyScore
+    accrualPenaltyScore,
+    effectiveModule: resolvedEffectiveModule,
+    ocfHealthyThreshold: contextualPolicy.ocfHealthyThreshold
   };
 }
 
@@ -890,6 +898,8 @@ export function computeDeMiguelFourFactors(item: RawStockInput): {
   ocfToNetIncomeRatio: number;
   accrualRatioToAssets: number;
   accrualPenaltyScore: number;
+  effectiveModule: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical';
+  ocfHealthyThreshold: number;
   isHscFlagged: boolean;
   hscSource: 'MANUAL' | 'KSEI_OFFICIAL' | 'AUTO_QUANT' | 'NONE';
   hscTier: 'HARD_BLOCK' | 'KSEI_DIVIDEND_PENALTY' | 'EARLY_WARNING_SUSPECT' | 'CLEAN';
@@ -905,12 +915,16 @@ export function computeDeMiguelFourFactors(item: RawStockInput): {
       ? getEmitenDividendYield(item.ticker, item.lastPrice) || item.dividendYieldPct || 0
       : item.dividendYieldPct ?? getEmitenDividendYield(item.ticker);
 
-  const gpAccrual = computeGrossProfitabilityAndAccruals(item, divYield);
+  const routeInfo = ValuationEngine.resolveRoute(item as unknown as StockMetrics);
+  const effectiveModule = routeInfo.applied_module;
+
+  const gpAccrual = computeGrossProfitabilityAndAccruals(item, divYield, effectiveModule);
   const {
     grossProfitabilityToAssets,
     ocfToNetIncomeRatio,
     accrualRatioToAssets,
-    accrualPenaltyScore
+    accrualPenaltyScore,
+    ocfHealthyThreshold
   } = gpAccrual;
 
   // If stock is illiquid, stagnant/suspended, gocap (< Rp 68), or unverified on Yahoo Finance:
@@ -932,7 +946,8 @@ export function computeDeMiguelFourFactors(item: RawStockInput): {
       divYield,
       ocfToNetIncomeRatio,
       grossProfitabilityToAssets,
-      accrualPenaltyScore
+      accrualPenaltyScore,
+      effectiveModule
     );
     return {
       dmuLowVolScore: 1.5,
@@ -944,6 +959,8 @@ export function computeDeMiguelFourFactors(item: RawStockInput): {
       ocfToNetIncomeRatio,
       accrualRatioToAssets,
       accrualPenaltyScore,
+      effectiveModule,
+      ocfHealthyThreshold,
       ...hscEval
     };
   }
@@ -974,7 +991,16 @@ export function computeDeMiguelFourFactors(item: RawStockInput): {
   const roaComp = Math.max(0, Math.min(10, (Math.min(24, unleveredRoa) / 14.5) * 9.4));
   const deComp = Math.max(1, Math.min(10, 10 - (item.debtToEquity / 2.1) * 8));
   const divBonus = divYield > 0 ? Math.min(1.35, divYield * 0.18) : 0;
-  const ocfQualityBonus = ocfToNetIncomeRatio >= 1.1 ? 0.35 : 0;
+  const ocfQualityBonus =
+    effectiveModule === 'Capex_Aggressor'
+      ? ocfToNetIncomeRatio >= 0.70
+        ? 0.35
+        : ocfToNetIncomeRatio > 0.50
+        ? 0.18
+        : 0
+      : ocfToNetIncomeRatio >= 1.1
+      ? 0.35
+      : 0;
 
   const rawValue =
     (0.50 * gpaComp + 0.25 * roaComp + 0.25 * deComp) * liveValuationMultiplier +
@@ -990,7 +1016,8 @@ export function computeDeMiguelFourFactors(item: RawStockInput): {
     divYield,
     ocfToNetIncomeRatio,
     grossProfitabilityToAssets,
-    accrualPenaltyScore
+    accrualPenaltyScore,
+    effectiveModule
   );
 
   // 4. Capital Efficiency & Institutional Liquidity Score (incorporating KSEI HSC free-float penalty)
@@ -1049,6 +1076,8 @@ export function computeDeMiguelFourFactors(item: RawStockInput): {
     ocfToNetIncomeRatio,
     accrualRatioToAssets,
     accrualPenaltyScore,
+    effectiveModule,
+    ocfHealthyThreshold,
     ...hscEval
   };
 }
@@ -1806,6 +1835,7 @@ function computeMultiStageResidualIncomeValue(params: {
   der: number;
   accrualPenaltyScore: number;
   hscDiscountMultiplier: number;
+  effectiveModule?: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical';
 }): {
   rimFairValueIdr: number;
   rimFadeYears: number;
@@ -1823,7 +1853,8 @@ function computeMultiStageResidualIncomeValue(params: {
     ocfToNi,
     der,
     accrualPenaltyScore,
-    hscDiscountMultiplier
+    hscDiscountMultiplier,
+    effectiveModule
   } = params;
 
   // Dynamic Sectoral Omega Fade Factor (KBMI 4 & Consumer Monopolies: 0.90-1.00; Commodities & Cyclicals: 0.40-0.60)
@@ -1832,14 +1863,19 @@ function computeMultiStageResidualIncomeValue(params: {
     sector,
     gpaPct,
     ocfToNi,
-    accrualPenaltyScore
+    accrualPenaltyScore,
+    effectiveModule
   });
   const rimFadeYears = sectorOmega.rimFadeYears;
   const rimPersistenceOmega = sectorOmega.rimPersistenceOmega;
   void der;
 
-  // Cash-adjusted sustainable starting ROE and terminal equilibrium ROE
-  const cashQualityAdj = Math.max(0.78, Math.min(1.08, 0.88 + ocfToNi * 0.12 - accrualPenaltyScore * 0.05));
+  // Context-aware cash-adjusted sustainable starting ROE and terminal equilibrium ROE:
+  // For Capex_Aggressor (Rule B), if OCF/NI > 0.50x, do not penalize starting ROE for heavy construction CapEx.
+  const cashQualityAdj =
+    effectiveModule === 'Capex_Aggressor' && ocfToNi > 0.50
+      ? Math.max(0.98, Math.min(1.08, 0.94 + ocfToNi * 0.14))
+      : Math.max(0.78, Math.min(1.08, 0.88 + ocfToNi * 0.12 - accrualPenaltyScore * 0.05));
   const startRoePct = Math.max(2.0, Math.min(34.0, roePct * cashQualityAdj));
   const rimTerminalRoePct = Number(
     Math.max(
@@ -2207,6 +2243,7 @@ function computeStatArbAndAgnosticPeerValuation(params: {
   forwardDividendYieldPct: number;
   sectorSpecificFairValueIdr: number;
   rimFairValueIdr: number;
+  effectiveModule?: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical';
 }): {
   agnosticPeerFairValueIdr: number;
   statArbPeerTicker: string;
@@ -2230,7 +2267,8 @@ function computeStatArbAndAgnosticPeerValuation(params: {
     grossProfitabilityToAssets,
     forwardDividendYieldPct,
     sectorSpecificFairValueIdr,
-    rimFairValueIdr
+    rimFairValueIdr,
+    effectiveModule
   } = params;
 
   const clean = stock.ticker.trim().toUpperCase().replace(/\.JK$/i, '');
@@ -2275,13 +2313,18 @@ function computeStatArbAndAgnosticPeerValuation(params: {
       ? 2.65
       : 1.45;
 
+  const effectiveOcfForPeer =
+    effectiveModule === 'Capex_Aggressor' && ocfToNetIncomeRatio > 0.50
+      ? Math.max(0.90, ocfToNetIncomeRatio)
+      : ocfToNetIncomeRatio;
+
   const qualityRelativeMultiplier = Math.max(
     0.72,
     Math.min(
       1.28,
       0.78 +
         (grossProfitabilityToAssets / 22.0) * 0.24 +
-        Math.min(0.18, ocfToNetIncomeRatio * 0.12) +
+        Math.min(0.18, effectiveOcfForPeer * 0.12) +
         (forwardDividendYieldPct >= 3.0 ? 0.08 : 0) -
         (stock.isHscFlagged ? 0.35 : 0)
     )
@@ -2352,10 +2395,14 @@ function computeStatArbAndAgnosticPeerValuation(params: {
     Math.max(-3.5, Math.min(3.5, 0.55 * z1D + 0.45 * z30D)).toFixed(2)
   );
 
+  // Context-aware healthy OCF/NI threshold for StatArb convergence:
+  // Rule B ('Capex_Aggressor'): > 0.50x; Rule A ('Compounder' | 'Pure_Cyclical'): > 0.80x
+  const minHealthyOcfForStatArb = effectiveModule === 'Capex_Aggressor' ? 0.50 : 0.80;
+
   // Mean-Reversion Target Price: If stock diverged negatively vs its high-correlation twin while fundamentals are intact,
   // calculate the cointegrated convergence price once the institutional flow shock mean-reverts.
   const expectedConvergencePct =
-    !stock.isHscFlagged && ocfToNetIncomeRatio >= 0.78
+    !stock.isHscFlagged && ocfToNetIncomeRatio > minHealthyOcfForStatArb
       ? Math.max(-8.0, Math.min(16.0, -statArbZScore * pairSpreadSigma30D * 0.65))
       : 0;
   const rawStatArbTarget =
@@ -2365,7 +2412,7 @@ function computeStatArbAndAgnosticPeerValuation(params: {
 
   const isCleanFundamental =
     !stock.isHscFlagged &&
-    ocfToNetIncomeRatio >= 0.80 &&
+    ocfToNetIncomeRatio > minHealthyOcfForStatArb &&
     grossProfitabilityToAssets >= 11.0 &&
     stock.roe >= 9.0;
 
@@ -2437,15 +2484,28 @@ export function evaluateJoeliardiOosFundamental(
   const forwardRoePct = corpIntercept.forwardAnnualizedRoePct;
   const roe = Math.max(0.5, forwardRoePct); // Forward ROE drives growth & forward valuation
 
+  const preRouteInfo = ValuationEngine.resolveRoute(stock);
+  const effectiveModule = preRouteInfo.applied_module;
+
   const gpAccrual = computeGrossProfitabilityAndAccruals(
     { ...stock, roe: forwardRoePct },
-    stock.dividendYieldPct ?? 0
+    stock.dividendYieldPct ?? 0,
+    effectiveModule
   );
   const grossProfitabilityToAssets =
     stock.grossProfitabilityToAssets ?? gpAccrual.grossProfitabilityToAssets;
   const ocfToNetIncomeRatio = stock.ocfToNetIncomeRatio ?? gpAccrual.ocfToNetIncomeRatio;
   const accrualRatioToAssets = stock.accrualRatioToAssets ?? gpAccrual.accrualRatioToAssets;
-  const accrualPenaltyScore = stock.accrualPenaltyScore ?? gpAccrual.accrualPenaltyScore;
+
+  // Contextual Anti-Junk (OCF/NI) Penalty Policy based on effectiveModule:
+  // Rule A ('Compounder' | 'Pure_Cyclical'): > 0.80x to 1.00x; Rule B ('Capex_Aggressor'): > 0.50x
+  const contextualOcfPolicy = resolveContextualOcfNiPolicy({
+    effectiveModule,
+    ocfToNetIncomeRatio,
+    accrualRatioToAssets,
+    roePct: forwardRoePct
+  });
+  const accrualPenaltyScore = contextualOcfPolicy.accrualPenaltyScore;
   const accrualPenaltyPts = Math.round(accrualPenaltyScore * 8.5); // 0 - 20 pts on 0-100 fundamental scale
 
   const baseSectorPbv =
@@ -2561,7 +2621,7 @@ export function evaluateJoeliardiOosFundamental(
       : forwardDividendYieldPct > 0 || corpIntercept.hasActiveBuyback
       ? 1.05
       : 0.9;
-  const accrualQualityMultiplier = Math.max(0.76, 1 - accrualPenaltyScore * 0.08);
+  const accrualQualityMultiplier = contextualOcfPolicy.accrualQualityMultiplier;
   const hscDiscountMultiplier = stock.isHscFlagged ? 0.55 : 1.0;
 
   const standaloneFairPbv = Number(
@@ -2604,13 +2664,14 @@ export function evaluateJoeliardiOosFundamental(
     ocfToNi: ocfToNetIncomeRatio,
     der,
     accrualPenaltyScore,
-    hscDiscountMultiplier: hscDiscountMultiplier * corpIntercept.catalystValuationMultiplier
+    hscDiscountMultiplier: hscDiscountMultiplier * corpIntercept.catalystValuationMultiplier,
+    effectiveModule
   });
   const { rimFairValueIdr, rimFadeYears, rimPersistenceOmega, rimTerminalRoePct } = rimResult;
 
   // METHOD 2: Modular ValuationEngine Router (Steady Compounder, Capex Aggressor, or Pure Cyclical)
   const routedValResult = ValuationEngine.calculateFairValue({
-    stock: { ...stock, roe },
+    stock: { ...stock, roe, accrualRatioToAssets },
     price,
     ttmEpsIdr: trailingEpsIdr,
     forwardEpsIdr: estimatedEpsIdr,
@@ -2696,7 +2757,8 @@ export function evaluateJoeliardiOosFundamental(
     grossProfitabilityToAssets,
     forwardDividendYieldPct: totalShareholderYieldPct,
     sectorSpecificFairValueIdr,
-    rimFairValueIdr
+    rimFairValueIdr,
+    effectiveModule
   });
   const {
     agnosticPeerFairValueIdr,
@@ -2724,13 +2786,13 @@ export function evaluateJoeliardiOosFundamental(
   });
 
   // DYNAMIC ENSEMBLE WEIGHTING MODULE (DynamicEnsembleWeighter):
-  // Adjusts weights by sector alignment (Financials 70% RIM / 10% P/CF / 20% RelVal;
-  // Cyclicals/Property 80% PBV Replacement / 0% RIM / 20% RelVal),
+  // Adjusts weights by sector alignment, Contextual Anti-Junk (OCF/NI) Rule A/B thresholds,
   // Data Confidence Triggers (OCF < 0 -> P/CF 0%; Peer ρ < 0.70 -> RelVal 0%),
   // and Outlier Penalty (> 40% deviation from median -> slash weight by 50%).
   const dynamicEnsemble = DynamicEnsembleWeighter.computeWeights({
     sector: stock.sector,
     route: valuationModuleRoute,
+    effectiveModule,
     sectorLabel: `Modul Sektor (${sectorPrimaryMetricShort})`,
     sectorPriceIdr: sectorSpecificFairValueIdr,
     rimLabel: `RIM ${rimFadeYears}Y (ω=${rimPersistenceOmega})`,
@@ -2746,12 +2808,13 @@ export function evaluateJoeliardiOosFundamental(
   const ensembleAgg = computeTypeSafeEnsembleFairValue(
     dynamicEnsemble.legs,
     1.0,
-    roundToIdxTick
+    roundToIdxTick,
+    dynamicEnsemble.ensembleAntiJunkMultiplier
   );
   const intrinsicValueIdr = ensembleAgg.intrinsicValueIdr;
   const ensembleFormulaAudit = ensembleAgg.ensembleFormulaAudit;
 
-  // Package final comprehensive ValuationReport object (including Capex Override ui_notifications)
+  // Package final comprehensive ValuationReport object (including Capex Override ui_notifications & Contextual OCF/NI metadata)
   const finalValuationReport = ValuationEngine.packageValuationReport({
     target_price: intrinsicValueIdr,
     route: valuationModuleRoute,
@@ -2761,7 +2824,9 @@ export function evaluateJoeliardiOosFundamental(
       relval: Number(dynamicEnsemble.legs[2].weight.toFixed(4))
     },
     graham_benchmark: grahamBenchmark.grahamJoeliardiBenchmarkIdr,
-    ui_notifications: routedUiNotifications
+    ui_notifications: routedUiNotifications,
+    ocf_healthy_threshold: dynamicEnsemble.ocfHealthyThreshold,
+    ensemble_anti_junk_multiplier: dynamicEnsemble.ensembleAntiJunkMultiplier
   });
 
   // Pegged Fair Multiples: Strictly synchronized with final Quantedge Ensemble Intrinsic Value
@@ -2921,13 +2986,21 @@ export function evaluateJoeliardiOosFundamental(
   const cyclicalDerPenaltyPts = isCyclicalDerPenalized ? 14 : 0;
   const derScore = Math.max(10, Math.min(48, 48 - der * 20 - cyclicalDerPenaltyPts));
   const ocfConversionBonus =
-    ocfToNetIncomeRatio >= 1.1
+    effectiveModule === 'Capex_Aggressor'
+      ? ocfToNetIncomeRatio >= 0.85
+        ? 22
+        : ocfToNetIncomeRatio > 0.50
+        ? 16
+        : ocfToNetIncomeRatio >= 0
+        ? 4
+        : -12
+      : ocfToNetIncomeRatio >= 1.0
       ? 22
-      : ocfToNetIncomeRatio >= 0.9
+      : ocfToNetIncomeRatio > 0.80
       ? 14
       : ocfToNetIncomeRatio >= 0
-      ? 4
-      : -12;
+      ? -4
+      : -16;
   const cashDivScore =
     totalShareholderYieldPct >= 5
       ? 22
@@ -3146,9 +3219,22 @@ export function evaluateJoeliardiOosFundamental(
       `Peringatan Relative Value (StatArb Z-Score +${statArbZScore}σ vs ${statArbPeerTicker}, β-Ratio ${statArbBetaRatio}x): Harga telah naik melampaui pasangan kointegrasinya (Spread 30D +${statArbSpread30DPct}%), waspadai potensi mean-reversion jangka pendek.`
     );
   }
+  if (effectiveModule === 'Capex_Aggressor' && ocfToNetIncomeRatio > 0.50) {
+    keyStrengths.push(
+      `Toleransi QMJ Kontekstual (Rule B Capex Aggressor): Konversi kas OCF/NI (${ocfToNetIncomeRatio.toFixed(2)}x > 0,50x) dinyatakan sehat untuk fase konstruksi/ekspansi kapasitas baru (CWIP ${(cwipToAssetsRatio * 100).toFixed(0)}%, Capex/D&A ${capexToDaRatio.toFixed(1)}x) — bebas penalti Junk pada Dynamic Ensemble.`
+    );
+  }
   if (accrualPenaltyScore > 0) {
+    const ruleTag =
+      effectiveModule === 'Capex_Aggressor'
+        ? `Rule B Capex Aggressor (OCF/NI ≤ 0,50x, Ensemble ×${dynamicEnsemble.ensembleAntiJunkMultiplier.toFixed(2)})`
+        : `Rule A Strict ${effectiveModule} (Ambang Sehat > 0,80x–1,00x${
+            dynamicEnsemble.ensembleAntiJunkMultiplier < 0.999
+              ? `, Penalti Ensemble ×${dynamicEnsemble.ensembleAntiJunkMultiplier.toFixed(2)}`
+              : ''
+          })`;
     keyRisks.push(
-      `Penalti Anti-Junk (QMJ Accrual -${accrualPenaltyScore.toFixed(2)} poin): Konversi OCF/Laba Bersih (${ocfToNetIncomeRatio.toFixed(2)}x, Akrual/Aset ${accrualRatioToAssets.toFixed(1)}%) mempercepat peluruhan ROE pada model Residual Income.`
+      `Penalti Anti-Junk [${ruleTag}] (QMJ Accrual -${accrualPenaltyScore.toFixed(2)} poin): Konversi OCF/Laba Bersih (${ocfToNetIncomeRatio.toFixed(2)}x, Akrual/Aset ${accrualRatioToAssets.toFixed(1)}%) mendiskon valuasi kaki & mempercepat peluruhan ROE pada model Residual Income.`
     );
   }
   if (roe < dynamicCostOfEquityPct) {
@@ -3214,6 +3300,9 @@ export function evaluateJoeliardiOosFundamental(
     ocfToNetIncomeRatio,
     accrualRatioToAssets,
     accrualPenaltyPts,
+    effectiveModule,
+    ocfHealthyThreshold: contextualOcfPolicy.ocfHealthyThreshold,
+    ensembleAntiJunkMultiplier: dynamicEnsemble.ensembleAntiJunkMultiplier,
     sbnSpot1YPct,
     sbnSpot5YPct,
     sbnSpot10YPct,

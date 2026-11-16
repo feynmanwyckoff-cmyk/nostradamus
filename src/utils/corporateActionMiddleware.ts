@@ -698,7 +698,8 @@ export function interceptCorporateActionAndAnnualize(params: {
 export function computeTypeSafeEnsembleFairValue(
   legs: readonly [EnsembleValuationLeg, EnsembleValuationLeg, EnsembleValuationLeg],
   hscDiscountMultiplier: number = 1.0,
-  tickRounder: (rawPrice: number) => number
+  tickRounder: (rawPrice: number) => number,
+  ensembleAntiJunkMultiplier: number = 1.0
 ): {
   rawWeightedSumIdr: number;
   intrinsicValueIdr: number;
@@ -712,7 +713,8 @@ export function computeTypeSafeEnsembleFairValue(
     0
   );
 
-  const discountedRaw = rawWeightedSumIdr * hscDiscountMultiplier;
+  const discountedRaw =
+    rawWeightedSumIdr * hscDiscountMultiplier * ensembleAntiJunkMultiplier;
   const intrinsicValueIdr = tickRounder(Math.max(50, discountedRaw));
 
   const formulaParts = legs
@@ -724,6 +726,10 @@ export function computeTypeSafeEnsembleFairValue(
         )}%)`
     );
   const ensembleFormulaAudit = `${formulaParts.join(' + ')}${
+    ensembleAntiJunkMultiplier < 0.999
+      ? ` × QMJ ${ensembleAntiJunkMultiplier.toFixed(2)}`
+      : ''
+  }${
     hscDiscountMultiplier < 0.999 ? ` × HSC ${hscDiscountMultiplier.toFixed(2)}` : ''
   } = Rp ${intrinsicValueIdr.toLocaleString('id-ID')}`;
 

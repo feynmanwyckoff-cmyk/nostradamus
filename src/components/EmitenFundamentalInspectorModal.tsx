@@ -540,7 +540,7 @@ export function EmitenFundamentalInspectorModal({
         activeStock.ocfToNetIncomeRatio ??
         0.92,
       der: activeStock.debtToEquity,
-      accrualPenaltyScore: activeStock.accrualPenaltyScore ?? 0,
+      accrualPenaltyScore: Number(((joeliardiEval.accrualPenaltyPts ?? 0) / 8.5).toFixed(2)),
       hscDiscountMultiplier: activeStock.isHscFlagged ? 0.65 : 1.0,
       catalystValuationMultiplier: boostMult,
       beta1Y: activeStock.beta1Y,
@@ -554,7 +554,12 @@ export function EmitenFundamentalInspectorModal({
       sectorSpecificFairValueIdr:
         joeliardiEval.sectorSpecificFairValueIdr ?? joeliardiEval.intrinsicValueIdr,
       agnosticPeerFairValueIdr:
-        joeliardiEval.agnosticPeerFairValueIdr ?? joeliardiEval.intrinsicValueIdr
+        joeliardiEval.agnosticPeerFairValueIdr ?? joeliardiEval.intrinsicValueIdr,
+      effectiveModule:
+        joeliardiEval.effectiveModule ??
+        joeliardiEval.valuationReport?.applied_module ??
+        'Compounder',
+      ensembleAntiJunkMultiplier: joeliardiEval.ensembleAntiJunkMultiplier ?? 1.0
     }).then((res) => {
       if (!cancelled) {
         setWorkerTelemetry(res);
@@ -1543,9 +1548,9 @@ export function EmitenFundamentalInspectorModal({
               <div className="flex items-center justify-between text-xs font-bold text-[#111315] mb-1">
                 <MetricTooltip
                   label="1. Gross Profit & Anti-Junk"
-                  title="Pilar 1: Gross Profitability to Assets (Novy-Marx 2013) & Anti-Junk QMJ (Asness 2019)"
-                  laymanExplanation="Mengganti ketergantungan pada Operating Margin dan ROE mentah dengan Gross Profitability to Assets (Laba Kotor ÷ Total Aset) yang kebal rekayasa akuntansi, ditambah pengurang skor bila arus kas operasi lebih rendah dari laba bersih."
-                  practicalGuide="GP/A ≥ 18% dengan OCF/NI ≥ 0,85x menandakan mesin pencetak kas riil berkualitas tinggi (Quality Minus Junk)."
+                  title="Pilar 1: Gross Profitability to Assets (Novy-Marx 2013) & Contextual Anti-Junk QMJ (Asness 2019)"
+                  laymanExplanation="Mengganti ketergantungan pada Operating Margin dan ROE mentah dengan Gross Profitability to Assets (Laba Kotor ÷ Total Aset) yang kebal rekayasa akuntansi, ditambah pengurang skor kontekstual berbasis modul rute (effective_module)."
+                  practicalGuide="Rule A (Compounder/Pure Cyclical): OCF/NI > 0,80x–1,00x. Rule B (Capex Aggressor): Toleransi OCF/NI > 0,50x bebas penalti karena ekspansi konstruksi aset baru."
                 />
                 <span className="font-mono text-[#0D5C46]">
                   {joeliardiEval.businessQualityScore}/100
@@ -1578,7 +1583,9 @@ export function EmitenFundamentalInspectorModal({
                   </strong>{' '}
                   {(joeliardiEval.accrualPenaltyPts ?? 0) > 0
                     ? `(Penalti -${joeliardiEval.accrualPenaltyPts} pts)`
-                    : '(Kas Riil Sehat)'}
+                    : (joeliardiEval.effectiveModule ?? joeliardiEval.valuationReport?.applied_module) === 'Capex_Aggressor'
+                    ? '(Lolos Rule B >0,50x)'
+                    : '(Kas Riil Sehat >0,80x)'}
                 </div>
                 <div>
                   {(joeliardiEval.netDebtPaydownYieldPct ?? 0) > 0 && activeStock.sector !== 'Financials'
@@ -2344,9 +2351,9 @@ export function EmitenFundamentalInspectorModal({
                       <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
                         <MetricTooltip
                           label="Anti-Junk (QMJ Accrual)"
-                          title="Quality Minus Junk (Asness, Frazzini & Pedersen 2019) — Selisih Laba Bersih vs Arus Kas Operasi"
-                          laymanExplanation="Mendeteksi emiten yang mencetak laba akuntansi tinggi tetapi arus kas operasi (OCF) riilnya rendah/negatif. Memberikan penalti pengurang skor kualitas secara proporsional tanpa memblokir otomatis."
-                          practicalGuide="OCF/NI ≥ 0,85x bebas penalti (0 pts); OCF/NI rendah dikenakan penalti pengurang skor kualitas agar terhindar dari value trap."
+                          title="Contextual Quality Minus Junk (Asness et al. 2019) — Ambang OCF/NI Kontekstual"
+                          laymanExplanation="Mendeteksi selisih laba akuntansi vs arus kas operasi (OCF/NI) secara kontekstual sesuai modul rute aktif (effective_module): ketat untuk Compounder/Pure Cyclical, dan toleran untuk Capex Aggressor."
+                          practicalGuide="Rule A (Compounder/Pure Cyclical): OCF/NI > 0,80x–1,00x bebas penalti. Rule B (Capex Aggressor): OCF/NI > 0,50x bebas penalti (0 pts)."
                         />
                       </div>
                       <div
@@ -2358,7 +2365,9 @@ export function EmitenFundamentalInspectorModal({
                         <span className="block text-[10px] font-normal text-neutral-500 mt-0.5 leading-snug">
                           {accrualPen > 0
                             ? `(Penalti Akrual -${accrualPen} pts)`
-                            : '(0 Penalti · Kas Riil Valid)'}
+                            : (joeliardiEval.effectiveModule ?? joeliardiEval.valuationReport?.applied_module) === 'Capex_Aggressor'
+                            ? '(0 Penalti · Rule B Capex >0,50x)'
+                            : '(0 Penalti · Rule A Kas >0,80x)'}
                         </span>
                       </div>
                     </div>

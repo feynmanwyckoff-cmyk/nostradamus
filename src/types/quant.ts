@@ -80,6 +80,8 @@ export interface StockMetrics {
   ocfToNetIncomeRatio?: number;        // Operating Cash Flow / Net Income (x)
   accrualRatioToAssets?: number;       // (Net Income - OCF) / Total Assets (%)
   accrualPenaltyScore?: number;        // Quality score deduction for high accruals / negative OCF
+  effectiveModule?: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical'; // Active routing module for contextual QMJ threshold
+  ocfHealthyThreshold?: number;        // Context-aware healthy OCF/NI threshold (>0.80x Rule A vs >0.50x Rule B)
   betaWeightedPropensity?: number;     // 1/Beta Risk-Parity Barbell propensity
   // 4-Factor Standardized Scores (1.0 - 10.0)
   dmuMomScore: number;     // Momentum (12-1) factor score (22% weight)
@@ -149,6 +151,9 @@ export type ValuationModuleRoute =
 export interface ValuationReport {
   target_price: number;
   applied_module: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical';
+  effective_module?: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical';
+  ocf_healthy_threshold?: number;
+  ensemble_anti_junk_multiplier?: number;
   dynamic_weights: { pcf: number; rim: number; relval: number };
   graham_benchmark: number;
   ui_notifications: string[]; // Array of warning strings to display on the dashboard
@@ -253,6 +258,9 @@ export interface JoeliardiOosEvaluation {
   ocfToNetIncomeRatio?: number;
   accrualRatioToAssets?: number;
   accrualPenaltyPts?: number;
+  effectiveModule?: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical';
+  ocfHealthyThreshold?: number;
+  ensembleAntiJunkMultiplier?: number;
   // Damodaran Justified PBV & Fabozzi SBN Multi-Tenor Spot Curve (1Y, 5Y, 10Y)
   sbnSpot1YPct?: number;
   sbnSpot5YPct?: number;

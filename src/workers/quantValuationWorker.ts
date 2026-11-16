@@ -28,6 +28,8 @@ export interface QuantWorkerInputPayload {
   isHscFlagged: boolean;
   sectorSpecificFairValueIdr: number;
   agnosticPeerFairValueIdr: number;
+  effectiveModule?: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical';
+  ensembleAntiJunkMultiplier?: number;
 }
 
 export interface QuantWorkerOutputPayload {
@@ -83,29 +85,49 @@ export function executeQuantRimAndStatArbKernel(
     peerCorrelation,
     isHscFlagged,
     sectorSpecificFairValueIdr,
-    agnosticPeerFairValueIdr
+    agnosticPeerFairValueIdr,
+    effectiveModule = 'Compounder',
+    ensembleAntiJunkMultiplier = 1.0
   } = payload;
 
+  const isCapexTolerant = effectiveModule === 'Capex_Aggressor';
+  const minHealthyOcf = isCapexTolerant ? 0.50 : 0.80;
+
   // 1. Multi-Stage Residual Income Model (Ohlson 1995; Gebhardt, Lee & Swaminathan 2001)
-  // Driven by Forward Annualized ROE (latest quarterly run-rate)
+  // Driven by Forward Annualized ROE (latest quarterly run-rate) & Contextual OCF/NI Rule A/B
   const rimFadeYears =
-    gpaPct >= 19.0 && ocfToNi >= 0.96 && der <= 0.95
+    gpaPct >= 19.0 && ocfToNi >= (isCapexTolerant ? 0.75 : 0.96) && der <= 0.95
       ? 7
-      : gpaPct >= 13.5 && ocfToNi >= 0.84
+      : gpaPct >= 13.5 && ocfToNi > minHealthyOcf
       ? 6
       : 5;
+
+  const ocfOmegaContribution = isCapexTolerant
+    ? ocfToNi >= 0.85
+      ? 0.08
+      : ocfToNi > 0.50
+      ? 0.04
+      : -0.05
+    : ocfToNi >= 1.0
+    ? 0.08
+    : ocfToNi > 0.80
+    ? 0.03
+    : -0.06;
 
   const rawOmega =
     0.62 +
     Math.min(0.16, (gpaPct / 30.0) * 0.14) +
-    (ocfToNi >= 1.0 ? 0.08 : ocfToNi >= 0.85 ? 0.03 : -0.06) -
+    ocfOmegaContribution -
     Math.min(0.14, accrualPenaltyScore * 0.06);
   const rimPersistenceOmega = Number(Math.max(0.56, Math.min(0.88, rawOmega)).toFixed(2));
 
-  const cashQualityAdj = Math.max(
-    0.78,
-    Math.min(1.08, 0.88 + ocfToNi * 0.12 - accrualPenaltyScore * 0.05)
-  );
+  const cashQualityAdj =
+    isCapexTolerant && ocfToNi > 0.50
+      ? Math.max(0.98, Math.min(1.08, 0.94 + ocfToNi * 0.14))
+      : Math.max(
+          0.78,
+          Math.min(1.08, 0.88 + ocfToNi * 0.12 - accrualPenaltyScore * 0.05)
+        );
   const startRoePct = Math.max(2.0, Math.min(36.0, forwardRoePct * cashQualityAdj));
   const rimTerminalRoePct = Number(
     Math.max(
@@ -162,7 +184,7 @@ export function executeQuantRimAndStatArbKernel(
   const statArbZScore = Number(Math.max(-3.5, Math.min(3.5, 0.55 * z1D + 0.45 * z30D)).toFixed(2));
 
   const expectedConvergencePct =
-    !isHscFlagged && ocfToNi >= 0.78
+    !isHscFlagged && ocfToNi > minHealthyOcf
       ? Math.max(-8.0, Math.min(16.0, -statArbZScore * pairSpreadSigma30D * 0.65))
       : 0;
   const rawStatArbTarget =
@@ -178,9 +200,11 @@ export function executeQuantRimAndStatArbKernel(
 
   const rawEnsemble = legs.reduce((sum, leg) => sum + leg.priceIdr * leg.weight, 0);
   const ensembleFairValueIdr = roundToIdxTickWorker(
-    Math.max(50, rawEnsemble * hscDiscountMultiplier)
+    Math.max(50, rawEnsemble * hscDiscountMultiplier * ensembleAntiJunkMultiplier)
   );
-  const ensembleFormulaAudit = `(Rp ${sectorSpecificFairValueIdr.toLocaleString('id-ID')} × 45%) + (Rp ${rimFairValueIdr.toLocaleString('id-ID')} × 35%) + (Rp ${statArbImpliedTargetIdr.toLocaleString('id-ID')} × 20%) = Rp ${ensembleFairValueIdr.toLocaleString('id-ID')}`;
+  const ensembleFormulaAudit = `(Rp ${sectorSpecificFairValueIdr.toLocaleString('id-ID')} × 45%) + (Rp ${rimFairValueIdr.toLocaleString('id-ID')} × 35%) + (Rp ${statArbImpliedTargetIdr.toLocaleString('id-ID')} × 20%)${
+    ensembleAntiJunkMultiplier < 0.999 ? ` × QMJ ${ensembleAntiJunkMultiplier.toFixed(2)}` : ''
+  } = Rp ${ensembleFairValueIdr.toLocaleString('id-ID')}`;
 
   const t1 = typeof performance !== 'undefined' ? performance.now() : Date.now();
 

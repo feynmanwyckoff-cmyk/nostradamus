@@ -212,6 +212,134 @@ export function annualizeQuarterlyEarnings(params: {
   };
 }
 
+export interface ContextualOcfNiPolicyResult {
+  effective_module: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical';
+  ocfHealthyThreshold: number;
+  isPassingOcfThreshold: boolean;
+  accrualPenaltyScore: number;
+  accrualQualityMultiplier: number;
+  ensembleAntiJunkMultiplier: number;
+  policyRuleLabel: string;
+}
+
+/**
+ * 6. CONTEXTUAL ANTI-JUNK (OCF/NI) PENALTY ADJUSTMENT
+ * Context-aware Quality-Minus-Junk (QMJ) accrual penalty based on active routing module (`effective_module`):
+ * - Rule A (Strict): If `effective_module` === 'Compounder' OR 'Pure_Cyclical', strictly maintain the
+ *   healthy OCF/NI threshold at > 0.8x to 1.0x. If they fail (<= 0.80x), apply a heavy graduated valuation
+ *   penalty to both the valuation legs and the Dynamic Ensemble target price.
+ * - Rule B (Tolerant): If `effective_module` === 'Capex_Aggressor', lower the healthy OCF/NI threshold to > 0.5x
+ *   (zero penalty above 0.5x, penalize only at or below 0.5x), because heavy construction phases naturally have
+ *   earnings that have not yet fully converted to operational free cash flow.
+ */
+export function resolveContextualOcfNiPolicy(params: {
+  effectiveModule: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical';
+  ocfToNetIncomeRatio: number;
+  accrualRatioToAssets?: number;
+  roePct?: number;
+}): ContextualOcfNiPolicyResult {
+  const {
+    effectiveModule,
+    ocfToNetIncomeRatio,
+    accrualRatioToAssets = 0,
+    roePct = 15
+  } = params;
+
+  // Rule B (Tolerant): Capex_Aggressor -> healthy OCF/NI threshold > 0.50x (zero penalty above 0.50x)
+  if (effectiveModule === 'Capex_Aggressor') {
+    const ocfHealthyThreshold = 0.50;
+    if (ocfToNetIncomeRatio > ocfHealthyThreshold) {
+      return {
+        effective_module: 'Capex_Aggressor',
+        ocfHealthyThreshold,
+        isPassingOcfThreshold: true,
+        accrualPenaltyScore: 0,
+        accrualQualityMultiplier: 1.0,
+        ensembleAntiJunkMultiplier: 1.0,
+        policyRuleLabel: `Rule B Toleran (Capex Aggressor): OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x > 0,50x (0 Penalti Junk)`
+      };
+    }
+
+    // Penalize only when OCF/NI <= 0.50x for Capex_Aggressor
+    let accrualPenaltyScore = 0;
+    if (roePct > 0 && ocfToNetIncomeRatio < 0) {
+      accrualPenaltyScore = Math.min(2.4, 1.35 + Math.abs(ocfToNetIncomeRatio) * 0.85);
+    } else {
+      const shortfallPenalty = Math.max(0.15, (0.50 - ocfToNetIncomeRatio) * 2.4);
+      const accrualExcessPenalty = Math.max(0, (accrualRatioToAssets - 2.5) * 0.14);
+      accrualPenaltyScore = Math.min(2.1, shortfallPenalty + accrualExcessPenalty);
+    }
+    accrualPenaltyScore = Number(accrualPenaltyScore.toFixed(2));
+    const accrualQualityMultiplier = Number(
+      Math.max(0.76, 1 - accrualPenaltyScore * 0.08).toFixed(4)
+    );
+    const ensembleAntiJunkMultiplier = Number(
+      Math.max(0.80, Math.min(0.94, 0.94 - (0.50 - Math.max(-0.4, ocfToNetIncomeRatio)) * 0.16)).toFixed(4)
+    );
+
+    return {
+      effective_module: 'Capex_Aggressor',
+      ocfHealthyThreshold,
+      isPassingOcfThreshold: false,
+      accrualPenaltyScore,
+      accrualQualityMultiplier,
+      ensembleAntiJunkMultiplier,
+      policyRuleLabel: `Rule B Capex Aggressor Gagal: OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x ≤ 0,50x (Penalti Ensemble ×${ensembleAntiJunkMultiplier.toFixed(2)})`
+    };
+  }
+
+  // Rule A (Strict): Compounder OR Pure_Cyclical -> healthy OCF/NI threshold > 0.80x to 1.00x
+  const ocfHealthyThreshold = 0.80;
+  if (ocfToNetIncomeRatio > ocfHealthyThreshold) {
+    // Within > 0.80x to 1.00x+ healthy band: zero Ensemble haircut; zero accrual penalty at >= 0.88x
+    let accrualPenaltyScore = 0;
+    if (ocfToNetIncomeRatio < 0.88 || accrualRatioToAssets > 1.8) {
+      const mildShortfall = Math.max(0, (0.88 - ocfToNetIncomeRatio) * 1.5);
+      const mildAccrual = Math.max(0, (accrualRatioToAssets - 1.8) * 0.12);
+      accrualPenaltyScore = Number(Math.min(0.35, mildShortfall + mildAccrual).toFixed(2));
+    }
+    const accrualQualityMultiplier = Number(
+      Math.max(0.96, 1 - accrualPenaltyScore * 0.06).toFixed(4)
+    );
+    return {
+      effective_module: effectiveModule,
+      ocfHealthyThreshold,
+      isPassingOcfThreshold: true,
+      accrualPenaltyScore,
+      accrualQualityMultiplier,
+      ensembleAntiJunkMultiplier: 1.0,
+      policyRuleLabel: `Rule A Ketat (${effectiveModule}): OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x > 0,80x (Lolos Ambang Kas 0,8x–1,0x)`
+    };
+  }
+
+  // Fails Rule A (OCF/NI <= 0.80x): Apply heavy graduated valuation penalty to both legs and Ensemble target price
+  let accrualPenaltyScore = 0;
+  if (roePct > 0 && ocfToNetIncomeRatio < 0) {
+    accrualPenaltyScore = Math.min(2.4, 1.55 + Math.abs(ocfToNetIncomeRatio) * 0.85);
+  } else {
+    const shortfallPenalty = Math.max(0.35, (0.88 - ocfToNetIncomeRatio) * 2.35);
+    const accrualExcessPenalty = Math.max(0, (accrualRatioToAssets - 1.5) * 0.18);
+    accrualPenaltyScore = Math.min(2.2, shortfallPenalty + accrualExcessPenalty);
+  }
+  accrualPenaltyScore = Number(accrualPenaltyScore.toFixed(2));
+  const accrualQualityMultiplier = Number(
+    Math.max(0.74, 1 - accrualPenaltyScore * 0.09).toFixed(4)
+  );
+  const ensembleAntiJunkMultiplier = Number(
+    Math.max(0.78, Math.min(0.92, 0.92 - (0.80 - Math.max(-0.4, ocfToNetIncomeRatio)) * 0.15)).toFixed(4)
+  );
+
+  return {
+    effective_module: effectiveModule,
+    ocfHealthyThreshold,
+    isPassingOcfThreshold: false,
+    accrualPenaltyScore,
+    accrualQualityMultiplier,
+    ensembleAntiJunkMultiplier,
+    policyRuleLabel: `Rule A Ketat (${effectiveModule}) Gagal: OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x ≤ 0,80x (Penalti Berat Valuasi Ensemble ×${ensembleAntiJunkMultiplier.toFixed(2)})`
+  };
+}
+
 /**
  * 2. FAKTOR PELEMAHAN RIM YANG ELASTIS (Dynamic ω Fade Factor)
  * Sectoral Dictionary / Switch-Case in TypeScript:
@@ -225,17 +353,37 @@ export function resolveSectorOmegaFadeFactor(params: {
   gpaPct: number;
   ocfToNi: number;
   accrualPenaltyScore: number;
+  effectiveModule?: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical';
 }): {
   rimPersistenceOmega: number;
   rimFadeYears: number;
   omegaTierLabel: string;
 } {
-  const { ticker, sector, gpaPct, ocfToNi, accrualPenaltyScore } = params;
+  const { ticker, sector, gpaPct, ocfToNi, accrualPenaltyScore, effectiveModule } = params;
   const clean = ticker.trim().toUpperCase().replace(/\.JK$/i, '');
+
+  const isCapexTolerant =
+    effectiveModule === 'Capex_Aggressor' ||
+    (!effectiveModule &&
+      (sector === 'Healthcare' ||
+        sector === 'Infrastructures' ||
+        METALS_HILIRISASI_TICKERS.has(clean)));
+
+  const ocfOmegaAdj = isCapexTolerant
+    ? ocfToNi >= 0.85
+      ? 0.03
+      : ocfToNi > 0.50
+      ? 0.01
+      : -0.03
+    : ocfToNi >= 1.0
+    ? 0.03
+    : ocfToNi > 0.80
+    ? 0.01
+    : -0.03;
 
   const qualityDelta =
     Math.min(0.06, (gpaPct / 30.0) * 0.05) +
-    (ocfToNi >= 1.0 ? 0.03 : ocfToNi >= 0.85 ? 0.01 : -0.02) -
+    ocfOmegaAdj -
     Math.min(0.05, accrualPenaltyScore * 0.025);
 
   // Case 1: KBMI 4 Banks & Consumer Monopolies -> ω in [0.90, 0.98]
@@ -253,11 +401,12 @@ export function resolveSectorOmegaFadeFactor(params: {
 
   // Case 2: Commodities & Cyclicals (Coal, Oil & Gas, CPO, Basic Materials, Property, Consumer Cyclicals) -> ω in [0.40, 0.60]
   if (
-    sector === 'Energy' ||
-    CPO_AGRI_TICKERS.has(clean) ||
-    (sector === 'Basic Materials' && !METALS_HILIRISASI_TICKERS.has(clean)) ||
-    sector === 'Properties & Real Estate' ||
-    sector === 'Consumer Cyclicals'
+    !isCapexTolerant &&
+    (sector === 'Energy' ||
+      CPO_AGRI_TICKERS.has(clean) ||
+      (sector === 'Basic Materials' && !METALS_HILIRISASI_TICKERS.has(clean)) ||
+      sector === 'Properties & Real Estate' ||
+      sector === 'Consumer Cyclicals')
   ) {
     const omega = Number(Math.max(0.40, Math.min(0.60, 0.48 + qualityDelta)).toFixed(2));
     return {
@@ -280,7 +429,8 @@ export function resolveSectorOmegaFadeFactor(params: {
     }
     case 'Infrastructures':
     case 'Technology':
-    case 'Basic Materials': {
+    case 'Basic Materials':
+    case 'Energy': {
       const omega = Number(Math.max(0.68, Math.min(0.84, 0.74 + qualityDelta)).toFixed(2));
       return {
         rimPersistenceOmega: omega,
@@ -461,6 +611,8 @@ export const ValuationEngine = {
     dynamic_weights: { pcf: number; rim: number; relval: number };
     graham_benchmark: number;
     ui_notifications: string[];
+    ocf_healthy_threshold?: number;
+    ensemble_anti_junk_multiplier?: number;
   }): ValuationReport {
     const applied_module: ValuationReport['applied_module'] =
       params.route === 'CAPEX_AGGRESSOR'
@@ -471,6 +623,10 @@ export const ValuationEngine = {
     return {
       target_price: params.target_price,
       applied_module,
+      effective_module: applied_module,
+      ocf_healthy_threshold:
+        params.ocf_healthy_threshold ?? (applied_module === 'Capex_Aggressor' ? 0.50 : 0.80),
+      ensemble_anti_junk_multiplier: params.ensemble_anti_junk_multiplier ?? 1.0,
       dynamic_weights: params.dynamic_weights,
       graham_benchmark: params.graham_benchmark,
       ui_notifications: [...params.ui_notifications]
@@ -512,7 +668,7 @@ export const ValuationEngine = {
       dynamicCostOfEquityPct,
       baseGrowthRatePct,
       derPenaltyMultiplier,
-      accrualQualityMultiplier,
+      accrualQualityMultiplier: rawAccrualQualityMultiplier,
       hscDiscountMultiplier,
       catalystValuationMultiplier,
       rimFairValueIdr,
@@ -533,6 +689,18 @@ export const ValuationEngine = {
       isCapexOverrideTriggered,
       ui_notifications
     } = ValuationEngine.resolveRoute(stock);
+
+    // Contextual Anti-Junk (OCF/NI) Penalty Policy based on effective_module (`applied_module`)
+    const contextualOcfPolicy = resolveContextualOcfNiPolicy({
+      effectiveModule: applied_module,
+      ocfToNetIncomeRatio,
+      accrualRatioToAssets: stock.accrualRatioToAssets ?? 0,
+      roePct: forwardRoePct
+    });
+    const accrualQualityMultiplier =
+      applied_module === 'Capex_Aggressor' && ocfToNetIncomeRatio > 0.50
+        ? 1.0
+        : Math.min(rawAccrualQualityMultiplier, contextualOcfPolicy.accrualQualityMultiplier);
 
     const buildDefaultReport = (
       targetPriceIdr: number,
@@ -559,6 +727,9 @@ export const ValuationEngine = {
       return {
         target_price: targetPriceIdr,
         applied_module,
+        effective_module: applied_module,
+        ocf_healthy_threshold: contextualOcfPolicy.ocfHealthyThreshold,
+        ensemble_anti_junk_multiplier: contextualOcfPolicy.ensembleAntiJunkMultiplier,
         dynamic_weights: defaultWeights,
         graham_benchmark: gj.grahamJoeliardiBenchmarkIdr,
         ui_notifications: [...ui_notifications]
@@ -784,7 +955,7 @@ export const ValuationEngine = {
         sectorPrimaryPerShareIdr: effectiveForwardEpsIdr,
         sectorPrimaryPerShareLabel: 'Forward EPS',
         sectorSpecificFairValueIdr: blendedCapexFairValueIdr,
-        sectorAcademicRationale: `[Modul 2: Capex Aggressor / Step-Function Growth] Memotong bias TTM karena ekspansi aset produktif (Capex/D&A ${capexToDaRatio.toFixed(2)}x, CWIP/Assets ${(cwipToAssetsRatio * 100).toFixed(0)}%). Menggunakan Forward EPS Rp ${effectiveForwardEpsIdr.toLocaleString('id-ID')}/shm, Normalized Forward ROE ${normalizedForwardRoePct.toFixed(1)}% (dipagari ≤30%), dan g_adj ${gAdjPct.toFixed(2)}% (base_g + 2% Capex Premium). Menggabungkan 50% Leg 1 Residual Income (Justified PBV ${capexJustifiedPbv}x → Rp ${Math.round(leg1ResidualIncomePriceIdr).toLocaleString('id-ID')}) + 50% Leg 2 Earnings Power (Target PE ${targetSectorPe}x → Rp ${Math.round(leg2EarningsPowerPriceIdr).toLocaleString('id-ID')}) = Rp ${blendedCapexFairValueIdr.toLocaleString('id-ID')}.`,
+        sectorAcademicRationale: `[Modul 2: Capex Aggressor / Step-Function Growth] Memotong bias TTM karena ekspansi aset produktif (Capex/D&A ${capexToDaRatio.toFixed(2)}x, CWIP/Assets ${(cwipToAssetsRatio * 100).toFixed(0)}%). Menggunakan Forward EPS Rp ${effectiveForwardEpsIdr.toLocaleString('id-ID')}/shm, Normalized Forward ROE ${normalizedForwardRoePct.toFixed(1)}% (dipagari ≤30%), dan g_adj ${gAdjPct.toFixed(2)}% (base_g + 2% Capex Premium). Menggabungkan 50% Leg 1 Residual Income (Justified PBV ${capexJustifiedPbv}x → Rp ${Math.round(leg1ResidualIncomePriceIdr).toLocaleString('id-ID')}) + 50% Leg 2 Earnings Power (Target PE ${targetSectorPe}x → Rp ${Math.round(leg2EarningsPowerPriceIdr).toLocaleString('id-ID')}) = Rp ${blendedCapexFairValueIdr.toLocaleString('id-ID')} [${contextualOcfPolicy.policyRuleLabel}].`,
         cwipToAssetsRatio,
         capexToDaRatio,
         capexToRevenueRatio,
@@ -910,16 +1081,25 @@ export interface DynamicEnsembleWeightingResult {
   ensembleFormulaAudit: string;
   outlierPenalizedLeg?: string;
   confidenceNotes: string[];
+  effectiveModule: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical';
+  ocfHealthyThreshold: number;
+  ensembleAntiJunkMultiplier: number;
 }
 
 /**
  * 4. DYNAMIC ENSEMBLE WEIGHTING MODULE (DynamicEnsembleWeighter)
- * Replaces static 45/35/20 weights with sector-aligned, confidence-triggered, and outlier-penalized weights:
+ * Replaces static 45/35/20 weights with sector-aligned, confidence-triggered, outlier-penalized,
+ * and Contextual Anti-Junk (OCF/NI) adjusted weights:
  * - Sector Alignment:
  *   * Financials: 70% RIM / Justified PBV, 10% Sector/P/CF, 20% RelVal.
  *   * Properties & Pure Cyclicals: 80% PBV Replacement / Cyclical Normalized Book, 0% RIM (disabled), 20% RelVal (per user confirmation).
  *   * Healthcare & Consumer Non-Cyclicals: 55% Quality P/E & Cash Return, 30% RIM, 15% RelVal.
  *   * Capex Aggressors / Others: 45% Sector Blended, 35% RIM, 20% RelVal.
+ * - Contextual Anti-Junk (OCF/NI) Penalty Adjustment:
+ *   * Rule A (Strict): If `effective_module` === 'Compounder' OR 'Pure_Cyclical', maintain healthy OCF/NI threshold at > 0.8x to 1.0x.
+ *     If they fail (<= 0.80x), apply the heavy valuation penalty (`ensembleAntiJunkMultiplier`) to the ensemble.
+ *   * Rule B (Tolerant): If `effective_module` === 'Capex_Aggressor', lower healthy OCF/NI threshold to > 0.5x
+ *     (zero penalty above 0.5x so heavy construction phases are not flagged as Junk).
  * - Data Confidence Trigger:
  *   * If OCF < 0 (ocfToNetIncomeRatio <= 0), force P/CF / Sector cashflow weight to 0%.
  *   * If RelVal Peer correlation (ρ) < 0.70, force RelVal weight to 0%.
@@ -931,6 +1111,7 @@ export const DynamicEnsembleWeighter = {
   computeWeights(params: {
     sector: string;
     route: ValuationModuleRoute;
+    effectiveModule?: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical';
     sectorLabel: string;
     sectorPriceIdr: number;
     rimLabel: string;
@@ -945,6 +1126,7 @@ export const DynamicEnsembleWeighter = {
     const {
       sector,
       route,
+      effectiveModule: explicitModule,
       sectorLabel,
       sectorPriceIdr,
       rimLabel,
@@ -956,6 +1138,19 @@ export const DynamicEnsembleWeighter = {
       hscDiscountMultiplier = 1.0,
       tickRounder
     } = params;
+
+    const effectiveModule: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical' =
+      explicitModule ??
+      (route === 'CAPEX_AGGRESSOR'
+        ? 'Capex_Aggressor'
+        : route === 'PURE_CYCLICAL'
+        ? 'Pure_Cyclical'
+        : 'Compounder');
+
+    const ocfPolicy = resolveContextualOcfNiPolicy({
+      effectiveModule,
+      ocfToNetIncomeRatio
+    });
 
     const confidenceNotes: string[] = [];
 
@@ -976,15 +1171,21 @@ export const DynamicEnsembleWeighter = {
       wRim = 0.00;
       wRelVal = 0.20;
       confidenceNotes.push('Sektor Siklikal/Properti: 80% PBV Replacement · 0% RIM (Dimatikan) · 20% RelVal');
-    } else if (sector === 'Healthcare' || sector === 'Consumer Non-Cyclicals') {
-      // Maximize Quality-Adjusted P/E & Cash Return
+    } else if (
+      (sector === 'Healthcare' || sector === 'Consumer Non-Cyclicals') &&
+      effectiveModule !== 'Capex_Aggressor'
+    ) {
+      // Maximize Quality-Adjusted P/E & Cash Return for Steady Compounders
       wSector = 0.55;
       wRim = 0.30;
       wRelVal = 0.15;
       confidenceNotes.push('Sektor Kesehatan/Konsumen: 55% Quality P/E & Cash Return · 30% RIM · 15% RelVal');
     } else {
-      confidenceNotes.push('Capex Aggressor / Umum: 45% Blended Sektor · 35% RIM · 20% RelVal');
+      confidenceNotes.push('Capex Aggressor / Step-Function: 45% Blended Sektor · 35% RIM · 20% RelVal');
     }
+
+    // Record Contextual Anti-Junk (OCF/NI) Rule A / Rule B status
+    confidenceNotes.push(ocfPolicy.policyRuleLabel);
 
     const baseSectorWeight = wSector;
     const baseRimWeight = wRim;
@@ -1084,8 +1285,14 @@ export const DynamicEnsembleWeighter = {
       }
     ];
 
+    const ensembleAntiJunkMultiplier = ocfPolicy.ensembleAntiJunkMultiplier;
+    const combinedDiscountMultiplier = Number(
+      (hscDiscountMultiplier * ensembleAntiJunkMultiplier).toFixed(4)
+    );
     const rawWeightedSumIdr = legs.reduce((acc, leg) => acc + leg.priceIdr * leg.weight, 0);
-    const intrinsicValueIdr = tickRounder(Math.max(50, rawWeightedSumIdr * hscDiscountMultiplier));
+    const intrinsicValueIdr = tickRounder(
+      Math.max(50, rawWeightedSumIdr * combinedDiscountMultiplier)
+    );
 
     const activeFormulaParts = legs
       .filter((leg) => leg.weight > 0.001)
@@ -1094,6 +1301,10 @@ export const DynamicEnsembleWeighter = {
           `(Rp ${leg.priceIdr.toLocaleString('id-ID')} × ${Math.round(leg.weight * 100)}%)`
       );
     const ensembleFormulaAudit = `${activeFormulaParts.join(' + ')}${
+      ensembleAntiJunkMultiplier < 0.999
+        ? ` × QMJ ${ensembleAntiJunkMultiplier.toFixed(2)}`
+        : ''
+    }${
       hscDiscountMultiplier < 0.999 ? ` × HSC ${hscDiscountMultiplier.toFixed(2)}` : ''
     } = Rp ${intrinsicValueIdr.toLocaleString('id-ID')}`;
 
@@ -1103,7 +1314,10 @@ export const DynamicEnsembleWeighter = {
       intrinsicValueIdr,
       ensembleFormulaAudit,
       outlierPenalizedLeg,
-      confidenceNotes
+      confidenceNotes,
+      effectiveModule,
+      ocfHealthyThreshold: ocfPolicy.ocfHealthyThreshold,
+      ensembleAntiJunkMultiplier
     };
   }
 };

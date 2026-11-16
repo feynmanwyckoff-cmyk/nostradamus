@@ -1756,7 +1756,11 @@ export function ScreeningTable({
                           )}
                           {accrualPen > 0.3 && (
                             <span
-                              title={`Penalti Akrual Anti-Junk (QMJ Asness 2019): -${accrualPen.toFixed(2)} poin pada Skor Kualitas karena rasio OCF/NI (${(stock.ocfToNetIncomeRatio ?? 0.7).toFixed(2)}x) menunjukkan akrual tinggi`}
+                              title={`Penalti Akrual Anti-Junk Kontekstual (${
+                                stock.effectiveModule === 'Capex_Aggressor'
+                                  ? 'Rule B Capex Aggressor ≤ 0,50x'
+                                  : `Rule A ${stock.effectiveModule || 'Strict'} ≤ 0,80x`
+                              }): -${accrualPen.toFixed(2)} poin pada Skor Kualitas karena rasio OCF/NI (${(stock.ocfToNetIncomeRatio ?? 0.7).toFixed(2)}x) di bawah ambang sehat >${(stock.ocfHealthyThreshold ?? 0.8).toFixed(2)}x`}
                               className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-bold text-[#D97706] bg-[#F59E0B]/10 border border-[#F59E0B]/35 rounded-xs whitespace-nowrap"
                             >
                               QMJ -{accrualPen.toFixed(1)}
