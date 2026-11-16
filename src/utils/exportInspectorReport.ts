@@ -204,7 +204,7 @@ function drawTextAutoFit(
     fontSize = Number((fontSize - 0.25).toFixed(2));
     ctx.font = `${weight} ${fontSize}px ${fontFamily}`;
   }
-  ctx.fillText(text, x, y);
+  ctx.fillText(text, x, y, Math.max(10, maxWidth));
 }
 
 function getExportNewsCategoryStyle(cat?: EmitenNewsCategory): {
@@ -496,6 +496,62 @@ function wrapCanvasText(
   return lines.length > 0 ? lines : [''];
 }
 
+/**
+ * Wraps text into at most `maxLines` lines within `maxWidth`, automatically stepping down
+ * font size from `initialFontSize` to `minFontSize` if needed so long formulas/titles fit
+ * cleanly on 2-3 lines inside a card without overflowing or colliding.
+ */
+function drawWrappedTextBlock(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  maxWidth: number,
+  maxLines: number,
+  lineHeight: number,
+  weight: number | string,
+  initialFontSize: number,
+  minFontSize = 7.2,
+  fontFamily = 'Montserrat, sans-serif'
+): number {
+  const safeMaxW = Math.max(20, maxWidth);
+  let fontSize = initialFontSize;
+  ctx.font = `${weight} ${fontSize}px ${fontFamily}`;
+  let wrapped = wrapCanvasText(ctx, text, safeMaxW);
+
+  while (wrapped.length > maxLines && fontSize > minFontSize) {
+    fontSize = Number((fontSize - 0.25).toFixed(2));
+    ctx.font = `${weight} ${fontSize}px ${fontFamily}`;
+    wrapped = wrapCanvasText(ctx, text, safeMaxW);
+  }
+
+  let linesToDraw: string[];
+  if (wrapped.length <= maxLines) {
+    linesToDraw = wrapped;
+  } else {
+    linesToDraw = wrapped.slice(0, maxLines - 1);
+    const tailCombined = wrapped.slice(maxLines - 1).join(' ');
+    linesToDraw.push(tailCombined);
+  }
+
+  linesToDraw.forEach((lineStr, idx) => {
+    const lineY = y + idx * lineHeight;
+    drawTextAutoFit(
+      ctx,
+      lineStr,
+      x,
+      lineY,
+      safeMaxW,
+      weight,
+      fontSize,
+      Math.max(6.2, minFontSize - 0.8),
+      fontFamily
+    );
+  });
+
+  return linesToDraw.length;
+}
+
 function drawRoundedRect(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -731,7 +787,20 @@ export function renderInspectorReportCanvas(
     (m) => Boolean(m.isStandaloneBenchmark)
   );
   const hasStandaloneFloorBar = Boolean(standaloneFloorMethod);
-  const standaloneFloorBarH = hasStandaloneFloorBar ? 78 : 0;
+  const standaloneFloorBarH = hasStandaloneFloorBar ? 96 : 0;
+
+  const uiNotificationList =
+    joeliardiEval.valuationReport?.ui_notifications ?? joeliardiEval.uiNotifications ?? [];
+  sCtx.font = '600 9.5px "Fira Code", monospace';
+  const preparedUiNotifications = uiNotificationList.map((msg) => {
+    const wrappedLines = wrapCanvasText(sCtx, msg, LOGICAL_WIDTH - 76 - 142);
+    const boxH = Math.max(34, 14 + wrappedLines.length * 14);
+    return { msg, wrappedLines, boxH };
+  });
+  const uiNotificationsTotalH =
+    preparedUiNotifications.length > 0
+      ? preparedUiNotifications.reduce((acc, item) => acc + item.boxH + 6, 0) + 2
+      : 0;
 
   const statArbBoxW = Math.round((LOGICAL_WIDTH - 76 - 14) * 0.58);
   const secRatBoxW = LOGICAL_WIDTH - 76 - 14 - statArbBoxW;
@@ -762,11 +831,12 @@ export function renderInspectorReportCanvas(
     Math.max(82 + totalStatArbTextH + 10, 42 + secRatRichLines.length * 14.5 + 28)
   );
 
-  const multiMethodCardsH = 148;
+  const multiMethodCardsH = 192;
   const multiMethodSectionH =
-    42 + // Header + Router badge
+    66 + // 2-Row Header (Title Row + Dedicated Sector & Router Badges Sub-Row)
+    uiNotificationsTotalH + // Optional Capex Override / UI Notifications Alert Banner
     38 + // Formula calculation strip
-    multiMethodCardsH + // 4 Ensemble cards
+    multiMethodCardsH + // 4 Ensemble cards (with 2-line word wrapping)
     (hasStandaloneFloorBar ? 10 + standaloneFloorBarH : 0) + // Standalone Graham-Joeliardi Floor bar
     12 +
     statArbAndRatRowH +
@@ -1793,7 +1863,7 @@ export function renderInspectorReportCanvas(
   const zScoreVal = joeliardiEval.statArbZScore ?? 0;
   const rhoVal = joeliardiEval.statArbCorrelation ?? 0.85;
 
-  // Section Header Row
+  // Section Header Row (Row 1: Title, Row 2: Dedicated Sector & Router Badges Sub-Row)
   ctx.fillStyle = '#10B981';
   ctx.font = '700 9.5px Montserrat, sans-serif';
   ctx.fillText('QUANTEDGE SECTOR-ADAPTIVE ROUTER & DYNAMIC ENSEMBLE', 38, curY + 12);
@@ -1802,41 +1872,102 @@ export function renderInspectorReportCanvas(
   ctx.font = '700 13px Montserrat, sans-serif';
   ctx.fillText('Komparasi Multi-Metode Harga Wajar & Standalone Floor', 38, curY + 29);
 
-  // Right-aligned Badges: Matriks Utama Sektor & Router Module
-  let rightBadgeCursorX = LOGICAL_WIDTH - 38;
-  if (joeliardiEval.valuationModuleLabel) {
-    const routerText = `Router: ${joeliardiEval.valuationModuleLabel}`;
-    ctx.font = '700 9.0px "Fira Code", monospace';
-    const rBadgeW = ctx.measureText(routerText).width + 16;
-    rightBadgeCursorX -= rBadgeW;
-    drawRoundedRect(ctx, rightBadgeCursorX, curY + 9, rBadgeW, 20, 3);
-    ctx.fillStyle = 'rgba(16, 185, 129, 0.16)';
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(16, 185, 129, 0.55)';
-    ctx.stroke();
-    ctx.fillStyle = '#34D399';
-    ctx.fillText(routerText, rightBadgeCursorX + 8, curY + 22);
-    rightBadgeCursorX -= 10;
-  }
+  // Row 2 Sub-Header: Matriks Utama Sektor & Router Module Badges (No horizontal collision with title)
+  let badgeRowX = 38;
+  const badgeRowY = curY + 37;
+  ctx.fillStyle = '#9CA3AF';
+  ctx.font = '600 9.2px "Fira Code", monospace';
+  const secPrefixStr = 'Matriks Utama Sektor:';
+  ctx.fillText(secPrefixStr, badgeRowX, badgeRowY + 14);
+  badgeRowX += ctx.measureText(secPrefixStr).width + 8;
 
-  ctx.font = '700 9.2px "Fira Code", monospace';
-  const secMetricBadgeW = ctx.measureText(secFullLabel).width + 16;
-  const secMetricBadgeX = rightBadgeCursorX - secMetricBadgeW;
-  drawRoundedRect(ctx, secMetricBadgeX, curY + 9, secMetricBadgeW, 20, 3);
+  ctx.font = '700 9.0px "Fira Code", monospace';
+  const maxSecBadgeW = Math.min(430, ctx.measureText(secFullLabel).width + 16);
+  drawRoundedRect(ctx, badgeRowX, badgeRowY, maxSecBadgeW, 20, 3);
   ctx.fillStyle = 'rgba(217, 119, 6, 0.22)';
   ctx.fill();
   ctx.strokeStyle = 'rgba(245, 158, 11, 0.65)';
   ctx.stroke();
   ctx.fillStyle = '#FBBF24';
-  ctx.fillText(secFullLabel, secMetricBadgeX + 8, curY + 22);
+  drawTextAutoFit(
+    ctx,
+    secFullLabel,
+    badgeRowX + 8,
+    badgeRowY + 13.5,
+    maxSecBadgeW - 16,
+    700,
+    9.0,
+    7.4,
+    '"Fira Code", monospace'
+  );
+  badgeRowX += maxSecBadgeW + 10;
 
-  ctx.fillStyle = '#9CA3AF';
-  ctx.font = '600 9.2px "Fira Code", monospace';
-  ctx.textAlign = 'right';
-  ctx.fillText('Matriks Utama Sektor:', secMetricBadgeX - 6, curY + 22);
-  ctx.textAlign = 'left';
+  if (joeliardiEval.valuationModuleLabel) {
+    const appliedModSuffix = joeliardiEval.valuationReport?.applied_module
+      ? ` [${joeliardiEval.valuationReport.applied_module}]`
+      : '';
+    const routerText = `Router: ${joeliardiEval.valuationModuleLabel}${appliedModSuffix}`;
+    ctx.font = '700 9.0px "Fira Code", monospace';
+    const availRouterW = Math.max(160, LOGICAL_WIDTH - 38 - badgeRowX);
+    const rBadgeW = Math.min(availRouterW, ctx.measureText(routerText).width + 16);
+    drawRoundedRect(ctx, badgeRowX, badgeRowY, rBadgeW, 20, 3);
+    ctx.fillStyle = 'rgba(16, 185, 129, 0.16)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(16, 185, 129, 0.55)';
+    ctx.stroke();
+    ctx.fillStyle = '#34D399';
+    drawTextAutoFit(
+      ctx,
+      routerText,
+      badgeRowX + 8,
+      badgeRowY + 13.5,
+      rBadgeW - 16,
+      700,
+      9.0,
+      7.2,
+      '"Fira Code", monospace'
+    );
+  }
 
-  curY += 42;
+  curY += 66;
+
+  // Optional UI Notifications Alert Banner (e.g., Capex Override Anomaly Warning)
+  if (preparedUiNotifications.length > 0) {
+    preparedUiNotifications.forEach((notifItem) => {
+      drawRoundedRect(ctx, 38, curY, LOGICAL_WIDTH - 76, notifItem.boxH, 4);
+      ctx.fillStyle = 'rgba(245, 158, 11, 0.15)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(245, 158, 11, 0.72)';
+      ctx.stroke();
+
+      // Left Pill Badge
+      drawRoundedRect(ctx, 50, curY + 8, 110, 18, 3);
+      ctx.fillStyle = '#D97706';
+      ctx.fill();
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = '800 8.5px "Fira Code", monospace';
+      ctx.fillText('CAPEX OVERRIDE', 58, curY + 20);
+
+      // Wrapped Warning Lines
+      ctx.fillStyle = '#FDE68A';
+      notifItem.wrappedLines.forEach((ln, lIdx) => {
+        drawTextAutoFit(
+          ctx,
+          ln,
+          170,
+          curY + 19 + lIdx * 14,
+          LOGICAL_WIDTH - 76 - 142,
+          600,
+          9.5,
+          7.8,
+          '"Fira Code", monospace'
+        );
+      });
+
+      curY += notifItem.boxH + 6;
+    });
+    curY += 2;
+  }
 
   // Formula Calculation Strip ("Perhitungan harga wajar :")
   drawRoundedRect(ctx, 38, curY, LOGICAL_WIDTH - 76, 30, 4);
@@ -1956,7 +2087,7 @@ export function renderInspectorReportCanvas(
       ctx,
       isPrimary ? '★ MODEL FINAL' : 'KOMPONEN ENSEMBLE',
       x + 12,
-      curY + 17,
+      curY + 16,
       innerCardMaxW - 65,
       700,
       8.5,
@@ -1966,12 +2097,24 @@ export function renderInspectorReportCanvas(
     ctx.fillStyle = '#9CA3AF';
     ctx.font = '600 8.5px "Fira Code", monospace';
     ctx.textAlign = 'right';
-    ctx.fillText(`Bobot ${(m.weightPct ?? 0).toFixed(0)}%`, x + cardW - 12, curY + 17);
+    ctx.fillText(`Bobot ${(m.weightPct ?? 0).toFixed(0)}%`, x + cardW - 12, curY + 16);
     ctx.textAlign = 'left';
 
-    // Method Title
+    // Method Title (Wrapped up to 2 clean lines inside card)
     ctx.fillStyle = '#F9FAFB';
-    drawTextAutoFit(ctx, cleanMethodName, x + 12, curY + 33, innerCardMaxW, 700, 9.8, 7.5);
+    drawWrappedTextBlock(
+      ctx,
+      cleanMethodName,
+      x + 12,
+      curY + 31,
+      innerCardMaxW,
+      2,
+      12.0,
+      700,
+      9.3,
+      7.6,
+      'Montserrat, sans-serif'
+    );
 
     // Fair Price + MoS%
     ctx.fillStyle = '#F9FAFB';
@@ -1979,7 +2122,7 @@ export function renderInspectorReportCanvas(
       ctx,
       `Rp ${formatIdrPriceDisplay(m.fairPriceIdr)}`,
       x + 12,
-      curY + 56,
+      curY + 66,
       innerCardMaxW - 58,
       800,
       15.5,
@@ -1994,32 +2137,33 @@ export function renderInspectorReportCanvas(
     ctx.fillText(
       `${m.mosPct >= 0 ? '+' : ''}${m.mosPct.toFixed(1)}%`,
       x + cardW - 12,
-      curY + 55
+      curY + 65
     );
     ctx.textAlign = 'left';
 
     // Contribution Inner Box (Matches Web UI)
-    drawRoundedRect(ctx, x + 10, curY + 64, cardW - 20, 44, 3);
+    const contribBoxY = curY + 75;
+    drawRoundedRect(ctx, x + 10, contribBoxY, cardW - 20, 44, 3);
     ctx.fillStyle = '#141B26';
     ctx.fill();
     ctx.strokeStyle = '#1F2A3C';
     ctx.stroke();
 
     const barTrackX = x + 16;
-    const barTrackY = curY + 83;
+    const barTrackY = contribBoxY + 19;
     const barTrackW = cardW - 32;
     const barTrackH = 5.5;
 
     if (isPrimary) {
       ctx.fillStyle = '#E5E7EB';
       ctx.font = '700 8.2px "Fira Code", monospace';
-      ctx.fillText('Akumulasi Dinamis:', barTrackX, curY + 76);
+      ctx.fillText('Akumulasi Dinamis:', barTrackX, contribBoxY + 12);
       ctx.fillStyle = '#FBBF24';
       ctx.textAlign = 'right';
       ctx.fillText(
         `100% (Rp ${formatIdrPriceDisplay(totalModelFinalIdr)})`,
         barTrackX + barTrackW,
-        curY + 76
+        contribBoxY + 12
       );
       ctx.textAlign = 'left';
 
@@ -2052,7 +2196,7 @@ export function renderInspectorReportCanvas(
         ctx,
         sumBreakStr,
         barTrackX,
-        curY + 101,
+        contribBoxY + 37,
         barTrackW,
         600,
         8.0,
@@ -2076,7 +2220,7 @@ export function renderInspectorReportCanvas(
 
       ctx.fillStyle = '#9CA3AF';
       ctx.font = '600 8.2px "Fira Code", monospace';
-      ctx.fillText(`Kontribusi (${(m.weightPct ?? 0).toFixed(0)}%):`, barTrackX, curY + 76);
+      ctx.fillText(`Kontribusi (${(m.weightPct ?? 0).toFixed(0)}%):`, barTrackX, contribBoxY + 12);
 
       ctx.fillStyle = compColor;
       ctx.textAlign = 'right';
@@ -2084,7 +2228,7 @@ export function renderInspectorReportCanvas(
       ctx.fillText(
         `+Rp ${formatIdrPriceDisplay(compContribIdr)} ke Final`,
         barTrackX + barTrackW,
-        curY + 76
+        contribBoxY + 12
       );
       ctx.textAlign = 'left';
 
@@ -2104,36 +2248,40 @@ export function renderInspectorReportCanvas(
       ctx.fillText(
         `Rp ${formatIdrPriceDisplay(m.fairPriceIdr)} × ${(m.weightPct ?? 0).toFixed(0)}%`,
         barTrackX,
-        curY + 101
+        contribBoxY + 37
       );
       ctx.textAlign = 'right';
-      ctx.fillText(`${compSharePct}% bobot dinamis`, barTrackX + barTrackW, curY + 101);
+      ctx.fillText(`${compSharePct}% bobot dinamis`, barTrackX + barTrackW, contribBoxY + 37);
       ctx.textAlign = 'left';
     }
 
-    // Bottom 2 lines: metricBasis & Aktual vs Wajar
+    // Bottom blocks: metricBasis (up to 2 lines) & Aktual vs Wajar (up to 2 lines)
     ctx.fillStyle = '#D1D5DB';
-    drawTextAutoFit(
+    drawWrappedTextBlock(
       ctx,
       m.metricBasis,
       x + 12,
-      curY + 123,
+      curY + 135,
       innerCardMaxW,
+      2,
+      11.8,
       500,
-      8.5,
+      8.2,
       7.0,
       '"Fira Code", monospace'
     );
 
     ctx.fillStyle = '#9CA3AF';
-    drawTextAutoFit(
+    drawWrappedTextBlock(
       ctx,
       `Aktual: ${m.impliedMultipleLabel} · Wajar: ${m.fairMultipleLabel}`,
       x + 12,
-      curY + 139,
+      curY + 163,
       innerCardMaxW,
+      2,
+      11.8,
       500,
-      8.5,
+      8.1,
       7.0,
       '"Fira Code", monospace'
     );
@@ -2156,47 +2304,60 @@ export function renderInspectorReportCanvas(
     ctx.stroke();
     ctx.restore();
 
-    const col1W = Math.round(floorBoxW * 0.36);
+    const col1W = Math.round(floorBoxW * 0.35);
     const col2W = Math.round(floorBoxW * 0.42);
+    const col3W = floorBoxW - col1W - col2W;
     const col1X = floorBoxX + 14;
-    const col2X = floorBoxX + col1W + 16;
+    const col2X = floorBoxX + col1W + 14;
+    const col3X = floorBoxX + col1W + col2W + 14;
 
-    // Column 1: Kicker, Name, Moat Sanity Check
+    // Column 1: Kicker, Name (up to 2 lines), Moat Sanity Check (up to 2 lines)
     ctx.fillStyle = '#34D399';
-    ctx.font = '700 9.0px Montserrat, sans-serif';
-    ctx.fillText('⚓ FLOOR BENCHMARK', col1X, curY + 19);
+    ctx.font = '700 8.8px Montserrat, sans-serif';
+    ctx.fillText('⚓ FLOOR BENCHMARK', col1X, curY + 18);
     ctx.fillStyle = '#9CA3AF';
-    ctx.font = '600 9.0px "Fira Code", monospace';
-    ctx.fillText(
+    ctx.font = '600 8.6px "Fira Code", monospace';
+    drawTextAutoFit(
+      ctx,
       '· Standalone (0% Bobot Ensemble)',
-      col1X + ctx.measureText('⚓ FLOOR BENCHMARK').width + 14,
-      curY + 19
+      col1X + ctx.measureText('⚓ FLOOR BENCHMARK').width + 10,
+      curY + 18,
+      col1W - ctx.measureText('⚓ FLOOR BENCHMARK').width - 32,
+      600,
+      8.6,
+      7.2,
+      '"Fira Code", monospace'
     );
 
     ctx.fillStyle = '#F9FAFB';
-    drawTextAutoFit(
+    drawWrappedTextBlock(
       ctx,
       standaloneFloorMethod.name.replace(/\s*\(Utama\)/i, ''),
       col1X,
-      curY + 38,
-      col1W - 24,
+      curY + 35,
+      col1W - 26,
+      2,
+      12.5,
       700,
-      11.0,
-      8.5
+      10.2,
+      8.2,
+      'Montserrat, sans-serif'
     );
 
     const moatNote = joeliardiEval.isMoatHaircutApplied
       ? 'Sanity Check Floor: Weak Moat Penalty -25% (ROE<15% / DER>1x)'
       : 'Sanity Check Floor: Moat Kuat Terverifikasi (0% Haircut Penalty)';
     ctx.fillStyle = '#34D399';
-    drawTextAutoFit(
+    drawWrappedTextBlock(
       ctx,
       moatNote,
       col1X,
-      curY + 57,
-      col1W - 24,
+      curY + 65,
+      col1W - 26,
+      2,
+      11.8,
       600,
-      8.8,
+      8.4,
       7.2,
       '"Fira Code", monospace'
     );
@@ -2208,29 +2369,33 @@ export function renderInspectorReportCanvas(
     ctx.lineTo(floorBoxX + col1W, curY + standaloneFloorBarH - 12);
     ctx.stroke();
 
-    // Column 2: Metric Basis & Aktual vs Wajar
+    // Column 2: Metric Basis (wrapped up to 3 lines) & Aktual vs Wajar (wrapped up to 2 lines)
     ctx.fillStyle = '#E5E7EB';
-    drawTextAutoFit(
+    drawWrappedTextBlock(
       ctx,
       standaloneFloorMethod.metricBasis,
       col2X,
-      curY + 32,
+      curY + 22,
       col2W - 28,
+      3,
+      12.8,
       600,
-      9.5,
-      7.5,
+      8.8,
+      7.4,
       '"Fira Code", monospace'
     );
     ctx.fillStyle = '#9CA3AF';
-    drawTextAutoFit(
+    drawWrappedTextBlock(
       ctx,
       `Aktual: ${standaloneFloorMethod.impliedMultipleLabel} · Wajar: ${standaloneFloorMethod.fairMultipleLabel}`,
       col2X,
-      curY + 52,
+      curY + 67,
       col2W - 28,
+      2,
+      11.8,
       500,
-      9.2,
-      7.5,
+      8.5,
+      7.2,
       '"Fira Code", monospace'
     );
 
@@ -2241,8 +2406,9 @@ export function renderInspectorReportCanvas(
     ctx.lineTo(floorBoxX + col1W + col2W, curY + standaloneFloorBarH - 12);
     ctx.stroke();
 
-    // Column 3: Floor Price, MoS% & Diff vs Model Final
+    // Column 3: Floor Price, MoS% & Diff vs Model Final (strictly bounded inside Column 3)
     const rightEdgeX = floorBoxX + floorBoxW - 14;
+    const col3InnerW = col3W - 28;
     const flMos = standaloneFloorMethod.mosPct;
     const flMosStr = `${flMos >= 0 ? '+' : ''}${flMos.toFixed(1)}%`;
     ctx.font = '700 10.5px "Fira Code", monospace';
@@ -2258,12 +2424,13 @@ export function renderInspectorReportCanvas(
       `Rp ${formatIdrPriceDisplay(standaloneFloorMethod.fairPriceIdr)}`,
       rightEdgeX - flMosW - 8,
       curY + 35,
-      165,
+      Math.max(70, col3InnerW - flMosW - 10),
       800,
-      16.5,
-      12.0,
+      16.0,
+      11.5,
       '"Fira Code", monospace'
     );
+    ctx.textAlign = 'left';
 
     const diffPct =
       standaloneFloorMethod.fairPriceIdr <= totalModelFinalIdr
@@ -2278,18 +2445,19 @@ export function renderInspectorReportCanvas(
               100
           )}% di atas Final`;
     ctx.fillStyle = '#9CA3AF';
-    drawTextAutoFit(
+    drawWrappedTextBlock(
       ctx,
       diffPct,
-      rightEdgeX,
-      curY + 56,
-      floorBoxW - col1W - col2W - 24,
+      col3X,
+      curY + 58,
+      col3InnerW,
+      2,
+      12.2,
       600,
-      8.8,
+      8.5,
       7.2,
       '"Fira Code", monospace'
     );
-    ctx.textAlign = 'left';
 
     curY += standaloneFloorBarH;
   }

@@ -2628,6 +2628,7 @@ export function evaluateJoeliardiOosFundamental(
     rimFairValueIdr,
     rimFadeYears,
     rimPersistenceOmega,
+    sbn10YYieldPct: sbnSpot10YPct || 6.75,
     tickRounder: roundToIdxTick
   });
 
@@ -2665,6 +2666,10 @@ export function evaluateJoeliardiOosFundamental(
     sectorSpecificFairValueIdr,
     sectorAcademicRationale,
     cwipToAssetsRatio,
+    capexToDaRatio,
+    capexToRevenueRatio,
+    isCapexOverrideTriggered,
+    ui_notifications: routedUiNotifications,
     normalizedEps7YIdr,
     normalizedRoePct,
     pbv10YMean,
@@ -2745,6 +2750,19 @@ export function evaluateJoeliardiOosFundamental(
   );
   const intrinsicValueIdr = ensembleAgg.intrinsicValueIdr;
   const ensembleFormulaAudit = ensembleAgg.ensembleFormulaAudit;
+
+  // Package final comprehensive ValuationReport object (including Capex Override ui_notifications)
+  const finalValuationReport = ValuationEngine.packageValuationReport({
+    target_price: intrinsicValueIdr,
+    route: valuationModuleRoute,
+    dynamic_weights: {
+      pcf: Number(dynamicEnsemble.legs[0].weight.toFixed(4)),
+      rim: Number(dynamicEnsemble.legs[1].weight.toFixed(4)),
+      relval: Number(dynamicEnsemble.legs[2].weight.toFixed(4))
+    },
+    graham_benchmark: grahamBenchmark.grahamJoeliardiBenchmarkIdr,
+    ui_notifications: routedUiNotifications
+  });
 
   // Pegged Fair Multiples: Strictly synchronized with final Quantedge Ensemble Intrinsic Value
   const joeliardiFairPer = Number((intrinsicValueIdr / Math.max(1, estimatedEpsIdr)).toFixed(2));
@@ -3211,6 +3229,11 @@ export function evaluateJoeliardiOosFundamental(
     valuationModuleRoute,
     valuationModuleLabel,
     cwipToAssetsRatio,
+    capexToDaRatio,
+    capexToRevenueRatio,
+    isCapexOverrideTriggered,
+    uiNotifications: finalValuationReport.ui_notifications,
+    valuationReport: finalValuationReport,
     normalizedEps7YIdr,
     normalizedRoePct,
     pbv10YMean,

@@ -2,8 +2,12 @@ import {
   EnsembleValuationLeg,
   SectorValuationArchetype,
   StockMetrics,
-  ValuationModuleRoute
+  ValuationModuleRoute,
+  ValuationReport
 } from '../types/quant';
+
+export const CAPEX_ANOMALY_NOTIFICATION_TEXT =
+  "⚠️ CAPEX ANOMALY DETECTED: Rasio belanja modal (Capex/D&A) melebihi batas normal (>3.0x). Sistem otomatis memindahkan emiten ini dari 'Pure Cyclical' ke modul 'Capex Aggressor' untuk memvaluasi proyeksi laba dari aset baru.";
 
 /**
  * Calibrated Capital Work in Progress (CWIP / Total Assets) Registry for Capex Aggressors
@@ -295,7 +299,7 @@ export function resolveSectorOmegaFadeFactor(params: {
   }
 }
 
-export interface RoutedValuationModuleOutput {
+export interface RoutedValuationModuleOutput extends ValuationReport {
   route: ValuationModuleRoute;
   moduleLabel: string;
   sectorValuationArchetype: SectorValuationArchetype;
@@ -308,6 +312,10 @@ export interface RoutedValuationModuleOutput {
   sectorSpecificFairValueIdr: number;
   sectorAcademicRationale: string;
   cwipToAssetsRatio: number;
+  capexToDaRatio: number;
+  capexToRevenueRatio: number;
+  isCapexOverrideTriggered: boolean;
+  valuationReport: ValuationReport;
   normalizedEps7YIdr: number;
   normalizedRoePct: number;
   pbv10YMean?: number;
@@ -323,13 +331,18 @@ export interface RoutedValuationModuleOutput {
  * 3. ROUTER UTAMA: ValuationEngine.calculateFairValue(stock)
  * Directs each stock into one of three specialized sector/cycle modules:
  * - Module 1: The Steady Compounder Module (Financials, FMCG / Consumer Non-Cyclicals)
- * - Module 2: The Capex Aggressor / Step-Function Growth Module (CWIP/Assets > 0.15, Healthcare, Infra, Basic Materials Metals)
+ * - Module 2: The Capex Aggressor / Step-Function Growth Module (Capex/D&A > 3.0 OR Capex/Revenue > 0.15, Healthcare, Infra, Basic Materials Metals)
  * - Module 3: The Pure Cyclical Module (Energy/Coal, Agri/CPO, Cyclical Property & Materials)
  */
 export const ValuationEngine = {
   resolveRoute(stock: StockMetrics, customCwipRatio?: number): {
     route: ValuationModuleRoute;
+    applied_module: ValuationReport['applied_module'];
     cwipToAssetsRatio: number;
+    capexToDaRatio: number;
+    capexToRevenueRatio: number;
+    isCapexOverrideTriggered: boolean;
+    ui_notifications: string[];
   } {
     const clean = stock.ticker.trim().toUpperCase().replace(/\.JK$/i, '');
     const cwipToAssetsRatio = Number(
@@ -341,36 +354,127 @@ export const ValuationEngine = {
       ).toFixed(2)
     );
 
-    // Pure Cyclical Trigger: Energy / Coal, Agri CPO, or Cyclical Property (unless CWIP > 0.25)
+    const capexToRevenueRatio = Number(
+      (stock.capexToRevenueRatio ?? cwipToAssetsRatio).toFixed(2)
+    );
+    const capexToDaRatio = Number(
+      (
+        stock.capexToDaRatio ??
+        (cwipToAssetsRatio > 0.15
+          ? 3.15 + (cwipToAssetsRatio - 0.15) * 9.5
+          : 0.9 + cwipToAssetsRatio * 12.0)
+      ).toFixed(2)
+    );
+
+    const ui_notifications: string[] = [];
+
+    // Capex Override Logic: If (Capex/D&A > 3.0 OR Capex/Revenue > 0.15) is met,
+    // override Pure Cyclical / standard routing into 'Capex Aggressor' and push the warning flag.
+    const isCapexOverrideMet = capexToDaRatio > 3.0 || capexToRevenueRatio > 0.15;
+    if (isCapexOverrideMet) {
+      ui_notifications.push(CAPEX_ANOMALY_NOTIFICATION_TEXT);
+      return {
+        route: 'CAPEX_AGGRESSOR',
+        applied_module: 'Capex_Aggressor',
+        cwipToAssetsRatio,
+        capexToDaRatio,
+        capexToRevenueRatio,
+        isCapexOverrideTriggered: true,
+        ui_notifications
+      };
+    }
+
+    // Pure Cyclical Trigger: Energy / Coal, Agri CPO, or Cyclical Property
     if (
       stock.sector === 'Energy' ||
       CPO_AGRI_TICKERS.has(clean) ||
-      (stock.sector === 'Properties & Real Estate' && cwipToAssetsRatio <= 0.25)
+      stock.sector === 'Properties & Real Estate'
     ) {
-      return { route: 'PURE_CYCLICAL', cwipToAssetsRatio };
+      return {
+        route: 'PURE_CYCLICAL',
+        applied_module: 'Pure_Cyclical',
+        cwipToAssetsRatio,
+        capexToDaRatio,
+        capexToRevenueRatio,
+        isCapexOverrideTriggered: false,
+        ui_notifications
+      };
     }
 
-    // Capex Aggressor Trigger: (CWIP / Total Assets > 0.15) OR Healthcare / Infrastructures / Basic_Materials_Metals
+    // Capex Aggressor Sectoral Trigger: Healthcare / Infrastructures / Basic_Materials_Metals
     if (
-      cwipToAssetsRatio > 0.15 ||
       stock.sector === 'Healthcare' ||
       stock.sector === 'Infrastructures' ||
       METALS_HILIRISASI_TICKERS.has(clean)
     ) {
-      return { route: 'CAPEX_AGGRESSOR', cwipToAssetsRatio };
+      return {
+        route: 'CAPEX_AGGRESSOR',
+        applied_module: 'Capex_Aggressor',
+        cwipToAssetsRatio,
+        capexToDaRatio,
+        capexToRevenueRatio,
+        isCapexOverrideTriggered: false,
+        ui_notifications
+      };
     }
 
     // Steady Compounder Trigger: Financials OR Consumer Non-Cyclicals
     if (stock.sector === 'Financials' || stock.sector === 'Consumer Non-Cyclicals') {
-      return { route: 'STEADY_COMPOUNDER', cwipToAssetsRatio };
+      return {
+        route: 'STEADY_COMPOUNDER',
+        applied_module: 'Compounder',
+        cwipToAssetsRatio,
+        capexToDaRatio,
+        capexToRevenueRatio,
+        isCapexOverrideTriggered: false,
+        ui_notifications
+      };
     }
 
     // Fallback routing for Industrials / General Cyclicals
     if (stock.sector === 'Basic Materials' || stock.sector === 'Industrials') {
-      return { route: 'PURE_CYCLICAL', cwipToAssetsRatio };
+      return {
+        route: 'PURE_CYCLICAL',
+        applied_module: 'Pure_Cyclical',
+        cwipToAssetsRatio,
+        capexToDaRatio,
+        capexToRevenueRatio,
+        isCapexOverrideTriggered: false,
+        ui_notifications
+      };
     }
 
-    return { route: 'STEADY_COMPOUNDER', cwipToAssetsRatio };
+    return {
+      route: 'STEADY_COMPOUNDER',
+      applied_module: 'Compounder',
+      cwipToAssetsRatio,
+      capexToDaRatio,
+      capexToRevenueRatio,
+      isCapexOverrideTriggered: false,
+      ui_notifications
+    };
+  },
+
+  packageValuationReport(params: {
+    target_price: number;
+    route: ValuationModuleRoute;
+    dynamic_weights: { pcf: number; rim: number; relval: number };
+    graham_benchmark: number;
+    ui_notifications: string[];
+  }): ValuationReport {
+    const applied_module: ValuationReport['applied_module'] =
+      params.route === 'CAPEX_AGGRESSOR'
+        ? 'Capex_Aggressor'
+        : params.route === 'PURE_CYCLICAL'
+        ? 'Pure_Cyclical'
+        : 'Compounder';
+    return {
+      target_price: params.target_price,
+      applied_module,
+      dynamic_weights: params.dynamic_weights,
+      graham_benchmark: params.graham_benchmark,
+      ui_notifications: [...params.ui_notifications]
+    };
   },
 
   calculateFairValue(params: {
@@ -392,6 +496,7 @@ export const ValuationEngine = {
     rimFairValueIdr: number;
     rimFadeYears: number;
     rimPersistenceOmega: number;
+    sbn10YYieldPct?: number;
     tickRounder: (rawPrice: number) => number;
   }): RoutedValuationModuleOutput {
     const {
@@ -413,12 +518,52 @@ export const ValuationEngine = {
       rimFairValueIdr,
       rimFadeYears,
       rimPersistenceOmega,
+      sbn10YYieldPct = 6.75,
       tickRounder
     } = params;
 
     const clean = stock.ticker.trim().toUpperCase().replace(/\.JK$/i, '');
     const der = Math.max(0.05, stock.debtToEquity);
-    const { route, cwipToAssetsRatio } = ValuationEngine.resolveRoute(stock);
+    const {
+      route,
+      applied_module,
+      cwipToAssetsRatio,
+      capexToDaRatio,
+      capexToRevenueRatio,
+      isCapexOverrideTriggered,
+      ui_notifications
+    } = ValuationEngine.resolveRoute(stock);
+
+    const buildDefaultReport = (
+      targetPriceIdr: number,
+      basisEpsIdr: number,
+      growthPct: number,
+      roeForBenchmark: number
+    ): ValuationReport => {
+      const defaultWeights =
+        stock.sector === 'Financials'
+          ? { pcf: 0.10, rim: 0.70, relval: 0.20 }
+          : stock.sector === 'Properties & Real Estate' || route === 'PURE_CYCLICAL'
+          ? { pcf: 0.80, rim: 0.00, relval: 0.20 }
+          : stock.sector === 'Healthcare' || stock.sector === 'Consumer Non-Cyclicals'
+          ? { pcf: 0.55, rim: 0.30, relval: 0.15 }
+          : { pcf: 0.45, rim: 0.35, relval: 0.20 };
+      const gj = calculateGrahamJoeliardiBenchmark({
+        basisEpsIdr,
+        growthRatePct: growthPct,
+        sbn10YYieldPct,
+        roePct: roeForBenchmark,
+        derRatio: der,
+        tickRounder
+      });
+      return {
+        target_price: targetPriceIdr,
+        applied_module,
+        dynamic_weights: defaultWeights,
+        graham_benchmark: gj.grahamJoeliardiBenchmarkIdr,
+        ui_notifications: [...ui_notifications]
+      };
+    };
 
     // =========================================================================
     // MODULE 1: THE STEADY COMPOUNDER MODULE (Financials, FMCG)
@@ -483,8 +628,11 @@ export const ValuationEngine = {
         const blendedCompounderPrice = tickRounder(
           Math.max(50, 0.55 * qualityPePriceIdr + 0.45 * pbvTargetPriceIdr)
         );
+        const valuationReport = buildDefaultReport(blendedCompounderPrice, ttmEpsIdr, g, effectiveRoe);
 
         return {
+          ...valuationReport,
+          valuationReport,
           route: 'STEADY_COMPOUNDER',
           moduleLabel: 'Steady Compounder (FMCG Quality P/E & Justified PBV)',
           sectorValuationArchetype: 'CONSUMER_HEALTH_QUALITY_PE',
@@ -497,6 +645,9 @@ export const ValuationEngine = {
           sectorSpecificFairValueIdr: blendedCompounderPrice,
           sectorAcademicRationale: `[Modul 1: Steady Compounder — FMCG] Menggunakan jangkar ROE berkelanjutan ${effectiveRoe.toFixed(1)}% (g ${g.toFixed(1)}%, Ke ${dynamicCostOfEquityPct.toFixed(2)}%) dengan Justified PBV ${justifiedPbv}x (Rp ${Math.round(pbvTargetPriceIdr).toLocaleString('id-ID')}) dan Quality P/E ${fairQualityPe}x atas Cash EPS Rp ${cashEpsIdr.toLocaleString('id-ID')}/shm (GP/A ${grossProfitabilityToAssets.toFixed(1)}%, OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x, ω=${rimPersistenceOmega.toFixed(2)}).`,
           cwipToAssetsRatio,
+          capexToDaRatio,
+          capexToRevenueRatio,
+          isCapexOverrideTriggered,
           normalizedEps7YIdr: ttmEpsIdr,
           normalizedRoePct: effectiveRoe,
           isCyclicalStrongBuyZScore: false,
@@ -508,8 +659,11 @@ export const ValuationEngine = {
 
       const targetPriceIdr = tickRounder(Math.max(50, pbvTargetPriceIdr));
       const roeSpreadPct = Number((effectiveRoe - dynamicCostOfEquityPct).toFixed(2));
+      const valuationReport = buildDefaultReport(targetPriceIdr, ttmEpsIdr, g, effectiveRoe);
 
       return {
+        ...valuationReport,
+        valuationReport,
         route: 'STEADY_COMPOUNDER',
         moduleLabel: 'Steady Compounder (Justified PBV Anchor)',
         sectorValuationArchetype: 'FINANCIALS_JUSTIFIED_PBV',
@@ -522,6 +676,9 @@ export const ValuationEngine = {
         sectorSpecificFairValueIdr: targetPriceIdr,
         sectorAcademicRationale: `[Modul 1: Steady Compounder — Financials] Jangkar Justified PBV = (ROE ${effectiveRoe.toFixed(1)}% − g ${g.toFixed(1)}%) ÷ (Ke ${dynamicCostOfEquityPct.toFixed(2)}% − g) menghasilkan PBV Wajar ${justifiedPbv}x (vs Implied ${impliedPbv}x) × BVPS Rp ${currentBvpsIdr.toLocaleString('id-ID')} = Rp ${targetPriceIdr.toLocaleString('id-ID')}. Excess Return ${roeSpreadPct >= 0 ? '+' : ''}${roeSpreadPct}% dengan persistensi moat ω=${rimPersistenceOmega.toFixed(2)} (${rimFadeYears}Y RIM Rp ${rimFairValueIdr.toLocaleString('id-ID')}).`,
         cwipToAssetsRatio,
+        capexToDaRatio,
+        capexToRevenueRatio,
+        isCapexOverrideTriggered,
         normalizedEps7YIdr: ttmEpsIdr,
         normalizedRoePct: effectiveRoe,
         isCyclicalStrongBuyZScore: false,
@@ -533,7 +690,7 @@ export const ValuationEngine = {
 
     // =========================================================================
     // MODULE 2: THE CAPEX AGGRESSOR / STEP-FUNCTION GROWTH MODULE
-    // Trigger: (CWIP / Total Assets > 0.15) OR Healthcare / Infrastructure / Basic_Materials_Metals
+    // Trigger: (Capex/D&A > 3.0 OR Capex/Revenue > 0.15) OR Healthcare / Infrastructure / Basic_Materials_Metals
     // Logic: Bypass TTM. Market prices in new smelter/hospital/network capacity coming online.
     // Approach: Blended Valuation (50% Residual Income Justified PBV + 50% Forward Earnings Power)
     // =========================================================================
@@ -607,10 +764,18 @@ export const ValuationEngine = {
       const impliedForwardPe = Number(
         Math.max(2.0, Math.min(65.0, price / Math.max(1, effectiveForwardEpsIdr))).toFixed(2)
       );
+      const valuationReport = buildDefaultReport(
+        blendedCapexFairValueIdr,
+        effectiveForwardEpsIdr,
+        gAdjPct,
+        normalizedForwardRoePct
+      );
 
       return {
+        ...valuationReport,
+        valuationReport,
         route: 'CAPEX_AGGRESSOR',
-        moduleLabel: `Capex Aggressor / Step-Function Growth (CWIP ${(cwipToAssetsRatio * 100).toFixed(0)}%)`,
+        moduleLabel: `Capex Aggressor / Step-Function Growth (Capex/D&A ${capexToDaRatio.toFixed(1)}x · CWIP ${(cwipToAssetsRatio * 100).toFixed(0)}%)`,
         sectorValuationArchetype: 'CAPEX_AGGRESSOR_BLENDED',
         sectorPrimaryMetricShort: 'Fwd P/E + RIM',
         sectorPrimaryMetricLabel: 'Capex Aggressor Blended (50% Fwd RIM + 50% Earnings Power)',
@@ -619,8 +784,11 @@ export const ValuationEngine = {
         sectorPrimaryPerShareIdr: effectiveForwardEpsIdr,
         sectorPrimaryPerShareLabel: 'Forward EPS',
         sectorSpecificFairValueIdr: blendedCapexFairValueIdr,
-        sectorAcademicRationale: `[Modul 2: Capex Aggressor / Step-Function Growth] Memotong bias TTM karena ekspansi aset produktif (CWIP/Assets ${(cwipToAssetsRatio * 100).toFixed(0)}%). Menggunakan Forward EPS Rp ${effectiveForwardEpsIdr.toLocaleString('id-ID')}/shm, Normalized Forward ROE ${normalizedForwardRoePct.toFixed(1)}% (dipagari ≤30%), dan g_adj ${gAdjPct.toFixed(2)}% (base_g + 2% Capex Premium). Menggabungkan 50% Leg 1 Residual Income (Justified PBV ${capexJustifiedPbv}x → Rp ${Math.round(leg1ResidualIncomePriceIdr).toLocaleString('id-ID')}) + 50% Leg 2 Earnings Power (Target PE ${targetSectorPe}x → Rp ${Math.round(leg2EarningsPowerPriceIdr).toLocaleString('id-ID')}) = Rp ${blendedCapexFairValueIdr.toLocaleString('id-ID')}.`,
+        sectorAcademicRationale: `[Modul 2: Capex Aggressor / Step-Function Growth] Memotong bias TTM karena ekspansi aset produktif (Capex/D&A ${capexToDaRatio.toFixed(2)}x, CWIP/Assets ${(cwipToAssetsRatio * 100).toFixed(0)}%). Menggunakan Forward EPS Rp ${effectiveForwardEpsIdr.toLocaleString('id-ID')}/shm, Normalized Forward ROE ${normalizedForwardRoePct.toFixed(1)}% (dipagari ≤30%), dan g_adj ${gAdjPct.toFixed(2)}% (base_g + 2% Capex Premium). Menggabungkan 50% Leg 1 Residual Income (Justified PBV ${capexJustifiedPbv}x → Rp ${Math.round(leg1ResidualIncomePriceIdr).toLocaleString('id-ID')}) + 50% Leg 2 Earnings Power (Target PE ${targetSectorPe}x → Rp ${Math.round(leg2EarningsPowerPriceIdr).toLocaleString('id-ID')}) = Rp ${blendedCapexFairValueIdr.toLocaleString('id-ID')}.`,
         cwipToAssetsRatio,
+        capexToDaRatio,
+        capexToRevenueRatio,
+        isCapexOverrideTriggered,
         normalizedEps7YIdr: effectiveForwardEpsIdr,
         normalizedRoePct: normalizedForwardRoePct,
         isCyclicalStrongBuyZScore: false,
@@ -697,8 +865,16 @@ export const ValuationEngine = {
     const cyclicalTargetPriceIdr = tickRounder(
       Math.max(50, currentBvpsIdr * normalizedFairPbv)
     );
+    const valuationReport = buildDefaultReport(
+      cyclicalTargetPriceIdr,
+      normalizedEps7YIdr,
+      cyclicalGrowthPct,
+      normalizedRoePct
+    );
 
     return {
+      ...valuationReport,
+      valuationReport,
       route: 'PURE_CYCLICAL',
       moduleLabel: `Pure Cyclical (Normalized 7Y EPS & PBV Z=${pbvZScore >= 0 ? '+' : ''}${pbvZScore}σ)`,
       sectorValuationArchetype: 'PURE_CYCLICAL_NORMALIZED',
@@ -711,6 +887,9 @@ export const ValuationEngine = {
       sectorSpecificFairValueIdr: cyclicalTargetPriceIdr,
       sectorAcademicRationale: `[Modul 3: Pure Cyclical — Anti-Value Trap] Mematikan P/E & EPS TTM puncak siklus. Menggunakan 7Y Normalized EPS Rp ${normalizedEps7YIdr.toLocaleString('id-ID')}/shm (Normalized ROE ${normalizedRoePct.toFixed(1)}%, ω=${rimPersistenceOmega.toFixed(2)}) dan BVPS Rp ${currentBvpsIdr.toLocaleString('id-ID')} menghasilkan Normalized Justified PBV ${normalizedFairPbv}x (Target Rp ${cyclicalTargetPriceIdr.toLocaleString('id-ID')}). Saat ini PBV ${impliedPbv}x berada pada Z-Score ${pbvZScore >= 0 ? '+' : ''}${pbvZScore}σ vs Mean 10Y ${pbv10YMean}x${isCyclicalStrongBuyZScore ? ' (≤ -1.5σ → Sinyal STRONG BUY Siklikal Aktif)' : ''}${isCyclicalDerPenalized ? ` [Penalti QMJ: DER ${der.toFixed(2)}x > 1.0x]` : ' [QMJ Lolos: Produsen Biaya Rendah & Neraca Kuat]'}.`,
       cwipToAssetsRatio,
+      capexToDaRatio,
+      capexToRevenueRatio,
+      isCapexOverrideTriggered,
       normalizedEps7YIdr,
       normalizedRoePct,
       pbv10YMean,

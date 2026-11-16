@@ -121,6 +121,8 @@ export interface StockMetrics {
   hasActiveCatalyst?: boolean;         // Explicit boolean flag for Catalyst Override in Decision Tree
   catalystBadgeLabel?: string;         // Short badge label e.g. "CATALYST ACTIVE · BUYBACK +4,2% / Q-EPS +34%"
   cwipToAssetsRatio?: number;          // Capital Work in Progress / Total Assets ratio (0.0 - 1.0) for Capex Aggressors
+  capexToDaRatio?: number;             // Capex / Depreciation & Amortization ratio (>3.0 triggers Capex Override)
+  capexToRevenueRatio?: number;        // Capex / Revenue ratio (>0.15 triggers Capex Override)
   historicalEps7YAvgIdr?: number;      // 7Y-10Y Mid-Cycle Normalized EPS in IDR for Pure Cyclicals
   pbv10YMean?: number;                 // 10-year historical mean PBV multiple
   pbv10YStdDev?: number;               // 10-year historical PBV standard deviation
@@ -143,6 +145,14 @@ export type ValuationModuleRoute =
   | 'STEADY_COMPOUNDER'
   | 'CAPEX_AGGRESSOR'
   | 'PURE_CYCLICAL';
+
+export interface ValuationReport {
+  target_price: number;
+  applied_module: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical';
+  dynamic_weights: { pcf: number; rim: number; relval: number };
+  graham_benchmark: number;
+  ui_notifications: string[]; // Array of warning strings to display on the dashboard
+}
 
 export interface EnsembleValuationLeg {
   id: 'SECTOR_PRIMARY' | 'MULTI_STAGE_RIM' | 'STATARB_RELVAL';
@@ -261,6 +271,11 @@ export interface JoeliardiOosEvaluation {
   valuationModuleRoute?: ValuationModuleRoute;
   valuationModuleLabel?: string;
   cwipToAssetsRatio?: number;
+  capexToDaRatio?: number;
+  capexToRevenueRatio?: number;
+  isCapexOverrideTriggered?: boolean;
+  uiNotifications?: string[];
+  valuationReport?: ValuationReport;
   normalizedEps7YIdr?: number;
   normalizedRoePct?: number;
   pbv10YMean?: number;

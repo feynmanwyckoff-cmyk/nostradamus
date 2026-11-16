@@ -1759,10 +1759,36 @@ export function EmitenFundamentalInspectorModal({
                   <div className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-mono rounded-xs bg-[#059669]/10 border border-[#059669]/40 text-[#0D5C46] font-bold">
                     <span>Router:</span>
                     <span>{joeliardiEval.valuationModuleLabel}</span>
+                    {joeliardiEval.valuationReport?.applied_module && (
+                      <span className="px-1.5 py-0.5 rounded-xs bg-[#0D5C46] text-white text-[9px] font-extrabold">
+                        {joeliardiEval.valuationReport.applied_module}
+                      </span>
+                    )}
                   </div>
                 )}
               </div>
             </div>
+
+            {/* UI Notification Flags Banner (e.g., Capex Override Anomaly Warning) */}
+            {(joeliardiEval.valuationReport?.ui_notifications ?? joeliardiEval.uiNotifications ?? []).length > 0 && (
+              <div className="space-y-1.5">
+                {(joeliardiEval.valuationReport?.ui_notifications ?? joeliardiEval.uiNotifications ?? []).map(
+                  (notifMsg, nIdx) => (
+                    <div
+                      key={nIdx}
+                      className="px-3.5 py-2.5 bg-[#FFFBEB] border border-[#D97706]/60 rounded-xs flex items-start gap-2.5 text-[11px] font-mono text-[#92400E] shadow-2xs"
+                    >
+                      <span className="px-1.5 py-0.5 rounded-xs bg-[#D97706] text-white text-[9px] font-extrabold uppercase tracking-wider shrink-0 mt-0.5">
+                        CAPEX OVERRIDE
+                      </span>
+                      <span className="font-semibold leading-relaxed text-[#78350F]">
+                        {notifMsg}
+                      </span>
+                    </div>
+                  )
+                )}
+              </div>
+            )}
 
             {/* Mathematical Formula Calculation Strip */}
             {joeliardiEval.ensembleFormulaAudit && (
