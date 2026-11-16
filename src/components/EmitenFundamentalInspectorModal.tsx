@@ -916,7 +916,9 @@ export function EmitenFundamentalInspectorModal({
         joeliardiEval,
         structuredReport,
         recentNews,
-        regimeStatus
+        regimeStatus,
+        isAiGenerated,
+        aiGeneratedAt
       });
     } finally {
       setTimeout(() => setIsExporting(null), 400);
@@ -931,7 +933,9 @@ export function EmitenFundamentalInspectorModal({
         joeliardiEval,
         structuredReport,
         recentNews,
-        regimeStatus
+        regimeStatus,
+        isAiGenerated,
+        aiGeneratedAt
       });
     } finally {
       setTimeout(() => setIsExporting(null), 400);
