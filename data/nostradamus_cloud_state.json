@@ -1,6 +1,6 @@
 {
   "schemaVersion": "3.0-DEMIGUEL-MF24",
-  "updatedAt": "2026-11-21T11:36:35.443Z",
+  "updatedAt": "2026-11-21T11:37:17.924Z",
   "strategyName": "Vol-Managed Multifactor + 40% Buffer",
   "rebalanceBufferPct": 40,
   "thresholdAnnVol": 18,
@@ -78,7 +78,7 @@
       "isLiquid": true,
       "dividendYieldPct": 3.02,
       "adtv20dIdr": 13042816775,
-      "lastSyncedAt": "18.36.33",
+      "lastSyncedAt": "18.37.16",
       "trailingRoePct": 18.9,
       "forwardAnnualizedRoePct": 22.38,
       "earningsGrowthYoYPct": 23.6,
@@ -111,7 +111,10 @@
       "qmjScore": 8.3,
       "babScore": 4.9,
       "hrpPropensity": 15.18,
-      "role": "DEFENSIVE_QUALITY"
+      "role": "DEFENSIVE_QUALITY",
+      "fundamentalsSource": "HARDCODED_SEED",
+      "fundamentalsFiscalPeriod": "SEED_BASELINE",
+      "fundamentalsNote": "fundamentals-snapshot.json masih berstatus BOOTSTRAP_PLACEHOLDER (belum diisi skrip GitHub Actions); menggunakan katalog seed (SEED_WARN — Grade Capped at C)."
     },
     {
       "ticker": "AUTO",
