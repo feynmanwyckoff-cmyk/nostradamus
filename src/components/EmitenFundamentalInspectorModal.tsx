@@ -13,6 +13,7 @@ import {
 import {
   getCustomCorporateActionOverrides,
   resetCorporateActionOverride,
+  resolveOfficialIdxSharesOutstanding,
   saveCustomCorporateActionOverride
 } from '../utils/corporateActionMiddleware';
 import { runQuantValuationInWorkerAsync } from '../utils/quantWorkerBridge';
@@ -467,6 +468,8 @@ export function EmitenFundamentalInspectorModal({
   const [splitRatioInput, setSplitRatioInput] = useState<string>('1');
   const [buybackNominalInput, setBuybackNominalInput] = useState<string>('0');
   const [quarterlyGrowthInput, setQuarterlyGrowthInput] = useState<string>('0');
+  const [sharesMillionInput, setSharesMillionInput] = useState<string>('0');
+  const [marketCapTrillionInput, setMarketCapTrillionInput] = useState<string>('0');
   const [workerTelemetry, setWorkerTelemetry] =
     useState<QuantWorkerOutputPayload | null>(null);
 
@@ -519,6 +522,18 @@ export function EmitenFundamentalInspectorModal({
           )
       )
     );
+    const resolvedShares =
+      joeliardiEval.rawTickerData?.sharesOutstanding ??
+      activeStock.sharesOutstanding ??
+      resolveOfficialIdxSharesOutstanding(activeStock.ticker, activeStock.splitRatioDivisor ?? 1) ??
+      Math.round((activeStock.liveMarketCapIdr ?? 1_500_000_000_000) / Math.max(1, activeStock.lastPrice));
+    const resolvedMcapIdr =
+      joeliardiEval.rawTickerData?.marketCap ??
+      joeliardiEval.liveMarketCapIdr ??
+      activeStock.liveMarketCapIdr ??
+      Math.round(resolvedShares * activeStock.lastPrice);
+    setSharesMillionInput((resolvedShares / 1_000_000).toFixed(2));
+    setMarketCapTrillionInput((resolvedMcapIdr / 1_000_000_000_000).toFixed(2));
 
     let cancelled = false;
     const boostMult = 1 + (joeliardiEval.catalystValuationBoostPct ?? 0) / 100;
@@ -587,6 +602,13 @@ export function EmitenFundamentalInspectorModal({
     const splitVal = Number.isFinite(rawSplit) && rawSplit > 0 ? rawSplit : 1;
     const buybackVal = Math.max(0, Number(buybackNominalInput.replace(',', '.')) || 0);
     const growthVal = Number(quarterlyGrowthInput.replace(',', '.')) || 0;
+    const sharesMillionVal = Math.max(1, Number(sharesMillionInput.replace(',', '.')) || 0);
+    const fullSharesVal = Math.round(sharesMillionVal * 1_000_000);
+    const rawMcapTrillion = Number(marketCapTrillionInput.replace(',', '.')) || 0;
+    const syncedMcapTrillion =
+      rawMcapTrillion > 0
+        ? rawMcapTrillion
+        : Number(((fullSharesVal * activeStock.lastPrice) / 1_000_000_000_000).toFixed(4));
     const trailingRoe = activeStock.trailingRoePct ?? activeStock.roe;
     const computedForwardRoe =
       growthVal > 0
@@ -598,10 +620,41 @@ export function EmitenFundamentalInspectorModal({
       splitRatioDivisor: splitVal,
       hasActiveBuyback: buybackVal > 0,
       buybackNominalBillionIdr: buybackVal,
+      sharesOutstanding: fullSharesVal,
+      liveMarketCapTrillionIdr: syncedMcapTrillion,
       earningsGrowthYoYPct: growthVal,
       latestQuarterLabel: 'Manual Calibrator Override',
       forwardAnnualizedRoePct: computedForwardRoe,
-      catalystNote: `Kalibrasi Manual (${activeStock.ticker}): Split 1:${splitVal} · Buyback Rp ${buybackVal.toLocaleString('id-ID')} Miliar · Pertumbuhan Laba Kuartal ${growthVal >= 0 ? '+' : ''}${growthVal.toFixed(1)}% YoY.`
+      catalystNote: `Kalibrasi Manual (${activeStock.ticker}): Shares ${(fullSharesVal / 1e9).toFixed(2)}M lbr · Market Cap Rp ${syncedMcapTrillion.toFixed(2)}T · Split 1:${splitVal} · Buyback Rp ${buybackVal.toLocaleString('id-ID')} Miliar · Pertumbuhan Laba Kuartal ${growthVal >= 0 ? '+' : ''}${growthVal.toFixed(1)}% YoY.`
+    });
+    setCatalystRevision((r) => r + 1);
+    if (onStockSynced) {
+      onStockSynced(enrichStockMetrics(activeStock));
+    }
+  };
+
+  const handleAutoSyncP0Sanity = () => {
+    if (!activeStock) return;
+    const rawSplit = Number(splitRatioInput.replace(',', '.'));
+    const splitVal = Number.isFinite(rawSplit) && rawSplit > 0 ? rawSplit : activeStock.splitRatioDivisor ?? 1;
+    const parsedInputShares = Math.round((Number(sharesMillionInput.replace(',', '.')) || 0) * 1_000_000);
+    const officialShares =
+      resolveOfficialIdxSharesOutstanding(activeStock.ticker, splitVal) ??
+      (parsedInputShares > 0 ? parsedInputShares : joeliardiEval?.rawTickerData?.sharesOutstanding ?? 1_000_000_000);
+    const syncedMarketCapTrillion = Number(
+      ((officialShares * activeStock.lastPrice) / 1_000_000_000_000).toFixed(4)
+    );
+    setSharesMillionInput((officialShares / 1_000_000).toFixed(2));
+    setMarketCapTrillionInput(syncedMarketCapTrillion.toFixed(2));
+
+    const existingCustom = getCustomCorporateActionOverrides()[activeStock.ticker];
+    saveCustomCorporateActionOverride({
+      ...existingCustom,
+      ticker: activeStock.ticker,
+      splitRatioDivisor: splitVal,
+      sharesOutstanding: officialShares,
+      liveMarketCapTrillionIdr: syncedMarketCapTrillion,
+      catalystNote: `Sinkronisasi P0 BEI (${activeStock.ticker}): Saham Beredar Resmi ${officialShares.toLocaleString('id-ID')} lbr × Harga Live Rp ${activeStock.lastPrice.toLocaleString('id-ID')} = Market Cap Rp ${syncedMarketCapTrillion.toFixed(2)} Triliun (Implied Δ 0,00%).`
     });
     setCatalystRevision((r) => r + 1);
     if (onStockSynced) {
@@ -1245,7 +1298,43 @@ export function EmitenFundamentalInspectorModal({
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 pt-1">
+              <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 pt-1">
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-neutral-600 mb-1">
+                    Saham Beredar BEI (Juta Lbr)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="1"
+                    value={sharesMillionInput}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSharesMillionInput(val);
+                      const numMillion = Number(val.replace(',', '.'));
+                      if (Number.isFinite(numMillion) && numMillion > 0) {
+                        const syncedTrillion = (numMillion * 1_000_000 * activeStock.lastPrice) / 1_000_000_000_000;
+                        setMarketCapTrillionInput(syncedTrillion.toFixed(2));
+                      }
+                    }}
+                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs text-[#111315]"
+                    title="Jumlah saham tercatat/beredar resmi BEI dalam Juta Lembar (otomatis menyinkronkan Market Cap = Shares × Harga Live)"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-neutral-600 mb-1">
+                    Market Cap Live (Rp Triliun)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.05"
+                    value={marketCapTrillionInput}
+                    onChange={(e) => setMarketCapTrillionInput(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs text-[#111315]"
+                    title="Kapitalisasi pasar dalam Rp Triliun (P0 Sanity Check lolos bila selisih MarketCap/Price vs Shares ≤ 3,0%)"
+                  />
+                </div>
                 <div>
                   <label className="block text-[10px] font-bold uppercase text-neutral-600 mb-1">
                     Rasio Stock Split (1 : N)
@@ -1285,7 +1374,15 @@ export function EmitenFundamentalInspectorModal({
                     className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs text-[#111315]"
                   />
                 </div>
-                <div className="flex items-end">
+                <div className="flex flex-col justify-end gap-1">
+                  <button
+                    type="button"
+                    onClick={handleAutoSyncP0Sanity}
+                    className="w-full px-2.5 py-1 text-[10px] font-mono font-bold text-[#0D5C46] bg-[#059669]/10 hover:bg-[#059669]/20 border border-[#059669]/40 rounded-xs cursor-pointer transition-colors"
+                    title="Sinkronkan otomatis Saham Beredar Resmi BEI × Harga Live agar Δ Implied Shares = 0,00% (SANITY: PASS)"
+                  >
+                    Auto-Sync P0 (Shares×Px)
+                  </button>
                   <button
                     type="submit"
                     className="w-full px-3 py-1.5 text-xs font-bold text-white bg-[#0D5C46] hover:bg-[#059669] rounded-xs cursor-pointer transition-colors"
@@ -3100,6 +3197,8 @@ export function EmitenFundamentalInspectorModal({
               valuationResult={joeliardiEval.valuationResult}
               tacticalOverlay={joeliardiEval.tacticalOverlay}
               riskSizingResult={joeliardiEval.riskSizingResult}
+              onAutoSyncSharesMarketCap={handleAutoSyncP0Sanity}
+              onOpenCalibrator={() => setShowCatalystCalibrator(true)}
             />
           )}
         </div>

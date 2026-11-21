@@ -384,6 +384,7 @@ export interface InterceptedCorporateActionState {
   adjustedAdtv20dIdr: number;
   hasActiveBuyback: boolean;
   buybackNominalIdr: number;
+  sharesOutstanding: number;
   liveMarketCapIdr: number;
   dynamicBuybackYieldPct: number;
   trailingRoePct: number;
@@ -399,6 +400,140 @@ export interface InterceptedCorporateActionState {
   catalystBadgeLabel?: string;
   catalystNarrative: string;
   isManualOverride: boolean;
+}
+
+/**
+ * Official IDX / KSEI Listed Shares Outstanding Registry (Jumlah Saham Tercatat Resmi BEI dalam lembar penuh).
+ * Used as the primary deterministic baseline for Market Cap = Shares Outstanding × Live Price
+ * so P0 Data Integrity Guardrails (Implied Shares vs Shares Outstanding) remain 100% reconciled.
+ */
+export const IDX_OFFICIAL_SHARES_OUTSTANDING_REGISTRY: Record<string, number> = {
+  // Financials
+  BBCA: 123_275_050_000,
+  BBRI: 151_559_001_604,
+  BMRI: 93_333_333_332,
+  BBNI: 37_297_300_424,
+  BRIS: 46_129_260_138,
+  BNGA: 25_131_606_843,
+  NISP: 22_945_296_979,
+  BTPS: 7_703_700_000,
+  BDMN: 9_773_552_870,
+  BNLI: 36_181_359_920,
+  BBTN: 14_034_412_110,
+  BJBR: 10_521_279_279,
+  BJTM: 15_015_498_082,
+  PNBN: 24_087_645_998,
+  ARTO: 13_856_250_000,
+  BBYB: 12_038_814_481,
+  BFIN: 15_967_115_620,
+  ADMF: 1_000_000_000,
+  // Energy
+  ADRO: 30_758_665_900,
+  ITMG: 1_129_925_000,
+  PTBA: 11_520_659_250,
+  PGAS: 24_241_508_196,
+  MEDC: 25_136_231_252,
+  AKRA: 20_073_474_600,
+  HRUM: 13_518_120_000,
+  INDY: 5_210_192_000,
+  BUMI: 371_320_733_776,
+  ELSA: 7_298_500_000,
+  RAJA: 4_227_082_500,
+  TOBA: 8_252_645_144,
+  DEWA: 21_853_733_792,
+  DOID: 8_618_719_650,
+  MBMA: 107_995_419_900,
+  // Basic Materials
+  AMMN: 72_518_217_600,
+  ANTM: 24_030_764_725,
+  INCO: 10_539_784_534,
+  MDKA: 24_472_983_771,
+  NCKL: 63_098_600_000,
+  SMGR: 6_751_540_089,
+  INTP: 3_681_231_699,
+  TPIA: 86_511_545_192,
+  BRPT: 93_747_218_044,
+  INKP: 5_470_982_941,
+  TKIM: 3_113_223_570,
+  TINS: 7_447_753_454,
+  ESSA: 17_226_975_700,
+  AVIA: 61_953_555_600,
+  // Consumer Non-Cyclicals
+  ICBP: 11_661_908_000,
+  INDF: 8_780_426_500,
+  MYOR: 22_358_699_725,
+  CMRY: 7_934_686_500,
+  AMRT: 41_524_501_700,
+  CPIN: 16_398_000_000,
+  TAPG: 19_852_545_000,
+  UNVR: 38_150_000_000,
+  JPFA: 11_726_575_201,
+  GGRM: 1_924_088_000,
+  HMSP: 116_318_076_900,
+  LSIP: 6_822_863_965,
+  AALI: 1_924_688_333,
+  SSMS: 9_525_000_000,
+  // Healthcare
+  KLBF: 46_875_122_110,
+  SIDO: 30_000_000_000,
+  MIKA: 14_246_349_500,
+  HEAL: 15_365_813_250,
+  SILO: 13_006_125_000,
+  TSPC: 4_509_864_300,
+  PRDA: 937_500_000,
+  SAME: 17_115_362_326,
+  // Infrastructures
+  TLKM: 99_062_216_600,
+  ISAT: 32_250_810_957,
+  EXCL: 13_128_430_665,
+  JSMR: 7_257_871_200,
+  BREN: 133_786_220_000,
+  PGEO: 41_495_047_624,
+  TOWR: 51_014_625_000,
+  TBIG: 22_656_999_445,
+  MTEL: 83_559_626_344,
+  ADHI: 8_407_608_879,
+  // Industrials
+  ASII: 40_483_553_140,
+  UNTR: 3_730_135_136,
+  ARNA: 7_341_430_900,
+  TOTL: 3_410_000_000,
+  MARK: 3_800_000_310,
+  HEXA: 840_000_000,
+  // Consumer Cyclicals
+  ACES: 17_150_000_000,
+  MAPI: 16_600_000_000,
+  MAPA: 28_504_000_000,
+  ERAA: 15_950_000_000,
+  AUTO: 4_819_733_000,
+  DRMA: 4_705_882_300,
+  // Properties & Real Estate
+  CTRA: 18_535_695_255,
+  BSDE: 21_171_365_812,
+  PWON: 48_159_602_400,
+  SMRA: 16_508_568_358,
+  PANI: 16_883_647_500,
+  // Technology & Logistics
+  GOTO: 1_201_409_662_836,
+  EMTK: 61_395_725_848,
+  BUKA: 103_109_256_342,
+  MKNT: 5_000_000_000,
+  ASSA: 3_691_218_669
+};
+
+export function resolveOfficialIdxSharesOutstanding(
+  ticker: string,
+  splitRatioDivisor = 1
+): number | undefined {
+  const clean = ticker.trim().toUpperCase().replace(/\.JK$/i, '');
+  const baseShares = IDX_OFFICIAL_SHARES_OUTSTANDING_REGISTRY[clean];
+  if (!baseShares || baseShares <= 0) return undefined;
+  const builtInSplit = IDX_CORPORATE_ACTION_CATALYST_REGISTRY[clean]?.splitRatioDivisor ?? 1;
+  const effectiveMultiplier =
+    splitRatioDivisor > 0 && Math.abs(splitRatioDivisor - builtInSplit) > 1e-4
+      ? splitRatioDivisor / builtInSplit
+      : 1;
+  return Math.max(1, Math.round(baseShares * effectiveMultiplier));
 }
 
 /**
@@ -569,7 +704,7 @@ export function interceptCorporateActionAndAnnualize(params: {
     )
   );
 
-  // Resolve Share Buyback & Live Market Cap (IDR)
+  // Resolve Share Buyback, Official IDX Shares Outstanding & Live Market Cap (IDR)
   const hasActiveBuyback = Boolean(
     custom?.hasActiveBuyback !== undefined
       ? custom.hasActiveBuyback
@@ -588,18 +723,39 @@ export function interceptCorporateActionAndAnnualize(params: {
     : 0;
   const buybackNominalIdr = Math.round(buybackNominalBillionIdr * 1_000_000_000);
 
-  // Dynamically scale Live Market Cap with live spot price relative to baseline reference price
-  const baseMarketCapTrillion =
-    custom?.liveMarketCapTrillionIdr ??
-    (builtIn
-      ? builtIn.liveMarketCapTrillionIdr *
-        (spotPrice / Math.max(50, builtIn.baselineRefPriceIdr / splitRatioDivisor))
-      : Math.max(1.5, (adjustedAdtv20dIdr * 185) / 1_000_000_000_000));
-
-  const liveMarketCapIdr = Math.max(
-    100_000_000_000,
-    Math.round(baseMarketCapTrillion * 1_000_000_000_000)
+  // Resolve Official IDX Shares Outstanding first, then compute Market Cap = Shares × Live Spot Price
+  const officialIdxShares = resolveOfficialIdxSharesOutstanding(clean, splitRatioDivisor);
+  const fallbackAdtvMarketCapIdr = Math.max(
+    1_500_000_000_000,
+    Math.round(adjustedAdtv20dIdr * 185)
   );
+  const builtInImpliedShares = builtIn
+    ? Math.round(
+        (builtIn.liveMarketCapTrillionIdr * 1_000_000_000_000) /
+          Math.max(50, builtIn.baselineRefPriceIdr / splitRatioDivisor)
+      )
+    : undefined;
+
+  const sharesOutstanding =
+    custom?.sharesOutstanding && custom.sharesOutstanding > 0
+      ? Math.round(custom.sharesOutstanding)
+      : officialIdxShares && officialIdxShares > 0
+      ? officialIdxShares
+      : stock.sharesOutstanding && stock.sharesOutstanding > 0
+      ? Math.round(stock.sharesOutstanding)
+      : builtInImpliedShares && builtInImpliedShares > 0
+      ? builtInImpliedShares
+      : custom?.liveMarketCapTrillionIdr && custom.liveMarketCapTrillionIdr > 0
+      ? Math.max(
+          10_000_000,
+          Math.round((custom.liveMarketCapTrillionIdr * 1_000_000_000_000) / Math.max(1, spotPrice))
+        )
+      : Math.max(100_000_000, Math.round(fallbackAdtvMarketCapIdr / Math.max(1, spotPrice)));
+
+  const liveMarketCapIdr =
+    custom?.liveMarketCapTrillionIdr && custom.liveMarketCapTrillionIdr > 0
+      ? Math.max(10_000_000_000, Math.round(custom.liveMarketCapTrillionIdr * 1_000_000_000_000))
+      : Math.max(10_000_000_000, Math.round(sharesOutstanding * spotPrice));
 
   // Dynamic Buyback Yield = (Nominal Buyback / Live Market Cap) * 100 (Full pass-through to TSY)
   const dynamicBuybackYieldPct =
@@ -672,6 +828,7 @@ export function interceptCorporateActionAndAnnualize(params: {
     adjustedAdtv20dIdr,
     hasActiveBuyback,
     buybackNominalIdr,
+    sharesOutstanding,
     liveMarketCapIdr,
     dynamicBuybackYieldPct,
     trailingRoePct,

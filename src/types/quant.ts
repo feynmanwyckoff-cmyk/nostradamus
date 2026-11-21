@@ -193,6 +193,7 @@ export interface CorporateActionOverrideInput {
   hasActiveBuyback?: boolean;
   buybackNominalBillionIdr?: number;
   liveMarketCapTrillionIdr?: number;
+  sharesOutstanding?: number;
   latestQuarterLabel?: string;
   trailingRoePct?: number;
   forwardAnnualizedRoePct?: number;

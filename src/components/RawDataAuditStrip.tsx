@@ -13,6 +13,8 @@ export interface RawDataAuditStripProps {
   valuationResult?: ValuationResult;
   tacticalOverlay?: TacticalOverlay;
   riskSizingResult?: RiskSizingResult;
+  onAutoSyncSharesMarketCap?: () => void;
+  onOpenCalibrator?: () => void;
 }
 
 const fmtIdrCompact = (val: number): string => {
@@ -55,7 +57,9 @@ export const RawDataAuditStrip: React.FC<RawDataAuditStripProps> = ({
   sanityReport,
   valuationResult,
   tacticalOverlay,
-  riskSizingResult
+  riskSizingResult,
+  onAutoSyncSharesMarketCap,
+  onOpenCalibrator
 }) => {
   const badgeColor =
     sanityReport.status === 'PASS'
@@ -270,12 +274,37 @@ export const RawDataAuditStrip: React.FC<RawDataAuditStripProps> = ({
         </div>
       )}
 
-      {/* Blocking / Warning Diagnostic Reasons */}
+      {/* Blocking / Warning Diagnostic Reasons + Quick P0 Reconciliation Actions */}
       {sanityReport.reasons.length > 0 && (
-        <div className="mt-2 rounded border border-amber-300 bg-amber-50/90 px-2.5 py-1.5 font-mono text-[10px] text-amber-950">
-          {sanityReport.reasons.map((reason, idx) => (
-            <div key={idx}>• {reason}</div>
-          ))}
+        <div className="mt-2 rounded border border-amber-300 bg-amber-50/90 px-2.5 py-2 font-mono text-[10px] text-amber-950 space-y-2">
+          <div className="space-y-1">
+            {sanityReport.reasons.map((reason, idx) => (
+              <div key={idx}>• {reason}</div>
+            ))}
+          </div>
+          {sanityReport.flags.includes('CRITICAL_DATA_MISMATCH') &&
+            (onAutoSyncSharesMarketCap || onOpenCalibrator) && (
+              <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-amber-300/70">
+                {onAutoSyncSharesMarketCap && (
+                  <button
+                    type="button"
+                    onClick={onAutoSyncSharesMarketCap}
+                    className="px-2.5 py-1 rounded bg-[#0D5C46] hover:bg-[#059669] text-white font-mono text-[10px] font-bold cursor-pointer transition-colors"
+                  >
+                    Sinkronkan P0 Otomatis (Market Cap = Shares × Harga Live)
+                  </button>
+                )}
+                {onOpenCalibrator && (
+                  <button
+                    type="button"
+                    onClick={onOpenCalibrator}
+                    className="px-2.5 py-1 rounded bg-white hover:bg-amber-100 text-amber-950 border border-amber-400 font-mono text-[10px] font-bold cursor-pointer transition-colors"
+                  >
+                    Kalibrasi Manual Shares / Market Cap
+                  </button>
+                )}
+              </div>
+            )}
         </div>
       )}
     </div>

@@ -1027,6 +1027,7 @@ export function buildRawTickerDataFromStock(params: {
   trailingRoePct: number;
   adtv20dIdr: number;
   liveMarketCapIdr: number;
+  sharesOutstanding?: number;
   sbnSpot10YPct: number;
   dynamicCostOfEquityPct: number;
   sustainableGrowthRatePct: number;
@@ -1046,6 +1047,7 @@ export function buildRawTickerDataFromStock(params: {
     trailingRoePct,
     adtv20dIdr,
     liveMarketCapIdr,
+    sharesOutstanding: paramSharesOutstanding,
     sbnSpot10YPct,
     dynamicCostOfEquityPct,
     sustainableGrowthRatePct,
@@ -1058,12 +1060,16 @@ export function buildRawTickerDataFromStock(params: {
   } = params;
 
   const sharesOutstanding =
-    stock.sharesOutstanding && stock.sharesOutstanding > 0
+    paramSharesOutstanding && paramSharesOutstanding > 0
+      ? Math.round(paramSharesOutstanding)
+      : stock.sharesOutstanding && stock.sharesOutstanding > 0
       ? Math.round(stock.sharesOutstanding)
       : Math.max(100_000_000, Math.round(liveMarketCapIdr / Math.max(1, price)));
 
   const calibratedMarketCap =
-    stock.liveMarketCapIdr && stock.liveMarketCapIdr > 0
+    liveMarketCapIdr && liveMarketCapIdr > 0
+      ? Math.round(liveMarketCapIdr)
+      : stock.liveMarketCapIdr && stock.liveMarketCapIdr > 0
       ? Math.round(stock.liveMarketCapIdr)
       : Math.round(sharesOutstanding * price);
 
@@ -1071,12 +1077,16 @@ export function buildRawTickerDataFromStock(params: {
   const bvps = Math.max(10, Math.round(estimatedBvpsIdr));
 
   const netIncomeTTM =
-    stock.netIncomeTTMIdr && stock.netIncomeTTMIdr > 0
+    stock.netIncomeTTMIdr &&
+    stock.netIncomeTTMIdr > 0 &&
+    Math.abs(epsTTM * sharesOutstanding - stock.netIncomeTTMIdr) / stock.netIncomeTTMIdr <= 0.05
       ? Math.round(stock.netIncomeTTMIdr)
       : Math.round(epsTTM * sharesOutstanding);
 
   const equityAttributable =
-    stock.equityAttributableIdr && stock.equityAttributableIdr > 0
+    stock.equityAttributableIdr &&
+    stock.equityAttributableIdr > 0 &&
+    Math.abs(bvps * sharesOutstanding - stock.equityAttributableIdr) / stock.equityAttributableIdr <= 0.05
       ? Math.round(stock.equityAttributableIdr)
       : Math.round(bvps * sharesOutstanding);
 

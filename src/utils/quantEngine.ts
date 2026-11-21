@@ -1236,8 +1236,16 @@ export function enrichStockMetrics(item: RawStockInput): StockMetrics {
       ? Math.round(item.lastPrice)
       : undefined;
 
-  // Intercept Corporate Actions (Split, Buyback) & Forward Annualized ROE before factor scoring
+  // Intercept Corporate Actions (Split, Buyback, Shares Outstanding) & Forward Annualized ROE before factor scoring
   const rawAnchor = resolveFundamentalAnchorPrice(item.ticker, Math.max(50, item.lastPrice || 50));
+  const estimatedAdtvFallback =
+    item.adtv20dIdr && item.adtv20dIdr > 0
+      ? item.adtv20dIdr
+      : estimateEmitenAdtv20dIdr({
+          ...(item as unknown as StockMetrics),
+          isLiquid,
+          dividendYieldPct
+        });
   const intercepted = interceptCorporateActionAndAnnualize({
     stock: {
       ...(item as unknown as StockMetrics),
@@ -1245,7 +1253,7 @@ export function enrichStockMetrics(item: RawStockInput): StockMetrics {
       dividendYieldPct
     },
     rawAnchorPriceIdr: rawAnchor,
-    rawAdtv20dIdr: item.adtv20dIdr || 1_500_000_000
+    rawAdtv20dIdr: estimatedAdtvFallback
   });
 
   const normalizedInput: RawStockInput = {
@@ -1256,6 +1264,7 @@ export function enrichStockMetrics(item: RawStockInput): StockMetrics {
     earningsGrowthYoYPct: intercepted.earningsGrowthYoYPct,
     hasActiveBuyback: intercepted.hasActiveBuyback,
     buybackNominalIdr: intercepted.buybackNominalIdr,
+    sharesOutstanding: intercepted.sharesOutstanding,
     liveMarketCapIdr: intercepted.liveMarketCapIdr,
     dynamicBuybackYieldPct: intercepted.dynamicBuybackYieldPct,
     splitRatioDivisor: intercepted.splitRatioDivisor,
@@ -2588,6 +2597,7 @@ export function evaluateJoeliardiOosFundamental(
     trailingRoePct,
     adtv20dIdr: rawSplitAdtv20dIdr,
     liveMarketCapIdr: corpIntercept.liveMarketCapIdr,
+    sharesOutstanding: corpIntercept.sharesOutstanding,
     sbnSpot10YPct: sbnSpot10YPct || 6.75,
     dynamicCostOfEquityPct: sbnCurve.dynamicCostOfEquityPct,
     sustainableGrowthRatePct: 5.5,
