@@ -217,18 +217,31 @@ export const RawDataAuditStrip: React.FC<RawDataAuditStripProps> = ({
           {valuationResult && (
             <div className="rounded border border-stone-200 bg-stone-50 px-2.5 py-1.5 font-mono text-[10px]">
               <div className="font-bold text-stone-700 uppercase">
-                P1 Valuation Guardrail ({valuationResult.appliedModule})
+                P1 ValuationLedger ({valuationResult.appliedModule})
               </div>
               <div className="mt-0.5 text-stone-600 tabular-nums">
                 Ensemble: Rp {valuationResult.ensembleFairValue.toLocaleString('id-ID')} | Floor
                 3-5Y: Rp {valuationResult.standaloneFloor.toLocaleString('id-ID')}{' '}
                 {valuationResult.isFloorClamped ? '[CLAMPED ≤90%]' : '[INVARIANT OK]'}
               </div>
-              <div className="text-stone-500 tabular-nums">
-                2-Stage RI: g1={(valuationResult.stage1GrowthRate * 100).toFixed(1)}% · gTerm=
-                {(valuationResult.terminalGrowthRate * 100).toFixed(1)}% · Spread=
-                {(valuationResult.terminalSpread * 100).toFixed(1)}%
-              </div>
+              {valuationResult.valuationLedger ? (
+                <div className="text-stone-500 tabular-nums">
+                  {valuationResult.valuationLedger.components
+                    .map(
+                      (c) =>
+                        `${c.label}: Rp ${c.value.toLocaleString('id-ID')} (${Math.round(
+                          c.weight * 100
+                        )}%)`
+                    )
+                    .join(' · ')}
+                </div>
+              ) : (
+                <div className="text-stone-500 tabular-nums">
+                  2-Stage RI: g1={(valuationResult.stage1GrowthRate * 100).toFixed(1)}% · gTerm=
+                  {(valuationResult.terminalGrowthRate * 100).toFixed(1)}% · Spread=
+                  {(valuationResult.terminalSpread * 100).toFixed(1)}%
+                </div>
+              )}
             </div>
           )}
 

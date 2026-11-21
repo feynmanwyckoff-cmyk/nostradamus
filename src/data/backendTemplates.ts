@@ -169,6 +169,44 @@ function computeQMJ(roe, der, opMargin) {
   return Number(Math.max(1.0, Math.min(10.0, 0.40 * r + 0.35 * d + 0.25 * m)).toFixed(1));
 }
 
+/**
+ * HOTFIX 1: IDX YTD-to-TTM Decumulator & Balance Sheet Snapshot Guard (GAS / Node Scraper)
+ * - Flow metrics (Revenue, Operating Profit, Net Income, EBITDA, OCF, Capex) in IDX reports are cumulative YTD (Q1=3M, Q2=6M, Q3=9M, Q4=12M).
+ * - Decumulates Q2_standalone = Q2_ytd - Q1_ytd, Q3_standalone = Q3_ytd - Q2_ytd, Q4_standalone = Q4_ytd - Q3_ytd.
+ * - Balance Sheet metrics (Total Equity, Total Assets, Total Debt, Cash, Shares) are point-in-time snapshots from the 1 latest quarter only.
+ */
+function decumulateIDXQuarters(quarters) {
+  if (!Array.isArray(quarters) || quarters.length === 0) return [];
+  const sorted = [...quarters].sort((a, b) =>
+    a.fiscalYear !== b.fiscalYear ? a.fiscalYear - b.fiscalYear : a.quarter - b.quarter
+  );
+  const byYearQuarter = new Map();
+  for (const row of sorted) byYearQuarter.set(\`\${row.fiscalYear}-Q\${row.quarter}\`, row);
+
+  return sorted.map((row) => {
+    const isYtd = row.reportType !== 'STANDALONE';
+    const prevQ = row.quarter > 1 ? byYearQuarter.get(\`\${row.fiscalYear}-Q\${row.quarter - 1}\`) : undefined;
+    const canDecumulate = isYtd && row.quarter > 1 && prevQ && prevQ.reportType !== 'STANDALONE';
+    const dec = (curr, prev) => (canDecumulate ? curr - prev : curr);
+    return {
+      fiscalYear: row.fiscalYear,
+      quarter: row.quarter,
+      revenueStandalone: dec(row.revenue, prevQ?.revenue ?? 0),
+      operatingProfitStandalone: dec(row.operatingProfit, prevQ?.operatingProfit ?? 0),
+      netIncomeStandalone: dec(row.netIncome, prevQ?.netIncome ?? 0),
+      ebitdaStandalone: dec(row.ebitda ?? 0, prevQ?.ebitda ?? 0),
+      ocfStandalone: dec(row.ocf ?? 0, prevQ?.ocf ?? 0),
+      capexStandalone: Math.abs(dec(Math.abs(row.capex ?? 0), Math.abs(prevQ?.capex ?? 0))),
+      // Point-in-Time Snapshot Guard: Never summed or annualized
+      equityAttributableSnapshot: row.equityAttributable,
+      totalAssetsSnapshot: row.totalAssets,
+      cashSnapshot: row.cash,
+      totalDebtSnapshot: row.totalDebt,
+      sharesOutstandingSnapshot: row.sharesOutstanding
+    };
+  });
+}
+
 async function main() {
   console.log('1. Fetching IDX:COMPOSITE (^JKSE) 1Y series...');
   const ihsg = await fetchYahooSeries('^JKSE', '1y');

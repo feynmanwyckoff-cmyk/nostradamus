@@ -1,13 +1,17 @@
 import {
+  EnsembleComponent,
   MarketRegimeStatus,
+  QuarterlyRawRow,
   RawTickerData,
   RiskSizingResult,
   SanityCheckStatus,
   SanityFlag,
   SanityReport,
+  StandaloneQuarter,
   StatArbSignalType,
   StockMetrics,
   TacticalOverlay,
+  ValuationLedger,
   ValuationResult
 } from '../types/quant';
 
@@ -41,7 +45,244 @@ export function roundToIdxTickSize(rawPrice: number): number {
 
 /**
  * ============================================================================
- * P0: DATA INTEGRITY GUARDRAILS (PRE-PROCESSING LAYER)
+ * HOTFIX 1: IDX YTD-TO-TTM DECUMULATOR & BALANCE SHEET SNAPSHOT GUARD
+ * ============================================================================
+ * Indonesian Stock Exchange (BEI / IDX) quarterly financial statements are
+ * reported on a cumulative Year-to-Date (YTD) basis:
+ *   Q1 = 3M, Q2 = 6M, Q3 = 9M, Q4 = 12M (Full Year).
+ * Summing 4 raw YTD rows directly inflates Flow Metrics (Revenue, EBIT, Net Income,
+ * EBITDA, OCF, CapEx) by ~1.8x–2.5x. Furthermore, Balance Sheet Stock Metrics
+ * (Total Equity, Total Assets, Total Debt, Cash, Shares) are point-in-time
+ * snapshots and MUST NEVER be summed across quarters or multiplied by an annualizer.
+ */
+export function decumulateIDXQuarters(quarters: QuarterlyRawRow[]): StandaloneQuarter[] {
+  if (!Array.isArray(quarters) || quarters.length === 0) return [];
+
+  // 1. Sort chronologically by fiscalYear ascending, then quarter (1, 2, 3, 4) ascending
+  const sorted = [...quarters].sort((a, b) => {
+    if (a.fiscalYear !== b.fiscalYear) return a.fiscalYear - b.fiscalYear;
+    return a.quarter - b.quarter;
+  });
+
+  // Index by `${fiscalYear}-Q${quarter}` for exact within-year YTD decumulation
+  const rowMap = new Map<string, QuarterlyRawRow>();
+  for (const row of sorted) {
+    rowMap.set(`${row.fiscalYear}-Q${row.quarter}`, row);
+  }
+
+  return sorted.map((row) => {
+    const isStandaloneInput = row.reportType === 'STANDALONE';
+    const ebitdaRaw = Number(row.ebitda ?? row.operatingProfit * 1.15) || 0;
+    const ocfRaw = Number(row.ocf ?? row.netIncome) || 0;
+    const capexRaw = Number(row.capex ?? 0) || 0;
+
+    if (isStandaloneInput || row.quarter === 1) {
+      return {
+        fiscalYear: row.fiscalYear,
+        quarter: row.quarter,
+        periodLabel: `${row.fiscalYear}-Q${row.quarter} (Standalone 3M)`,
+        isDecumulatedFromYtd: !isStandaloneInput && row.quarter === 1,
+        revenue: Math.round(Number(row.revenue) || 0),
+        operatingProfit: Math.round(Number(row.operatingProfit) || 0),
+        netIncome: Math.round(Number(row.netIncome) || 0),
+        ebitda: Math.round(ebitdaRaw),
+        ocf: Math.round(ocfRaw),
+        capex: Math.round(capexRaw),
+        // Balance sheet stock metrics: strictly point-in-time snapshot
+        equityAttributable: row.equityAttributable,
+        totalAssets: row.totalAssets,
+        totalDebt: row.totalDebt,
+        cash: row.cash,
+        sharesOutstanding: row.sharesOutstanding
+      };
+    }
+
+    // YTD Decumulation: Q2_standalone = Q2_ytd - Q1_ytd, Q3 = Q3_ytd - Q2_ytd, Q4 = Q4_ytd - Q3_ytd
+    const prevQuarter = (row.quarter - 1) as 1 | 2 | 3;
+    const prevRow = rowMap.get(`${row.fiscalYear}-Q${prevQuarter}`);
+
+    if (prevRow && prevRow.reportType !== 'STANDALONE') {
+      const prevEbitda = Number(prevRow.ebitda ?? prevRow.operatingProfit * 1.15) || 0;
+      const prevOcf = Number(prevRow.ocf ?? prevRow.netIncome) || 0;
+      const prevCapex = Number(prevRow.capex ?? 0) || 0;
+
+      return {
+        fiscalYear: row.fiscalYear,
+        quarter: row.quarter,
+        periodLabel: `${row.fiscalYear}-Q${row.quarter} (Standalone 3M Decumulated)`,
+        isDecumulatedFromYtd: true,
+        revenue: Math.round((Number(row.revenue) || 0) - (Number(prevRow.revenue) || 0)),
+        operatingProfit: Math.round(
+          (Number(row.operatingProfit) || 0) - (Number(prevRow.operatingProfit) || 0)
+        ),
+        netIncome: Math.round((Number(row.netIncome) || 0) - (Number(prevRow.netIncome) || 0)),
+        ebitda: Math.round(ebitdaRaw - prevEbitda),
+        ocf: Math.round(ocfRaw - prevOcf),
+        capex: Math.round(capexRaw - prevCapex),
+        // Balance sheet stock metrics: strictly point-in-time snapshot (NEVER subtracted)
+        equityAttributable: row.equityAttributable,
+        totalAssets: row.totalAssets,
+        totalDebt: row.totalDebt,
+        cash: row.cash,
+        sharesOutstanding: row.sharesOutstanding
+      };
+    }
+
+    // Fallback when prior adjacent quarter in the same fiscal year is missing:
+    // Proportionally de-accumulate single quarter (1 / quarter) of YTD flow metrics
+    const quarterShare = 1 / row.quarter;
+    return {
+      fiscalYear: row.fiscalYear,
+      quarter: row.quarter,
+      periodLabel: `${row.fiscalYear}-Q${row.quarter} (Standalone 3M Prop-Fallback)`,
+      isDecumulatedFromYtd: true,
+      revenue: Math.round((Number(row.revenue) || 0) * quarterShare),
+      operatingProfit: Math.round((Number(row.operatingProfit) || 0) * quarterShare),
+      netIncome: Math.round((Number(row.netIncome) || 0) * quarterShare),
+      ebitda: Math.round(ebitdaRaw * quarterShare),
+      ocf: Math.round(ocfRaw * quarterShare),
+      capex: Math.round(capexRaw * quarterShare),
+      equityAttributable: row.equityAttributable,
+      totalAssets: row.totalAssets,
+      totalDebt: row.totalDebt,
+      cash: row.cash,
+      sharesOutstanding: row.sharesOutstanding
+    };
+  });
+}
+
+export interface DecumulatedIdxTtmAndSnapshotResult {
+  standaloneQuarters: StandaloneQuarter[];
+  ttmMethod: 'SUM_4_STANDALONE_QUARTERS' | 'SAFE_YTD_BRIDGE_FORMULA';
+  // Flow Metrics (TTM 12M)
+  revenueTTM: number;
+  operatingProfitTTM: number;
+  netIncomeTTM: number;
+  ebitdaTTM: number;
+  ocfTTM: number;
+  capexTTM: number;
+  // Stock Metrics (Strictly Latest 1-Period Snapshot — NEVER summed or annualized)
+  latestSnapshotPeriod: string;
+  equityAttributable: number;
+  totalAssets: number;
+  totalDebt: number;
+  cash: number;
+  sharesOutstanding: number;
+}
+
+/**
+ * Computes TTM Flow Metrics and enforces the Latest-Snapshot Guard on Balance Sheet Stock Metrics.
+ * - Uses the sum of the last 4 consecutive standalone quarters when available.
+ * - Falls back to `TTM = Current_YTD + Prior_FY_12M - Prior_Same_Period_YTD` if quarters have gaps.
+ * - Balance Sheet metrics (`equityAttributable`, `totalAssets`, `cash`, `totalDebt`, `sharesOutstanding`)
+ *   are taken strictly from the 1 latest chronological reporting period.
+ */
+export function computeIdxTtmAndSnapshotFromQuarters(
+  quarters: QuarterlyRawRow[]
+): DecumulatedIdxTtmAndSnapshotResult | null {
+  if (!Array.isArray(quarters) || quarters.length === 0) return null;
+
+  const sortedRaw = [...quarters].sort((a, b) => {
+    if (a.fiscalYear !== b.fiscalYear) return a.fiscalYear - b.fiscalYear;
+    return a.quarter - b.quarter;
+  });
+  const latestRaw = sortedRaw[sortedRaw.length - 1];
+  const standaloneQuarters = decumulateIDXQuarters(sortedRaw);
+
+  // Check if the last 4 standalone quarters are strictly consecutive
+  let areLast4Consecutive = false;
+  if (standaloneQuarters.length >= 4) {
+    const last4 = standaloneQuarters.slice(-4);
+    areLast4Consecutive = true;
+    for (let i = 1; i < last4.length; i++) {
+      const prev = last4[i - 1];
+      const curr = last4[i];
+      const expectedNextQuarter = prev.quarter === 4 ? 1 : prev.quarter + 1;
+      const expectedNextYear = prev.quarter === 4 ? prev.fiscalYear + 1 : prev.fiscalYear;
+      if (curr.quarter !== expectedNextQuarter || curr.fiscalYear !== expectedNextYear) {
+        areLast4Consecutive = false;
+        break;
+      }
+    }
+  }
+
+  let revenueTTM = 0;
+  let operatingProfitTTM = 0;
+  let netIncomeTTM = 0;
+  let ebitdaTTM = 0;
+  let ocfTTM = 0;
+  let capexTTM = 0;
+  let ttmMethod: DecumulatedIdxTtmAndSnapshotResult['ttmMethod'] = 'SUM_4_STANDALONE_QUARTERS';
+
+  // Look for safe YTD bridge components: Current_YTD + Prior_FY_12M - Prior_Same_Period_YTD
+  const priorFyQ4 = sortedRaw.find(
+    (r) => r.fiscalYear === latestRaw.fiscalYear - 1 && r.quarter === 4 && r.reportType !== 'STANDALONE'
+  );
+  const priorSamePeriodYtd = sortedRaw.find(
+    (r) =>
+      r.fiscalYear === latestRaw.fiscalYear - 1 &&
+      r.quarter === latestRaw.quarter &&
+      r.reportType !== 'STANDALONE'
+  );
+
+  if (!areLast4Consecutive && latestRaw.reportType !== 'STANDALONE' && priorFyQ4 && priorSamePeriodYtd) {
+    ttmMethod = 'SAFE_YTD_BRIDGE_FORMULA';
+    revenueTTM = Math.round(latestRaw.revenue + priorFyQ4.revenue - priorSamePeriodYtd.revenue);
+    operatingProfitTTM = Math.round(
+      latestRaw.operatingProfit + priorFyQ4.operatingProfit - priorSamePeriodYtd.operatingProfit
+    );
+    netIncomeTTM = Math.round(
+      latestRaw.netIncome + priorFyQ4.netIncome - priorSamePeriodYtd.netIncome
+    );
+    const curEb = Number(latestRaw.ebitda ?? latestRaw.operatingProfit * 1.15) || 0;
+    const fyEb = Number(priorFyQ4.ebitda ?? priorFyQ4.operatingProfit * 1.15) || 0;
+    const prEb = Number(priorSamePeriodYtd.ebitda ?? priorSamePeriodYtd.operatingProfit * 1.15) || 0;
+    ebitdaTTM = Math.round(curEb + fyEb - prEb);
+
+    const curOcf = Number(latestRaw.ocf ?? latestRaw.netIncome) || 0;
+    const fyOcf = Number(priorFyQ4.ocf ?? priorFyQ4.netIncome) || 0;
+    const prOcf = Number(priorSamePeriodYtd.ocf ?? priorSamePeriodYtd.netIncome) || 0;
+    ocfTTM = Math.round(curOcf + fyOcf - prOcf);
+
+    const curCapex = Number(latestRaw.capex ?? 0) || 0;
+    const fyCapex = Number(priorFyQ4.capex ?? 0) || 0;
+    const prCapex = Number(priorSamePeriodYtd.capex ?? 0) || 0;
+    capexTTM = Math.round(curCapex + fyCapex - prCapex);
+  } else {
+    const last4 = standaloneQuarters.slice(-4);
+    const scaleFactor = last4.length > 0 ? 4 / last4.length : 1;
+    revenueTTM = Math.round(last4.reduce((acc, q) => acc + q.revenue, 0) * scaleFactor);
+    operatingProfitTTM = Math.round(
+      last4.reduce((acc, q) => acc + q.operatingProfit, 0) * scaleFactor
+    );
+    netIncomeTTM = Math.round(last4.reduce((acc, q) => acc + q.netIncome, 0) * scaleFactor);
+    ebitdaTTM = Math.round(last4.reduce((acc, q) => acc + q.ebitda, 0) * scaleFactor);
+    ocfTTM = Math.round(last4.reduce((acc, q) => acc + q.ocf, 0) * scaleFactor);
+    capexTTM = Math.round(last4.reduce((acc, q) => acc + q.capex, 0) * scaleFactor);
+  }
+
+  // Balance Sheet Snapshot Guard: Strictly take from latest 1 period (latestRaw)
+  return {
+    standaloneQuarters,
+    ttmMethod,
+    revenueTTM,
+    operatingProfitTTM,
+    netIncomeTTM,
+    ebitdaTTM,
+    ocfTTM,
+    capexTTM,
+    latestSnapshotPeriod: `${latestRaw.fiscalYear}-Q${latestRaw.quarter}`,
+    equityAttributable: Math.round(Number(latestRaw.equityAttributable) || 0),
+    totalAssets: Math.round(Number(latestRaw.totalAssets) || 0),
+    totalDebt: Math.round(Number(latestRaw.totalDebt) || 0),
+    cash: Math.round(Number(latestRaw.cash) || 0),
+    sharesOutstanding: Math.round(Number(latestRaw.sharesOutstanding) || 0)
+  };
+}
+
+/**
+ * ============================================================================
+ * P0: DATA INTEGRITY GUARDRAILS (PRE-PROCESSING LAYER + HOTFIX 1 GUARDS)
  * ============================================================================
  * Mandatory pre-processing validation executed BEFORE conviction scores and
  * intrinsic valuations are computed:
@@ -50,21 +291,16 @@ export function roundToIdxTickSize(rawPrice: number): number {
  *      flag CRITICAL_DATA_MISMATCH.
  *    - Validation 2: Check consistency of (epsTTM * sharesOutstanding) vs netIncomeTTM (tolerance <= 5%),
  *      and (bvps * sharesOutstanding) vs equityAttributable (tolerance <= 5%).
- *    - If validation fails, block Grade A / Core Conviction ranking (max status DATA_AUDIT_REQUIRED)
- *      and output specific mismatch reasons.
- * 2. ADTV Unit Normalizer (Lot vs Shares & Thousands vs Full IDR):
- *    - Explicitly normalizes trading volume to shares (Lot * 100) and currency to full IDR.
- *    - Sanity trap: If marketCap >= 1e12 (Rp 1 Trillion) and adtv20dIDR < 50e6 (Rp 50 Million/day),
- *      throw warning ADTV_UNIT_ANOMALY so daily 5% ADTV absorption cap is not paralyzed.
- * 3. Default TTM Valuation Basis & Dual-Confirmation Catalyst:
- *    - Enforces TTM (Trailing Twelve Months) as default basis for EPS, ROE, and primary intrinsic valuation
- *      (stops aggressive linear annualization such as 9M * 1.33x for main intrinsic value).
- *    - CATALYST ACTIVE only activates if passing Dual Confirmation: YoY Net Income growth (>= 15%)
- *      MUST be confirmed by YoY Operating Profit growth (>= 10%) in the same period.
- * 4. SBN 10Y Risk-Free Rate Curve Freshness Check:
- *    - Tracks metadata rfLastUpdated for spotRf10Y.
- *    - If SBN data age > 7 days, activates STALE_RF_DATA flag, adds +50 bps safety buffer to Ke,
- *      and downgrades conviction badge eligibility until the SBN curve is refreshed.
+ *    - Validation 3 (Hotfix 1 Double-Counting Trap):
+ *      Check `revenueTTM / latestFullYearRevenue > 1.65` (without explicit corporate action/acquisition flag)
+ *      OR `impliedPER < 4` on non-cyclical issuers with high ROE (`roeTTM >= 15%`).
+ *      If triggered, throw `YTD_CUMULATIVE_SUM_SUSPECT` and fail `PASS` status.
+ *    - Validation 4 (Hotfix 1 Balance Sheet Sanity Check):
+ *      Ensure `equityAttributable <= totalAssets` and check if `bvps` jumped `> 50%` vs `priorYearBvps`
+ *      without a rights issue (`hasRightsIssue`). If violated, throw `BALANCE_SHEET_ANOMALY` and fail `PASS`.
+ * 2. ADTV Unit Normalizer (Lot vs Shares & Thousands vs Full IDR)
+ * 3. Default TTM Valuation Basis & Dual-Confirmation Catalyst
+ * 4. SBN 10Y Risk-Free Rate Curve Freshness Check
  */
 export function validateFundamentalSanity(raw: RawTickerData): SanityReport {
   const flags: SanityFlag[] = [];
@@ -83,6 +319,7 @@ export function validateFundamentalSanity(raw: RawTickerData): SanityReport {
   const epsTTM = Number(raw.epsTTM) || 0;
   const bvps = Number(raw.bvps) || 0;
   const netIncomeTTM = Number(raw.netIncomeTTM) || 0;
+  const revenueTTM = Number(raw.revenueTTM) || 0;
   const equityAttributable = Number(raw.equityAttributable) || 0;
 
   const impliedNetIncomeFromEps = epsTTM * sharesOutstanding;
@@ -121,6 +358,88 @@ export function validateFundamentalSanity(raw: RawTickerData): SanityReport {
   }
 
   // -------------------------------------------------------------------------
+  // 1B. HOTFIX 1: DOUBLE-COUNTING TRAP (YTD CUMULATIVE SUM SUSPECT)
+  // -------------------------------------------------------------------------
+  const sanitizedEpsTTM = epsTTM;
+  const sanitizedRoeTTM = toDecimalRate(
+    raw.roeTTM,
+    equityAttributable > 0 ? netIncomeTTM / equityAttributable : 0.12
+  );
+
+  const latestFullYearRevenue = Number(raw.latestFullYearRevenue) || 0;
+  const revenueTtmToFullYearRatio =
+    latestFullYearRevenue > 0 && revenueTTM > 0
+      ? Number((revenueTTM / latestFullYearRevenue).toFixed(4))
+      : undefined;
+
+  const isCyclicalSector =
+    raw.isCyclicalSector ??
+    (raw.sector === 'Energy' ||
+      raw.sector === 'Basic Materials' ||
+      raw.sector === 'Properties & Real Estate');
+
+  const impliedPER = epsTTM > 0 ? price / epsTTM : 999;
+
+  let isYtdCumulativeSuspect = false;
+  if (
+    typeof revenueTtmToFullYearRatio === 'number' &&
+    revenueTtmToFullYearRatio > 1.65 &&
+    !raw.hasAcquisitionOrCorpAction
+  ) {
+    isYtdCumulativeSuspect = true;
+    reasons.push(
+      `[YTD_CUMULATIVE_SUM_SUSPECT] Double-Counting Trap: Rasio Revenue TTM / Full-Year Terakhir mencapai ${revenueTtmToFullYearRatio.toFixed(2)}x (> batas 1,65x) tanpa flag aksi korporasi/akuisisi. Indikasi kuat parser menjumlahkan 4 kuartal kumulatif YTD BEI secara langsung.`
+    );
+  }
+
+  if (
+    epsTTM > 0 &&
+    impliedPER < 4.0 &&
+    !isCyclicalSector &&
+    sanitizedRoeTTM >= 0.15 &&
+    !raw.hasAcquisitionOrCorpAction
+  ) {
+    isYtdCumulativeSuspect = true;
+    reasons.push(
+      `[YTD_CUMULATIVE_SUM_SUSPECT] Double-Counting Trap: Implied PER (${impliedPER.toFixed(2)}x < 4,0x) tidak wajar pada emiten non-siklikal (${raw.sector}) ber-ROE tinggi (${(sanitizedRoeTTM * 100).toFixed(1)}%). Indikasi penggembungan EPS TTM akibat penjumlahan kuartal kumulatif YTD.`
+    );
+  }
+
+  if (isYtdCumulativeSuspect && !flags.includes('YTD_CUMULATIVE_SUM_SUSPECT')) {
+    flags.push('YTD_CUMULATIVE_SUM_SUSPECT');
+  }
+
+  // -------------------------------------------------------------------------
+  // 1C. HOTFIX 1: BALANCE SHEET SANITY CHECK (SNAPSHOT GUARD)
+  // -------------------------------------------------------------------------
+  let isBalanceSheetAnomaly = false;
+  const totalAssets = Number(raw.totalAssets) || 0;
+  if (totalAssets > 0 && equityAttributable > totalAssets) {
+    isBalanceSheetAnomaly = true;
+    reasons.push(
+      `[BALANCE_SHEET_ANOMALY] Pelanggaran Identitas Neraca: Equity Attributable (Rp ${Math.round(equityAttributable).toLocaleString('id-ID')}) melebihi Total Assets (Rp ${Math.round(totalAssets).toLocaleString('id-ID')}). Indikasi penjumlahan metrik stok neraca lintas kuartal.`
+    );
+  }
+
+  const priorYearBvps = Number(raw.priorYearBvps) || 0;
+  if (priorYearBvps > 0 && bvps > priorYearBvps * 1.50 && !raw.hasRightsIssue) {
+    isBalanceSheetAnomaly = true;
+    const bvpsJumpPct = ((bvps - priorYearBvps) / priorYearBvps) * 100;
+    reasons.push(
+      `[BALANCE_SHEET_ANOMALY] Lonjakan BVPS tidak wajar sebesar +${bvpsJumpPct.toFixed(1)}% (BVPS Rp ${Math.round(bvps).toLocaleString('id-ID')} vs Prior FY Rp ${Math.round(priorYearBvps).toLocaleString('id-ID')} > +50%) tanpa Rights Issue. Indikasi metrik ekuitas neraca disetahunkan atau dijumlahkan lintas kuartal.`
+    );
+  }
+
+  if (isBalanceSheetAnomaly) {
+    if (!flags.includes('BALANCE_SHEET_ANOMALY')) {
+      flags.push('BALANCE_SHEET_ANOMALY');
+    }
+    if (!flags.includes('CRITICAL_DATA_MISMATCH')) {
+      flags.push('CRITICAL_DATA_MISMATCH');
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // 2. ADTV UNIT NORMALIZER (LOT VS LEMBAR & RIBUAN VS RUPIAH PENUH)
   // -------------------------------------------------------------------------
   const currencyMultiplier =
@@ -141,7 +460,6 @@ export function validateFundamentalSanity(raw: RawTickerData): SanityReport {
     normalizedAdtv20dShares = Math.round(raw.adtv20dVolumeRaw * lotToSharesMultiplier);
     normalizedAdtv20dIDR = Math.round(normalizedAdtv20dShares * price);
   } else if (typeof raw.adtv20dIDR === 'number' && raw.adtv20dIDR > 0) {
-    // Apply explicit currency scale and lot multiplier if raw feed passed lot-based value
     normalizedAdtv20dIDR = Math.round(raw.adtv20dIDR * currencyMultiplier * lotToSharesMultiplier);
     normalizedAdtv20dShares = Math.round(normalizedAdtv20dIDR / price);
   }
@@ -161,12 +479,6 @@ export function validateFundamentalSanity(raw: RawTickerData): SanityReport {
   // -------------------------------------------------------------------------
   // 3. BASIS VALUASI DEFAULT TTM & DUAL-CONFIRMATION CATALYST
   // -------------------------------------------------------------------------
-  const sanitizedEpsTTM = epsTTM;
-  const sanitizedRoeTTM = toDecimalRate(
-    raw.roeTTM,
-    equityAttributable > 0 ? netIncomeTTM / equityAttributable : 0.12
-  );
-
   if (
     typeof raw.forwardAnnualizedEps === 'number' &&
     raw.forwardAnnualizedEps > sanitizedEpsTTM * 1.05
@@ -225,13 +537,16 @@ export function validateFundamentalSanity(raw: RawTickerData): SanityReport {
   // -------------------------------------------------------------------------
   // AGGREGATE SANITY STATUS & GRADE A BLOCKING
   // -------------------------------------------------------------------------
-  const status: SanityCheckStatus = isCriticalMismatch
+  const hasHardIntegrityFailure =
+    isCriticalMismatch || isYtdCumulativeSuspect || isBalanceSheetAnomaly;
+
+  const status: SanityCheckStatus = hasHardIntegrityFailure
     ? 'FAIL'
     : isAdtvAnomaly || isRfStale || flags.includes('CATALYST_UNCONFIRMED_NON_OP')
     ? 'WARN'
     : 'PASS';
 
-  const isGradeABlocked = isCriticalMismatch;
+  const isGradeABlocked = hasHardIntegrityFailure;
   const maxAllowedStatus: SanityReport['maxAllowedStatus'] = isGradeABlocked
     ? 'DATA_AUDIT_REQUIRED'
     : isRfStale
@@ -249,6 +564,9 @@ export function validateFundamentalSanity(raw: RawTickerData): SanityReport {
     netIncomeMismatchPct: Number(netIncomeMismatchPct.toFixed(4)),
     impliedEquityFromBvps: Math.round(impliedEquityFromBvps),
     equityMismatchPct: Number(equityMismatchPct.toFixed(4)),
+    revenueTtmToFullYearRatio,
+    isYtdCumulativeSuspect,
+    isBalanceSheetAnomaly,
     isGradeABlocked,
     maxAllowedStatus,
     normalizedAdtv20dShares,
@@ -931,9 +1249,21 @@ export function calculateVolatilityTargetedSizingAndStop(
   }
 
   if (input.sanityReport.isGradeABlocked) {
-    penaltyReasons.push(
-      `[CRITICAL_DATA_MISMATCH] Rekonsiliasi Shares/EPS/BVPS gagal: Peringkat Grade A / Core Conviction diblokir otomatis → Status dikunci ke DATA_AUDIT_REQUIRED.`
-    );
+    if (input.sanityReport.flags.includes('YTD_CUMULATIVE_SUM_SUSPECT')) {
+      penaltyReasons.push(
+        `[YTD_CUMULATIVE_SUM_SUSPECT] Double-Counting Trap terdeteksi pada Flow Metrics TTM: Peringkat Grade A / Core Conviction diblokir otomatis → Status dikunci ke DATA_AUDIT_REQUIRED.`
+      );
+    }
+    if (input.sanityReport.flags.includes('BALANCE_SHEET_ANOMALY')) {
+      penaltyReasons.push(
+        `[BALANCE_SHEET_ANOMALY] Pelanggaran Snapshot Neraca (Equity > Assets atau lonjakan BVPS >50% tanpa Rights Issue): Peringkat Grade A diblokir → Status dikunci ke DATA_AUDIT_REQUIRED.`
+      );
+    }
+    if (input.sanityReport.flags.includes('CRITICAL_DATA_MISMATCH')) {
+      penaltyReasons.push(
+        `[CRITICAL_DATA_MISMATCH] Rekonsiliasi Shares/EPS/BVPS gagal: Peringkat Grade A / Core Conviction diblokir otomatis → Status dikunci ke DATA_AUDIT_REQUIRED.`
+      );
+    }
   }
 
   const adjustedConvictionScore = Math.max(
@@ -948,7 +1278,7 @@ export function calculateVolatilityTargetedSizingAndStop(
   if (input.isHscFlagged) {
     finalConvictionGrade = 'D (AVOID / HSC)';
   } else if (input.sanityReport.isGradeABlocked) {
-    // P0.1 Guardrail: Block Grade A / Core Conviction if CRITICAL_DATA_MISMATCH
+    // P0.1 & Hotfix 1 Guardrail: Block Grade A / Core Conviction if CRITICAL_DATA_MISMATCH or YTD_CUMULATIVE_SUM_SUSPECT
     finalConvictionGrade = 'DATA_AUDIT_REQUIRED';
   } else if (adjustedConvictionScore >= 82 && !input.sanityReport.isRfStale) {
     finalConvictionGrade = 'A+ (CORE CONVICTION)';
@@ -973,7 +1303,7 @@ export function calculateVolatilityTargetedSizingAndStop(
   const fundamentalInvalidationStopTriggers: string[] = [
     `Invalidasi ROIC/ROE: ROIC TTM atau ROE TTM turun di bawah Effective Cost of Equity (Ke ${kePctLabel}%) selama 2 kuartal berturut-turut.`,
     `Invalidasi Neraca & Kas: Rasio OCF/NI jatuh di bawah ambang batas sehat atau Net DER melompat > 1,20x tanpa ekspansi aset produktif.`,
-    `Invalidasi Integritas Data: Status SANITY_CHECK berubah menjadi FAIL (CRITICAL_DATA_MISMATCH) atau muncul indikasi distribusi tidak wajar KSEI.`
+    `Invalidasi Integritas Data: Status SANITY_CHECK berubah menjadi FAIL (CRITICAL_DATA_MISMATCH / YTD_CUMULATIVE_SUM_SUSPECT) atau muncul indikasi distribusi tidak wajar KSEI.`
   ];
 
   const trancheExecutionGuide = `Tranche 1 (Inisiasi): ${tranche1AllocationPct.toFixed(
@@ -1098,6 +1428,17 @@ export function buildRawTickerDataFromStock(params: {
       ? Math.round(stock.revenueTTMIdr)
       : Math.round(netIncomeTTM / netMarginDecimal);
 
+  // Calibrate prior full-year revenue and prior-year BVPS from decumulated growth trajectory
+  const safeGrowthClip = Math.max(-0.35, Math.min(0.45, (earningsGrowthYoYPct || 8) / 100));
+  const latestFullYearRevenue = Math.max(
+    1,
+    Math.round(revenueTTM / Math.max(0.75, 1 + safeGrowthClip * 0.65))
+  );
+  const priorYearBvps = Math.max(
+    10,
+    Math.round(bvps / Math.max(0.85, 1 + Math.min(0.24, Math.max(0.03, trailingRoePct / 100 * 0.55))))
+  );
+
   const operatingProfitTTM =
     stock.operatingProfitTTMIdr && stock.operatingProfitTTMIdr > 0
       ? Math.round(stock.operatingProfitTTMIdr)
@@ -1115,6 +1456,7 @@ export function buildRawTickerDataFromStock(params: {
 
   const der = Math.max(0.02, stock.debtToEquity || 0.5);
   const totalDebt = Math.round(equityAttributable * der);
+  const totalAssets = Math.round(equityAttributable + totalDebt + equityAttributable * 0.15);
   const cashAndEquivalents = Math.round(equityAttributable * 0.22);
   const investedCapital = Math.max(1, equityAttributable + totalDebt - cashAndEquivalents);
   const nopatTTM = Math.round(operatingProfitTTM * 0.78);
@@ -1177,11 +1519,14 @@ export function buildRawTickerDataFromStock(params: {
     epsAvg5Y,
     forwardAnnualizedEps: forwardEpsIdr,
     bvps,
+    priorYearBvps,
     netIncomeTTM,
     revenueTTM,
+    latestFullYearRevenue,
     operatingProfitTTM,
     ebitdaTTM,
     equityAttributable,
+    totalAssets,
     totalDebt,
     cashAndEquivalents,
     capexTTM,

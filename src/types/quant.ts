@@ -401,6 +401,7 @@ export interface JoeliardiOosEvaluation {
   rawTickerData?: RawTickerData;
   sanityReport?: SanityReport;
   valuationResult?: ValuationResult;
+  valuationLedger?: ValuationLedger;
   tacticalOverlay?: TacticalOverlay;
   riskSizingResult?: RiskSizingResult;
 }
@@ -415,10 +416,80 @@ export type SanityCheckStatus = 'PASS' | 'WARN' | 'FAIL';
 
 export type SanityFlag =
   | 'CRITICAL_DATA_MISMATCH'
+  | 'YTD_CUMULATIVE_SUM_SUSPECT'
+  | 'BALANCE_SHEET_ANOMALY'
   | 'ADTV_UNIT_ANOMALY'
   | 'STALE_RF_DATA'
   | 'CATALYST_UNCONFIRMED_NON_OP'
   | 'LINEAR_ANNUALIZATION_BLOCKED';
+
+/**
+ * HOTFIX 1: IDX YTD-to-TTM Decumulator & Balance Sheet Snapshot Guard Interfaces
+ */
+export interface QuarterlyRawRow {
+  fiscalYear: number;             // e.g. 2025, 2026
+  quarter: 1 | 2 | 3 | 4;         // Q1=3M, Q2=6M, Q3=9M, Q4=12M
+  reportType?: 'YTD' | 'STANDALONE'; // Default on IDX (BEI) is 'YTD'
+  // Flow Metrics (Cumulative YTD in IDX quarterly filings)
+  revenue: number;
+  operatingProfit: number;
+  netIncome: number;
+  ebitda?: number;
+  ocf?: number;
+  capex?: number;
+  // Balance Sheet Stock Metrics (Point-in-Time Snapshot — NEVER summed or annualized)
+  equityAttributable?: number;
+  totalAssets?: number;
+  totalDebt?: number;
+  cash?: number;
+  sharesOutstanding?: number;
+}
+
+export interface StandaloneQuarter {
+  fiscalYear: number;
+  quarter: 1 | 2 | 3 | 4;
+  periodLabel: string;            // e.g. '2026-Q3 (Standalone 3M)'
+  isDecumulatedFromYtd: boolean;
+  // Standalone 3-Month Flow Metrics
+  revenue: number;
+  operatingProfit: number;
+  netIncome: number;
+  ebitda: number;
+  ocf: number;
+  capex: number;
+  // Point-in-Time Snapshot Balance Sheet Metrics from that quarter
+  equityAttributable?: number;
+  totalAssets?: number;
+  totalDebt?: number;
+  cash?: number;
+  sharesOutstanding?: number;
+}
+
+/**
+ * HOTFIX 2: Single Source of Truth ValuationLedger for 3-Leg Ensemble & Narrative Synchronization
+ */
+export interface EnsembleComponent {
+  id: 'SECTOR_2STAGE_RI' | 'MULTISTAGE_RIM' | 'HIST_EVEBITDA_BAND';
+  label: string;
+  value: number;
+  weight: number; // total semua weight harus === 1.0
+}
+
+export interface ValuationLedger {
+  ticker: string;
+  valuationBasis: 'TTM_DEFAULT';
+  components: readonly [EnsembleComponent, EnsembleComponent, EnsembleComponent];
+  totalWeight: number;            // Guaranteed === 1.0
+  ensembleFairValue: number;      // Final weighted intrinsic fair value (IDR)
+  standaloneFloor: number;        // Graham-Joeliardi Invariant Floor <= ensembleFairValue
+  formulaAudit: string;           // Exact mathematical trace matching UI, CoT, PNG, and PDF
+  epsTTM: number;
+  bvps: number;
+  roeTTM: number;                 // Percentage (e.g., 18.5 for 18.5%)
+  netIncomeYoYPct: number;        // YoY Net Income growth (%)
+  operatingProfitYoYPct: number;  // YoY Operating Profit growth (%)
+  isDualCatalystConfirmed: boolean;
+}
 
 export interface RawTickerData {
   ticker: string;
@@ -432,8 +503,14 @@ export interface RawTickerData {
   epsAvg5Y?: number;              // 5-Year Historical Normalized Average EPS (Rp/lembar)
   forwardAnnualizedEps?: number;  // Optional linear annualized EPS (blocked from primary intrinsic & floor)
   bvps: number;                   // Book Value Per Share in full IDR (Rp/lembar)
+  priorYearBvps?: number;         // Prior Full-Year BVPS for Balance Sheet jump >50% check
+  hasRightsIssue?: boolean;       // Explicit Rights Issue / Private Placement flag
   netIncomeTTM: number;           // TTM Net Income Attributable to Parent in full IDR (Rp)
   revenueTTM: number;             // TTM Revenue in full IDR (Rp)
+  latestFullYearRevenue?: number; // Prior Full-Year (12M) Revenue for Double-Counting YTD sum trap
+  hasAcquisitionOrCorpAction?: boolean; // Explicit M&A / Spin-off / Consolidation flag
+  isCyclicalSector?: boolean;     // True if Pure Cyclical commodity/energy issuer
+   quarterlyRawRows?: QuarterlyRawRow[]; // Optional raw quarterly YTD filings for decumulation
   operatingProfitTTM: number;     // TTM Operating Profit / EBIT in full IDR (Rp)
   ebitdaTTM?: number;             // TTM EBITDA in full IDR (Rp)
   equityAttributable: number;     // Total Equity Attributable to Parent in full IDR (Rp)
@@ -477,7 +554,7 @@ export interface SanityReport {
   status: SanityCheckStatus;      // 'PASS' | 'WARN' | 'FAIL'
   flags: SanityFlag[];
   reasons: string[];
-  // 1. Cross-Check Shares, EPS, BVPS
+  // 1. Cross-Check Shares, EPS, BVPS & Hotfix 1 YTD Double-Counting / Balance Sheet Guards
   impliedShares: number;
   sharesOutstanding: number;
   sharesMismatchPct: number;      // |impliedShares - sharesOutstanding| / sharesOutstanding
@@ -485,7 +562,10 @@ export interface SanityReport {
   netIncomeMismatchPct: number;   // |(epsTTM * sharesOutstanding) - netIncomeTTM| / |netIncomeTTM|
   impliedEquityFromBvps: number;
   equityMismatchPct: number;      // |(bvps * sharesOutstanding) - equityAttributable| / |equityAttributable|
-  isGradeABlocked: boolean;       // True if CRITICAL_DATA_MISMATCH
+  revenueTtmToFullYearRatio?: number;
+  isYtdCumulativeSuspect?: boolean;
+  isBalanceSheetAnomaly?: boolean;
+  isGradeABlocked: boolean;       // True if CRITICAL_DATA_MISMATCH, YTD_CUMULATIVE_SUM_SUSPECT, or BALANCE_SHEET_ANOMALY
   maxAllowedStatus: 'CORE_CONVICTION_ELIGIBLE' | 'DOWNGRADED_STALE_RF' | 'DATA_AUDIT_REQUIRED';
   // 2. Normalized ADTV 20D
   normalizedAdtv20dShares: number;
@@ -539,6 +619,7 @@ export interface ValuationResult {
     evEbitda5YAnchor: number;
   };
   ensembleFairValue: number;      // Pure intrinsic weighted fair value (IDR)
+  valuationLedger?: ValuationLedger; // Single Source of Truth Ledger for 3-leg Ensemble & Narrative
   // Standalone Floor (Graham-Joeliardi) with Hard Invariant: standaloneFloor <= ensembleFairValue
   rawStandaloneFloor: number;
   standaloneFloor: number;        // Clamped: Math.min(rawStandaloneFloor, ensembleFairValue * 0.90) if raw > ensemble

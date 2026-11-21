@@ -65,10 +65,11 @@ const VERDICT_TERMS = [
 const METRIC_LABELS = [
   'Ohlson-Penman RIM',
   'Multi-Stage RIM',
-  'Forward Annualized ROE',
-  'Forward ROE',
-  'Trailing ROE',
-  'Fwd ROE',
+  'Hist EV/EBITDA Band 5Y',
+  'Hist PBV Band 5Y',
+  'ValuationLedger',
+  'ROE TTM',
+  'EPS TTM',
   'Dynamic Buyback Yield',
   'Buyback Yield',
   'Total Shareholder Yield',
@@ -1015,7 +1016,9 @@ export function renderInspectorReportCanvas(
   const spotIdr = stock.lastPrice;
   const fairIdr = joeliardiEval.intrinsicValueIdr;
   const mosVal = joeliardiEval.marginOfSafetyPct;
-  const stopPriceIdr = Math.round((Math.min(spotIdr, fairIdr) * 0.91) / 5) * 5;
+  const stopPriceIdr =
+    joeliardiEval.riskSizingResult?.stopLossPriceIDR ??
+    Math.round((spotIdr * 0.86) / 5) * 5;
   const rangeMatch = ex?.idealEntryZone?.match(/Rp\s*[\d.,]+\s*[–-]\s*Rp\s*[\d.,]+/i);
   const extractedRange = rangeMatch
     ? rangeMatch[0]
@@ -1346,14 +1349,16 @@ export function renderInspectorReportCanvas(
   const subtitleText = `Sektor IDX-IC: ${stock.sector}   |   Tren IHSG: ${regimeStatus}   |   Dicetak: ${formatIndonesianPrintTimestamp()}`;
   drawTextAutoFit(ctx, subtitleText, headerTextX, 91, LOGICAL_WIDTH - headerTextX - 40, 600, 11.2, 8.8);
 
-  // Right Grade Badge in Header
+  // Right Grade Badge in Header (Synchronized with Post-Penalty Score & Sanity Audit Block)
+  const isGradeBlockedExport =
+    stock.isHscFlagged || Boolean(joeliardiEval.sanityReport?.isGradeABlocked);
   const gradeText = `${joeliardiEval.convictionGrade} · SKOR ${joeliardiEval.totalConvictionScore}/100`;
   ctx.font = '700 11.5px Montserrat, sans-serif';
   const gradeW = ctx.measureText(gradeText).width + 26;
   const gradeX = LOGICAL_WIDTH - 38 - gradeW;
   const gradeY = 47;
   drawRoundedRect(ctx, gradeX, gradeY, gradeW, 32, 4);
-  ctx.fillStyle = stock.isHscFlagged
+  ctx.fillStyle = isGradeBlockedExport
     ? 'rgba(225, 29, 72, 0.2)'
     : joeliardiEval.totalConvictionScore >= 75
     ? 'rgba(16, 185, 129, 0.18)'
@@ -1361,7 +1366,7 @@ export function renderInspectorReportCanvas(
     ? 'rgba(245, 158, 11, 0.18)'
     : 'rgba(225, 29, 72, 0.2)';
   ctx.fill();
-  ctx.strokeStyle = stock.isHscFlagged
+  ctx.strokeStyle = isGradeBlockedExport
     ? '#F43F5E'
     : joeliardiEval.totalConvictionScore >= 75
     ? '#10B981'
@@ -1369,7 +1374,7 @@ export function renderInspectorReportCanvas(
     ? '#F59E0B'
     : '#F43F5E';
   ctx.stroke();
-  ctx.fillStyle = stock.isHscFlagged
+  ctx.fillStyle = isGradeBlockedExport
     ? '#FB7185'
     : joeliardiEval.totalConvictionScore >= 75
     ? '#34D399'
@@ -1496,7 +1501,7 @@ export function renderInspectorReportCanvas(
     ctx.fillStyle = '#34D399';
     drawTextAutoFit(
       ctx,
-      'Forward-Looking Annualizer & Dynamic Decision Tree Aktif',
+      'Basis TTM_DEFAULT Terdekumulasi & Dual-Confirmation Catalyst Aktif',
       50 + bW + 10,
       curY + 21,
       catalystLeftMaxW - bW - 14,
@@ -1521,8 +1526,16 @@ export function renderInspectorReportCanvas(
     ctx.strokeStyle = 'rgba(16, 185, 129, 0.45)';
     ctx.stroke();
 
-    const trailRoe = (joeliardiEval.trailingRoePct ?? stock.roe).toFixed(1);
-    const fwdRoe = (joeliardiEval.forwardAnnualizedRoePct ?? stock.roe).toFixed(1);
+    const roeTtmDisplay = (
+      joeliardiEval.valuationLedger?.roeTTM ??
+      joeliardiEval.trailingRoePct ??
+      stock.roe
+    ).toFixed(1);
+    const niYoYDisplay = (
+      joeliardiEval.valuationLedger?.netIncomeYoYPct ??
+      stock.earningsGrowthYoYPct ??
+      0
+    ).toFixed(1);
     const bbYield = (joeliardiEval.dynamicBuybackYieldPct ?? 0).toFixed(2);
     const tsyVal = (
       joeliardiEval.totalShareholderYieldPct ?? joeliardiEval.forwardDividendYieldPct
@@ -1531,7 +1544,7 @@ export function renderInspectorReportCanvas(
     ctx.fillStyle = '#F9FAFB';
     drawTextAutoFit(
       ctx,
-      `Trail ROE: ${trailRoe}% → Fwd ROE: ${fwdRoe}%`,
+      `ROE TTM: ${roeTtmDisplay}% · NI YoY: ${Number(niYoYDisplay) >= 0 ? '+' : ''}${niYoYDisplay}%`,
       rBoxX + 10,
       rBoxY + 17,
       rBoxW - 20,
@@ -1733,8 +1746,11 @@ export function renderInspectorReportCanvas(
 
   curY += 102;
 
-  // 6. Row 2: 4 Academic Pillar Scores (Synchronized with Fwd ROE, TSY/Net Payout breakdown, & Decision State)
-  const fwdRoeVal = joeliardiEval.forwardAnnualizedRoePct ?? stock.roe;
+  // 6. Row 2: 4 Academic Pillar Scores (Synchronized with ROE TTM, TSY/Net Payout breakdown, & Decision State)
+  const roeTtmVal =
+    joeliardiEval.valuationLedger?.roeTTM ??
+    joeliardiEval.trailingRoePct ??
+    stock.roe;
   const tsyOrNetPayoutLabel =
     (joeliardiEval.netDebtPaydownYieldPct ?? 0) > 0 && stock.sector !== 'Financials'
       ? 'TSY'
@@ -1756,7 +1772,7 @@ export function renderInspectorReportCanvas(
       score: joeliardiEval.businessQualityScore,
       color: '#10B981',
       lines: [
-        `GP/A (Novy-Marx): ${gpToAssets.toFixed(1)}% (Fwd ROE ${fwdRoeVal.toFixed(1)}%)`,
+        `GP/A (Novy-Marx): ${gpToAssets.toFixed(1)}% (ROE TTM ${roeTtmVal.toFixed(1)}%)`,
         `OCF/NI (Anti-Junk): ${ocfNi.toFixed(2)}x ${
           accrualPen > 0
             ? `(Penalti -${accrualPen} pts)`
@@ -1987,9 +2003,26 @@ export function renderInspectorReportCanvas(
   ctx.font = '700 10.5px "Fira Code", monospace';
   ctx.fillText('Perhitungan harga wajar :', 50, curY + 19);
 
+  const ledger = joeliardiEval.valuationLedger;
+  const histLegCard = ensembleCards.find(
+    (x) => x.id === 'historical_evebitda_5y' || x.id === 'statarb_relative_peer'
+  );
+  const leg1Idr = ledger?.components[0]?.value ?? secFairIdr;
+  const leg2Idr = ledger?.components[1]?.value ?? rimFairIdr;
+  const leg3Idr =
+    ledger?.components[2]?.value ??
+    histLegCard?.fairPriceIdr ??
+    joeliardiEval.valuationResult?.valuationLedger?.components[2]?.value ??
+    statArbFairIdr;
+  const leg3Label =
+    ledger?.components[2]?.label ??
+    histLegCard?.shortLabel ??
+    (stock.sector === 'Financials' ? 'Hist PBV Band 5Y' : 'Hist EV/EBITDA Band 5Y');
+
   const formulaStr =
+    ledger?.formulaAudit ||
     joeliardiEval.ensembleFormulaAudit ||
-    `(Rp ${formatIdrPriceDisplay(secFairIdr)} × 45%) + (Rp ${formatIdrPriceDisplay(rimFairIdr)} × 35%) + (Rp ${formatIdrPriceDisplay(statArbFairIdr)} × 20%) = Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)}`;
+    `(Rp ${formatIdrPriceDisplay(leg1Idr)} × 45%) + (Rp ${formatIdrPriceDisplay(leg2Idr)} × 35%) + (Rp ${formatIdrPriceDisplay(leg3Idr)} × 20%) = Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)}`;
   ctx.fillStyle = '#F9FAFB';
   drawTextAutoFit(
     ctx,
@@ -2005,19 +2038,22 @@ export function renderInspectorReportCanvas(
 
   curY += 38;
 
-  // Dynamic Weights & Contributions from joeliardiEval.valuationMethodsComparison
+  // Dynamic Weights & Contributions from Single Source of Truth ValuationLedger
   const secLeg = ensembleCards.find((x) => x.id === 'sector_specific_matrix');
   const rimLeg = ensembleCards.find((x) => x.id === 'multistage_rim');
-  const relLeg = ensembleCards.find((x) => x.id === 'statarb_relative_peer');
+  const relLeg = histLegCard;
 
-  const secWeightDec = (secLeg?.weightPct ?? 45) / 100;
-  const rimWeightDec = (rimLeg?.weightPct ?? 35) / 100;
-  const relWeightDec = (relLeg?.weightPct ?? 20) / 100;
+  const secWeightDec =
+    ledger?.components[0]?.weight ?? (secLeg?.weightPct ?? 45) / 100;
+  const rimWeightDec =
+    ledger?.components[1]?.weight ?? (rimLeg?.weightPct ?? 35) / 100;
+  const relWeightDec =
+    ledger?.components[2]?.weight ?? (relLeg?.weightPct ?? 20) / 100;
 
   const totalModelFinalIdr = Math.max(1, joeliardiEval.intrinsicValueIdr);
-  const secContribIdr = Math.round(secFairIdr * secWeightDec);
-  const rimContribIdr = Math.round(rimFairIdr * rimWeightDec);
-  const relContribIdr = Math.max(0, Math.round(statArbFairIdr * relWeightDec));
+  const secContribIdr = Math.round(leg1Idr * secWeightDec);
+  const rimContribIdr = Math.round(leg2Idr * rimWeightDec);
+  const relContribIdr = Math.max(0, Math.round(leg3Idr * relWeightDec));
 
   const secSharePct = Math.max(0, Math.min(100, Math.round(secWeightDec * 100)));
   const rimSharePct = Math.max(0, Math.min(100, Math.round(rimWeightDec * 100)));
@@ -2034,7 +2070,7 @@ export function renderInspectorReportCanvas(
             id: 'quantedge_ensemble',
             name: 'Quantedge Sector-Adaptive Ensemble',
             shortLabel: 'Quantedge Ensemble',
-            metricBasis: `45% ${secShortLabel} + 35% RIM (${joeliardiEval.rimFadeYears ?? 6}Y) + 20% RelVal`,
+            metricBasis: `${secSharePct}% ${secShortLabel} + ${rimSharePct}% RIM (${joeliardiEval.rimFadeYears ?? 6}Y) + ${relSharePct}% ${leg3Label}`,
             impliedMultipleLabel: `PBV ${joeliardiEval.impliedPbv}x`,
             fairMultipleLabel: `Just. ${justPbv}x`,
             fairPriceIdr: joeliardiEval.intrinsicValueIdr,
@@ -2049,31 +2085,31 @@ export function renderInspectorReportCanvas(
             metricBasis: `${secShortLabel} Aktual vs Wajar Sektor`,
             impliedMultipleLabel: `${joeliardiEval.sectorPrimaryImpliedMultiple ?? joeliardiEval.impliedPbv}x`,
             fairMultipleLabel: `${joeliardiEval.sectorPrimaryFairMultiple ?? justPbv}x`,
-            fairPriceIdr: secFairIdr,
-            mosPct: calcMethodMos(secFairIdr),
-            weightPct: 45
+            fairPriceIdr: leg1Idr,
+            mosPct: calcMethodMos(leg1Idr),
+            weightPct: secSharePct
           },
           {
             id: 'multistage_rim',
             name: `Multi-Stage Residual Income (Ohlson-Penman ${joeliardiEval.rimFadeYears ?? 6}Y)`,
             shortLabel: 'Multi-Stage RIM',
-            metricBasis: `BVPS Rp ${joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')} · Fwd ROE ${fwdRoeVal.toFixed(1)}% · ω=${rimOmegaStr}`,
+            metricBasis: `BVPS Rp ${joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')} · ROE TTM ${roeTtmVal.toFixed(1)}% · ω=${rimOmegaStr}`,
             impliedMultipleLabel: `PBV ${joeliardiEval.impliedPbv}x`,
             fairMultipleLabel: `RIM ${justPbv}x`,
-            fairPriceIdr: rimFairIdr,
-            mosPct: calcMethodMos(rimFairIdr),
-            weightPct: 35
+            fairPriceIdr: leg2Idr,
+            mosPct: calcMethodMos(leg2Idr),
+            weightPct: rimSharePct
           },
           {
-            id: 'statarb_relative_peer',
-            name: `Relative Value & StatArb vs ${peerTkr} (ρ=${rhoVal.toFixed(2)})`,
-            shortLabel: 'Relative Value',
-            metricBasis: `Z-Score ${zScoreVal >= 0 ? '+' : ''}${zScoreVal.toFixed(2)}σ · Peer Hedonic Rp ${formatIdrPriceDisplay(joeliardiEval.agnosticPeerFairValueIdr ?? statArbFairIdr)}`,
-            impliedMultipleLabel: `Z ${zScoreVal.toFixed(2)}σ`,
-            fairMultipleLabel: `ρ ${rhoVal.toFixed(2)}`,
-            fairPriceIdr: statArbFairIdr,
-            mosPct: calcMethodMos(statArbFairIdr),
-            weightPct: 20
+            id: 'historical_evebitda_5y',
+            name: `Historical 5Y Multiple Band (${leg3Label})`,
+            shortLabel: leg3Label,
+            metricBasis: `Mean-Reversion Band 5Y vs Sektor ${stock.sector}`,
+            impliedMultipleLabel: `PER ${joeliardiEval.impliedPer}x`,
+            fairMultipleLabel: `PBV ${justPbv}x`,
+            fairPriceIdr: leg3Idr,
+            mosPct: calcMethodMos(leg3Idr),
+            weightPct: relSharePct
           }
         ];
 

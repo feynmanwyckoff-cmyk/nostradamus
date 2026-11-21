@@ -44,6 +44,7 @@ import {
   applyDispersionPenalty,
   buildRawTickerDataFromStock,
   buildTacticalOverlayFromStatArb,
+  buildValuationLedger,
   calculateGrahamJoeliardiBenchmark,
   calculateHistoricalEvEbitda5YAnchor,
   calculateTwoStageCapexAggressorRI,
@@ -3211,15 +3212,9 @@ export function evaluateJoeliardiOosFundamental(
   });
 
   const totalConvictionScore = riskSizingResult.adjustedConvictionScore;
-  const convictionGrade: JoeliardiOosEvaluation['convictionGrade'] = stock.isHscFlagged
-    ? 'D (AVOID / HSC)'
-    : !sanityReport.isGradeABlocked &&
-      (isDefensiveDiscountAnomaly ||
-        isCyclicalStrongBuyZScore ||
-        (decisionTree.decisionState === 'BUY_ON_STRENGTH_CATALYST' && totalConvictionScore >= 74)) &&
-      !sanityReport.convictionBadgeDowngraded
-    ? 'A+ (CORE CONVICTION)'
-    : riskSizingResult.finalConvictionGrade;
+  // HOTFIX 3: Strict post-penalty score threshold mapping — block any < 82 override to A+ (CORE CONVICTION)
+  const convictionGrade: JoeliardiOosEvaluation['convictionGrade'] =
+    riskSizingResult.finalConvictionGrade;
 
   const betaWeightedSizingCapPct = riskSizingResult.finalMaxAllocationPct;
   const maxSafeAllocationIdr = sanityReport.maxDailyAbsorption5PctIDR;
@@ -3228,7 +3223,22 @@ export function evaluateJoeliardiOosFundamental(
       ? Math.min(availablePortfolioCashIdr, maxSafeAllocationIdr)
       : maxSafeAllocationIdr;
 
-  // Build structured ValuationResult (P1 deliverable)
+  // HOTFIX 2: Single Source of Truth ValuationLedger for 3-leg Ensemble & TTM metrics
+  const valuationLedger = buildValuationLedger({
+    ticker: stock.ticker,
+    components: dynamicEnsemble.components,
+    ensembleFairValue: intrinsicValueIdr,
+    standaloneFloor: grahamBenchmark.grahamJoeliardiBenchmarkIdr,
+    formulaAudit: ensembleFormulaAudit,
+    epsTTM: estimatedEpsIdr,
+    bvps: estimatedBvpsIdr,
+    roeTTM: ttmRoeBasisPct,
+    netIncomeYoYPct: rawTickerData.netIncomeYoYPct,
+    operatingProfitYoYPct: rawTickerData.operatingProfitYoYPct,
+    isDualCatalystConfirmed: sanityReport.isDualCatalystConfirmed
+  });
+
+  // Build structured ValuationResult (P1 deliverable + Hotfix 2 ValuationLedger)
   const valuationResult: ValuationResult = {
     ticker: stock.ticker,
     appliedModule: effectiveModule,
@@ -3242,6 +3252,7 @@ export function evaluateJoeliardiOosFundamental(
       evEbitda5YAnchor: Number(dynamicEnsemble.legs[2].weight.toFixed(4))
     },
     ensembleFairValue: intrinsicValueIdr,
+    valuationLedger,
     rawStandaloneFloor: grahamBenchmark.grahamJoeliardiRawIdr,
     standaloneFloor: grahamBenchmark.grahamJoeliardiBenchmarkIdr,
     normalizedBasisEps3Y5Y: grahamBenchmark.normalizedBasisEpsIdr,
@@ -3609,6 +3620,7 @@ export function evaluateJoeliardiOosFundamental(
     rawTickerData,
     sanityReport,
     valuationResult,
+    valuationLedger,
     tacticalOverlay,
     riskSizingResult
   };

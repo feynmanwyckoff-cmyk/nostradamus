@@ -1,13 +1,15 @@
-import { RawTickerData } from '../types/quant';
+import { QuarterlyRawRow, RawTickerData } from '../types/quant';
 import {
   applyDispersionPenalty,
   buildTacticalOverlayFromStatArb,
   calculateInvariantGrahamJoeliardiFloor,
   calculateTwoStageCapexAggressorRI,
   calculateVolatilityTargetedSizingAndStop,
+  computeIdxTtmAndSnapshotFromQuarters,
+  decumulateIDXQuarters,
   validateFundamentalSanity
 } from './institutionalGuardrailsEngine';
-import { DynamicEnsembleWeighter } from './valuationEngine';
+import { buildValuationLedger, DynamicEnsembleWeighter } from './valuationEngine';
 
 export interface UnitTestCaseResult {
   id: string;
@@ -599,6 +601,251 @@ export function runInstitutionalGuardrailsUnitTests(): UnitTestCaseResult[] {
       passed: assertions.every((a) => a.passed),
       expectedSummary: 'Dispersi 53.3% memotong skor keyakinan 12 poin dan membatasi Tranche 1 ke 35%',
       actualSummary: `Dispersi: ${(dispersionRes.modelDispersion * 100).toFixed(1)}% | Penalti: -${dispersionRes.dispersionPenaltyPts} pts | Skor Akhir: ${dispersionRes.adjustedConvictionScore}/100`,
+      assertions
+    });
+  }
+
+  // ==========================================================================
+  // TEST 10 (HOTFIX 1): IDX YTD-to-TTM Decumulator, Balance Sheet Snapshot Guard & Double-Counting Trap
+  // ==========================================================================
+  {
+    const sampleYtdRows: QuarterlyRawRow[] = [
+      {
+        fiscalYear: 2025,
+        quarter: 4,
+        reportType: 'YTD',
+        revenue: 100_000_000_000_000, // FY25 12M = 100T (Q1=24T, Q2=25T, Q3=25T, Q4=26T)
+        operatingProfit: 40_000_000_000_000,
+        netIncome: 30_000_000_000_000,
+        ebitda: 44_000_000_000_000,
+        ocf: 33_000_000_000_000,
+        capex: 4_000_000_000_000,
+        equityAttributable: 200_000_000_000_000,
+        totalAssets: 800_000_000_000_000,
+        cash: 60_000_000_000_000,
+        totalDebt: 50_000_000_000_000,
+        sharesOutstanding: 100_000_000_000
+      },
+      {
+        fiscalYear: 2025,
+        quarter: 3,
+        reportType: 'YTD',
+        revenue: 74_000_000_000_000, // 9M25 = 74T -> Q4_2025 standalone = 100T - 74T = 26T
+        operatingProfit: 29_500_000_000_000,
+        netIncome: 22_000_000_000_000,
+        ebitda: 32_500_000_000_000,
+        ocf: 24_000_000_000_000,
+        capex: 3_000_000_000_000,
+        equityAttributable: 192_000_000_000_000,
+        totalAssets: 780_000_000_000_000,
+        cash: 58_000_000_000_000,
+        totalDebt: 50_000_000_000_000,
+        sharesOutstanding: 100_000_000_000
+      },
+      {
+        fiscalYear: 2026,
+        quarter: 1,
+        reportType: 'YTD',
+        revenue: 27_000_000_000_000, // 3M26 = 27T -> Q1_2026 standalone = 27T
+        operatingProfit: 11_000_000_000_000,
+        netIncome: 8_500_000_000_000,
+        ebitda: 12_000_000_000_000,
+        ocf: 9_000_000_000_000,
+        capex: 1_100_000_000_000,
+        equityAttributable: 208_000_000_000_000,
+        totalAssets: 820_000_000_000_000,
+        cash: 62_000_000_000_000,
+        totalDebt: 48_000_000_000_000,
+        sharesOutstanding: 100_000_000_000
+      },
+      {
+        fiscalYear: 2026,
+        quarter: 2,
+        reportType: 'YTD',
+        revenue: 55_000_000_000_000, // 6M26 = 55T -> Q2_2026 standalone = 55T - 27T = 28T
+        operatingProfit: 22_500_000_000_000,
+        netIncome: 17_200_000_000_000,
+        ebitda: 24_500_000_000_000,
+        ocf: 18_500_000_000_000,
+        capex: 2_200_000_000_000,
+        equityAttributable: 215_000_000_000_000,
+        totalAssets: 840_000_000_000_000,
+        cash: 65_000_000_000_000,
+        totalDebt: 47_000_000_000_000,
+        sharesOutstanding: 100_000_000_000
+      },
+      {
+        fiscalYear: 2026,
+        quarter: 3,
+        reportType: 'YTD',
+        revenue: 84_000_000_000_000, // 9M26 = 84T -> Q3_2026 standalone = 84T - 55T = 29T
+        operatingProfit: 34_500_000_000_000,
+        netIncome: 26_200_000_000_000,
+        ebitda: 37_500_000_000_000,
+        ocf: 28_000_000_000_000,
+        capex: 3_300_000_000_000,
+        equityAttributable: 224_000_000_000_000, // Latest snapshot = 224T
+        totalAssets: 860_000_000_000_000,
+        cash: 68_000_000_000_000,
+        totalDebt: 45_000_000_000_000,
+        sharesOutstanding: 100_000_000_000
+      }
+    ];
+
+    const standalone = decumulateIDXQuarters(sampleYtdRows);
+    const ttmAndSnap = computeIdxTtmAndSnapshotFromQuarters(sampleYtdRows);
+
+    // Double-Counting Trap & Balance Sheet Anomaly Test
+    const ytdBugRaw: RawTickerData = {
+      ...createBaseCleanRawTickerData(),
+      ticker: 'YTDBUG',
+      revenueTTM: 215_000_000_000_000, // 2.15x of FY revenue (100T) -> > 1.65x threshold
+      latestFullYearRevenue: 100_000_000_000_000,
+      hasAcquisitionOrCorpAction: false,
+      equityAttributable: 400_000_000_000_000,
+      totalAssets: 350_000_000_000_000, // Equity > Total Assets anomaly!
+      bvps: 3239.88,
+      priorYearBvps: 1800, // +80% jump without rights issue
+      hasRightsIssue: false
+    };
+    const ytdBugSanity = validateFundamentalSanity(ytdBugRaw);
+
+    // Expected TTM Revenue = Q4_25 (26T) + Q1_26 (27T) + Q2_26 (28T) + Q3_26 (29T) = 110T (NOT raw sum 266T!)
+    const ttmRevActual = ttmAndSnap?.revenueTTM ?? 0;
+    const snapEqActual = ttmAndSnap?.equityAttributable ?? 0;
+    const snapAssetsActual = ttmAndSnap?.totalAssets ?? 0;
+
+    const assertions = [
+      {
+        label: 'decumulateIDXQuarters mengubah YTD (Q1=27T, Q2=55T, Q3=84T) menjadi Standalone (27T, 28T, 29T) & TTM = 110T',
+        passed:
+          standalone.length === 5 &&
+          ttmRevActual === 110_000_000_000_000,
+        expected: 'TTM Revenue = Rp 110 Triliun (bukan penjumlahan mentah YTD Rp 266T)',
+        actual: `TTM Revenue = Rp ${(ttmRevActual / 1e12).toFixed(1)} Triliun`
+      },
+      {
+        label: 'Snapshot Neraca (Equity = Rp 224T, Assets = Rp 860T) diambil murni dari 1 kuartal terbaru tanpa dijumlahkan',
+        passed:
+          snapEqActual === 224_000_000_000_000 &&
+          snapAssetsActual === 860_000_000_000_000,
+        expected: 'Equity = Rp 224T & Assets = Rp 860T (Latest Snapshot Q3 2026)',
+        actual: `Equity = Rp ${(snapEqActual / 1e12).toFixed(0)}T & Assets = Rp ${(snapAssetsActual / 1e12).toFixed(0)}T`
+      },
+      {
+        label: 'Double-Counting Trap (RevTTM/FY > 1.65) & Balance Sheet Guard melempar YTD_CUMULATIVE_SUM_SUSPECT & BALANCE_SHEET_ANOMALY (FAIL)',
+        passed:
+          ytdBugSanity.status === 'FAIL' &&
+          ytdBugSanity.isGradeABlocked === true &&
+          ytdBugSanity.flags.includes('YTD_CUMULATIVE_SUM_SUSPECT') &&
+          ytdBugSanity.flags.includes('BALANCE_SHEET_ANOMALY'),
+        expected: 'FAIL [YTD_CUMULATIVE_SUM_SUSPECT, BALANCE_SHEET_ANOMALY]',
+        actual: `${ytdBugSanity.status} [${ytdBugSanity.flags.join(', ')}]`
+      }
+    ];
+
+    results.push({
+      id: 'HOTFIX_1_IDX_YTD_DECUMULATOR_AND_BS_GUARD',
+      priority: 'P0',
+      title: 'Hotfix 1: IDX YTD-to-TTM Decumulator, Balance Sheet Snapshot Guard & Double-Counting Trap',
+      scenarioType: 'CORRUPTED_OR_STRESS_DATA',
+      passed: assertions.every((a) => a.passed),
+      expectedSummary: 'YTD didekumulasi presisi ke Standalone TTM 110T; lonjakan YTD >1.65x & anomali neraca diblokir (FAIL)',
+      actualSummary: `TTM Rev: Rp ${(ttmRevActual / 1e12).toFixed(0)}T | Snapshot Eq: Rp ${(snapEqActual / 1e12).toFixed(0)}T | Flags: ${ytdBugSanity.flags.join(', ')}`,
+      assertions
+    });
+  }
+
+  // ==========================================================================
+  // TEST 11 (HOTFIX 2, 3, 4): Single Source of Truth ValuationLedger, Post-Penalty Grade & Unified ATR/Vol Stop
+  // ==========================================================================
+  {
+    const ensembleWeights = DynamicEnsembleWeighter.computeWeights({
+      sector: 'Industrials',
+      route: 'STEADY_COMPOUNDER',
+      effectiveModule: 'Compounder',
+      sectorLabel: 'Quality P/E',
+      sectorPriceIdr: 6200,
+      rimLabel: 'Multi-Stage RIM (6Y)',
+      rimPriceIdr: 5900,
+      relValLabel: 'Hist EV/EBITDA Band 5Y',
+      relValPriceIdr: 5750,
+      ocfToNetIncomeRatio: 1.05,
+      peerCorrelation: 0.86,
+      hscDiscountMultiplier: 1.0,
+      tickRounder: (v) => Math.round(v / 25) * 25
+    });
+
+    const ledger = buildValuationLedger({
+      ticker: 'ASII',
+      components: ensembleWeights.components,
+      ensembleFairValue: ensembleWeights.intrinsicValueIdr,
+      standaloneFloor: 4950,
+      formulaAudit: ensembleWeights.ensembleFormulaAudit,
+      epsTTM: 580,
+      bvps: 3100,
+      roeTTM: 18.7,
+      netIncomeYoYPct: 19.4,
+      operatingProfitYoYPct: 14.8,
+      isDualCatalystConfirmed: true
+    });
+
+    // Hotfix 3 & 4: Score 77 after penalty MUST map to 'A (SOLID VALUE)' (never overridden to 'A+')
+    const disp77 = applyDispersionPenalty({
+      valuationOutputsIDR: [5750, 5900, 6200],
+      rawConvictionScore: 77,
+      isOutlierEnsembleActive: false
+    });
+    const cleanSanity = validateFundamentalSanity(createBaseCleanRawTickerData());
+    const risk77 = calculateVolatilityTargetedSizingAndStop({
+      price: 5000,
+      beta1Y: 0.85,
+      realizedAnnualVol: 0.24,
+      atr20: 130,
+      marketRegime: 'TENANG',
+      rawConvictionScore: 77,
+      dispersionPenalty: disp77,
+      sanityReport: cleanSanity
+    });
+
+    const assertions = [
+      {
+        label: 'ValuationLedger memiliki 3 komponen murni dengan totalWeight === 1.0 dan kaki ke-3 HIST_EVEBITDA_BAND',
+        passed:
+          ledger.components.length === 3 &&
+          Math.abs(ledger.totalWeight - 1.0) < 0.0001 &&
+          ledger.components[2].id === 'HIST_EVEBITDA_BAND' &&
+          ledger.components[2].value === 5750,
+        expected: '3 komponen, totalWeight = 1.0, leg[2] = HIST_EVEBITDA_BAND (Rp 5.750)',
+        actual: `${ledger.components.length} komponen, totalWeight = ${ledger.totalWeight}, leg[2] = ${ledger.components[2].id} (Rp ${ledger.components[2].value})`
+      },
+      {
+        label: 'Hotfix 3: Skor konviksi 77/100 (< 82) dipetakan murni ke A (SOLID VALUE) tanpa override ke A+',
+        passed:
+          risk77.adjustedConvictionScore === 77 &&
+          risk77.finalConvictionGrade === 'A (SOLID VALUE)',
+        expected: 'A (SOLID VALUE)',
+        actual: `${risk77.finalConvictionGrade} (Skor ${risk77.adjustedConvictionScore}/100)`
+      },
+      {
+        label: 'Hotfix 4: Satu rumus Stop Loss ATR/Vol menghasilkan stopLossPriceIDR konsisten dalam pita 12%–18%',
+        passed:
+          risk77.stopLossPct >= 12.0 &&
+          risk77.stopLossPct <= 18.0 &&
+          risk77.stopLossPriceIDR === Math.round((5000 * (1 - risk77.stopLossPct / 100)) / 5) * 5,
+        expected: 'StopLoss dalam 12%–18% & sinkron dengan stopLossPriceIDR',
+        actual: `Stop Rp ${risk77.stopLossPriceIDR.toLocaleString('id-ID')} (-${risk77.stopLossPct}%)`
+      }
+    ];
+
+    results.push({
+      id: 'HOTFIX_2_3_4_LEDGER_GRADE_AND_UNIFIED_STOP',
+      priority: 'P1',
+      title: 'Hotfix 2–4: Single Source ValuationLedger (∑w=1.0), Strict Grade Mapping (<82 ≠ A+), & Unified ATR/Vol Stop',
+      scenarioType: 'CLEAN_DATA',
+      passed: assertions.every((a) => a.passed),
+      expectedSummary: 'ValuationLedger ∑w=1.0, Skor 77 -> A (SOLID VALUE), dan ATR/Vol Stop tersinkronisasi',
+      actualSummary: `Ledger: ${ledger.formulaAudit} | Grade(77): ${risk77.finalConvictionGrade} | Stop: Rp ${risk77.stopLossPriceIDR}`,
       assertions
     });
   }

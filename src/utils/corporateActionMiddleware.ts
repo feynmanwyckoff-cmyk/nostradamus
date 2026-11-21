@@ -765,11 +765,20 @@ export function interceptCorporateActionAndAnnualize(params: {
 
   const hasActiveAcquisition = Boolean(custom?.hasActiveAcquisition);
 
-  // Explicit Catalyst Override Flag (triggered by buyback, earnings surge >20%, split/reverse-split, or acquisition)
+  // Dual-Confirmation check for operational earnings surge (NI YoY >= 15% & OP YoY >= 10%)
+  const estimatedOpProfitYoYPct =
+    stock.operatingProfitGrowthYoYPct ??
+    Number(
+      (stock.operatingMargin >= 12 ? earningsGrowthYoYPct * 0.85 : earningsGrowthYoYPct * 0.45).toFixed(1)
+    );
+  const isDualConfirmedEarningsCatalyst =
+    earningsGrowthYoYPct >= 15.0 && estimatedOpProfitYoYPct >= 10.0;
+
+  // Explicit Catalyst Override Flag (triggered by buyback, Dual-Confirmed earnings surge, split/reverse-split, or acquisition)
   const hasActiveCatalyst =
     !stock.isHscFlagged &&
     (hasActiveBuyback ||
-      earningsGrowthYoYPct > 20.0 ||
+      isDualConfirmedEarningsCatalyst ||
       hasActiveAcquisition ||
       Math.abs(splitRatioDivisor - 1) > 1e-4);
 
@@ -777,19 +786,18 @@ export function interceptCorporateActionAndAnnualize(params: {
 
   // Valuation Boost Multiplier capped strictly at +15% (1.15x) per user architecture specification
   const rawBuybackBoostPct = hasActiveBuyback ? Math.min(8.5, Math.max(2.0, dynamicBuybackYieldPct * 1.45)) : 0;
-  const rawEarningsMomentumBoostPct =
-    earningsGrowthYoYPct > 20.0
+  const rawEarningsMomentumBoostPct = isDualConfirmedEarningsCatalyst
+    ? earningsGrowthYoYPct > 20.0
       ? Math.min(9.5, (earningsGrowthYoYPct - 15.0) * 0.32)
-      : earningsGrowthYoYPct > 12.0
-      ? Math.min(3.5, (earningsGrowthYoYPct - 10.0) * 0.2)
-      : 0;
+      : Math.min(3.5, (earningsGrowthYoYPct - 10.0) * 0.2)
+    : 0;
 
   const catalystValuationBoostPct = stock.isHscFlagged
     ? 0
     : Number(Math.min(15.0, rawBuybackBoostPct + rawEarningsMomentumBoostPct).toFixed(2));
   const catalystValuationMultiplier = Number((1 + catalystValuationBoostPct / 100).toFixed(4));
 
-  // Build concise badge & narrative
+  // Build concise badge & narrative strictly on TTM Default Basis (no linear annualizer leakage)
   const badgeParts: string[] = [];
   if (hasActiveBuyback) {
     badgeParts.push(
@@ -798,8 +806,10 @@ export function interceptCorporateActionAndAnnualize(params: {
         : 'BUYBACK AKTIF'
     );
   }
-  if (earningsGrowthYoYPct > 20.0) {
-    badgeParts.push(`Q-LABA +${earningsGrowthYoYPct.toFixed(1)}% YoY`);
+  if (isDualConfirmedEarningsCatalyst) {
+    badgeParts.push(
+      `LABA TTM +${earningsGrowthYoYPct.toFixed(1)}% YoY (EBIT +${estimatedOpProfitYoYPct.toFixed(1)}%)`
+    );
   }
   if (splitRatioDivisor > 1) {
     badgeParts.push(`SPLIT 1:${splitRatioDivisor}`);
@@ -818,8 +828,8 @@ export function interceptCorporateActionAndAnnualize(params: {
     custom?.catalystNote ||
     builtIn?.catalystSummary ||
     (isCatalystActive
-      ? `Terdeteksi katalis aktif (${badgeParts.join(', ')}) dengan faktor penyetahunan Q${detectedQuarter} (${annualizationFactor.toFixed(2)}x) yang mengangkat Forward Annualized ROE dari ${trailingRoePct.toFixed(1)}% menjadi ${forwardAnnualizedRoePct.toFixed(1)}%.`
-      : `Kinerja fundamental berjalan stabil dengan Forward Annualized ROE ${forwardAnnualizedRoePct.toFixed(1)}% (${latestQuarterLabel}, annualizer ${annualizationFactor.toFixed(2)}x).`);
+      ? `Terdeteksi katalis aktif terkonfirmasi (${badgeParts.join(', ')}) dengan ROE TTM ${trailingRoePct.toFixed(1)}% (Basis TTM_DEFAULT terdekumulasi tanpa penyetahunan linier).`
+      : `Kinerja fundamental berjalan stabil pada Basis TTM_DEFAULT dengan ROE TTM ${trailingRoePct.toFixed(1)}% (Laba Bersih YoY ${earningsGrowthYoYPct >= 0 ? '+' : ''}${earningsGrowthYoYPct.toFixed(1)}%).`);
 
   return {
     ticker: clean,
@@ -1034,7 +1044,7 @@ export function evaluateDynamicDecisionTree(params: {
       recommendedActionText: `Buy on Strength (${catalystReasons.join(' + ')}) — Status "Tunggu Koreksi Wajar" diubah reaktif menjadi "Buy on Strength" dengan zona akumulasi digeser ke harga pasar spot saat ini (Rp ${spotFloorLow.toLocaleString('id-ID')}) sebagai price floor.`,
       idealBuyLowIdr: Math.min(spotFloorLow, spotFloorHigh),
       idealBuyHighIdr: Math.max(spotFloorLow, spotFloorHigh),
-      formattedAccumulationZone: `Zona Akumulasi Price Floor Spot (Buy on Strength): Rp ${Math.min(spotFloorLow, spotFloorHigh).toLocaleString('id-ID')} – Rp ${Math.max(spotFloorLow, spotFloorHigh).toLocaleString('id-ID')} | Nilai Wajar Forward: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): BUY ON STRENGTH (${catalystReasons.join(' · ')}, MoS ${marginOfSafetyPct >= 0 ? '+' : ''}${marginOfSafetyPct.toFixed(1)}%)`,
+      formattedAccumulationZone: `Zona Akumulasi Price Floor Spot (Buy on Strength): Rp ${Math.min(spotFloorLow, spotFloorHigh).toLocaleString('id-ID')} – Rp ${Math.max(spotFloorLow, spotFloorHigh).toLocaleString('id-ID')} | Nilai Wajar Ensemble (TTM): Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): BUY ON STRENGTH (${catalystReasons.join(' · ')}, MoS ${marginOfSafetyPct >= 0 ? '+' : ''}${marginOfSafetyPct.toFixed(1)}%)`,
       dynamicRequiredMosPct,
       excessReturnSpreadPct
     };

@@ -179,9 +179,11 @@ function renderHighlightedFinancialNarrative(
   ];
 
   const metricLabels = [
-    'Forward Annualized ROE',
-    'Forward ROE',
-    'Trailing ROE',
+    'Hist EV/EBITDA Band 5Y',
+    'Hist PBV Band 5Y',
+    'ValuationLedger',
+    'ROE TTM',
+    'EPS TTM',
     'Dynamic Buyback Yield',
     'Buyback Yield',
     'Total Shareholder Yield',
@@ -1066,7 +1068,9 @@ export function EmitenFundamentalInspectorModal({
     }
   };
 
-  const gradeBadgeCls = activeStock.isHscFlagged
+  const isGradeBlockedModal =
+    activeStock.isHscFlagged || Boolean(joeliardiEval.sanityReport?.isGradeABlocked);
+  const gradeBadgeCls = isGradeBlockedModal
     ? 'bg-[#E11D48]/15 text-[#9E2A2B] border-[#E11D48]/50'
     : joeliardiEval.totalConvictionScore >= 75
     ? 'bg-[#059669]/15 text-[#0D5C46] border-[#059669]/50'
@@ -1483,7 +1487,7 @@ export function EmitenFundamentalInspectorModal({
                     {joeliardiEval.catalystBadgeLabel || 'CATALYST ACTIVE'}
                   </span>
                   <span className="text-xs font-bold text-[#0D5C46]">
-                    Forward-Looking Annualizer &amp; Dynamic Decision Tree Aktif
+                    Basis TTM_DEFAULT Terdekumulasi &amp; Dual-Confirmation Catalyst Aktif
                   </span>
                 </div>
                 <p className="text-xs text-[#111315] leading-relaxed">
@@ -1492,9 +1496,28 @@ export function EmitenFundamentalInspectorModal({
               </div>
               <div className="shrink-0 font-mono text-[11px] bg-[#FFFFFF] border border-[#059669]/35 px-3 py-2 rounded-xs space-y-0.5">
                 <div>
-                  Trail ROE: <strong>{(joeliardiEval.trailingRoePct ?? activeStock.roe).toFixed(1)}%</strong> → Fwd ROE:{' '}
+                  ROE TTM:{' '}
                   <strong className="text-[#0D5C46]">
-                    {(joeliardiEval.forwardAnnualizedRoePct ?? activeStock.roe).toFixed(1)}%
+                    {(
+                      joeliardiEval.valuationLedger?.roeTTM ??
+                      joeliardiEval.trailingRoePct ??
+                      activeStock.roe
+                    ).toFixed(1)}
+                    %
+                  </strong>{' '}
+                  · NI YoY:{' '}
+                  <strong>
+                    {(joeliardiEval.valuationLedger?.netIncomeYoYPct ??
+                      activeStock.earningsGrowthYoYPct ??
+                      0) >= 0
+                      ? '+'
+                      : ''}
+                    {(
+                      joeliardiEval.valuationLedger?.netIncomeYoYPct ??
+                      activeStock.earningsGrowthYoYPct ??
+                      0
+                    ).toFixed(1)}
+                    %
                   </strong>
                 </div>
                 <div>
@@ -1682,7 +1705,7 @@ export function EmitenFundamentalInspectorModal({
                   <strong className="text-[#0D5C46]">
                     {(joeliardiEval.grossProfitabilityToAssets ?? activeStock.grossProfitabilityToAssets ?? activeStock.roe * 0.85).toFixed(1)}%
                   </strong>{' '}
-                  (Fwd ROE {(joeliardiEval.forwardAnnualizedRoePct ?? activeStock.roe).toFixed(1)}%)
+                  (ROE TTM {(joeliardiEval.valuationLedger?.roeTTM ?? joeliardiEval.trailingRoePct ?? activeStock.roe).toFixed(1)}%)
                 </div>
                 <div>
                   OCF/NI (Anti-Junk):{' '}
@@ -1911,14 +1934,14 @@ export function EmitenFundamentalInspectorModal({
               </div>
             )}
 
-            {/* Mathematical Formula Calculation Strip */}
-            {joeliardiEval.ensembleFormulaAudit && (
+            {/* Mathematical Formula Calculation Strip (Single Source of Truth ValuationLedger) */}
+            {(joeliardiEval.valuationLedger?.formulaAudit || joeliardiEval.ensembleFormulaAudit) && (
               <div className="px-3 py-2 bg-[#FFFFFF] border border-[#D97706]/40 rounded-xs flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono">
                 <span className="font-bold text-[#D97706] bb-amber">
                   Perhitungan harga wajar :
                 </span>
                 <span className="text-[#111315] font-semibold">
-                  {joeliardiEval.ensembleFormulaAudit}
+                  {joeliardiEval.valuationLedger?.formulaAudit || joeliardiEval.ensembleFormulaAudit}
                 </span>
               </div>
             )}
@@ -1927,14 +1950,7 @@ export function EmitenFundamentalInspectorModal({
             {joeliardiEval.valuationMethodsComparison &&
               joeliardiEval.valuationMethodsComparison.length > 0 &&
               (() => {
-                const secFair =
-                  joeliardiEval.sectorSpecificFairValueIdr ?? joeliardiEval.intrinsicValueIdr;
-                const rimFair =
-                  joeliardiEval.rimFairValueIdr ?? joeliardiEval.intrinsicValueIdr;
-                const relFair =
-                  joeliardiEval.statArbImpliedTargetIdr ?? joeliardiEval.intrinsicValueIdr;
-                const totalModelFinal = Math.max(1, joeliardiEval.intrinsicValueIdr);
-
+                const ledger = joeliardiEval.valuationLedger;
                 const secLeg = joeliardiEval.valuationMethodsComparison.find(
                   (x) => x.id === 'sector_specific_matrix'
                 );
@@ -1942,12 +1958,33 @@ export function EmitenFundamentalInspectorModal({
                   (x) => x.id === 'multistage_rim'
                 );
                 const relLeg = joeliardiEval.valuationMethodsComparison.find(
-                  (x) => x.id === 'statarb_relative_peer'
+                  (x) => x.id === 'historical_evebitda_5y' || x.id === 'statarb_relative_peer'
                 );
 
-                const secWeightDec = (secLeg?.weightPct ?? 45) / 100;
-                const rimWeightDec = (rimLeg?.weightPct ?? 35) / 100;
-                const relWeightDec = (relLeg?.weightPct ?? 20) / 100;
+                const secFair =
+                  ledger?.components[0]?.value ??
+                  secLeg?.fairPriceIdr ??
+                  joeliardiEval.sectorSpecificFairValueIdr ??
+                  joeliardiEval.intrinsicValueIdr;
+                const rimFair =
+                  ledger?.components[1]?.value ??
+                  rimLeg?.fairPriceIdr ??
+                  joeliardiEval.rimFairValueIdr ??
+                  joeliardiEval.intrinsicValueIdr;
+                const relFair =
+                  ledger?.components[2]?.value ??
+                  relLeg?.fairPriceIdr ??
+                  joeliardiEval.valuationResult?.valuationLedger?.components[2]?.value ??
+                  joeliardiEval.statArbImpliedTargetIdr ??
+                  joeliardiEval.intrinsicValueIdr;
+                const totalModelFinal = Math.max(1, joeliardiEval.intrinsicValueIdr);
+
+                const secWeightDec =
+                  ledger?.components[0]?.weight ?? (secLeg?.weightPct ?? 45) / 100;
+                const rimWeightDec =
+                  ledger?.components[1]?.weight ?? (rimLeg?.weightPct ?? 35) / 100;
+                const relWeightDec =
+                  ledger?.components[2]?.weight ?? (relLeg?.weightPct ?? 20) / 100;
 
                 const secContribIdr = Math.round(secFair * secWeightDec);
                 const rimContribIdr = Math.round(rimFair * rimWeightDec);
@@ -1987,7 +2024,7 @@ export function EmitenFundamentalInspectorModal({
                             ? secContribIdr
                             : m.id === 'multistage_rim'
                             ? rimContribIdr
-                            : m.id === 'statarb_relative_peer'
+                            : m.id === 'historical_evebitda_5y' || m.id === 'statarb_relative_peer'
                             ? relContribIdr
                             : totalModelFinal;
                         const compBarColor =
@@ -2817,7 +2854,9 @@ export function EmitenFundamentalInspectorModal({
                         const spotIdr = activeStock.lastPrice;
                         const fairIdr = joeliardiEval.intrinsicValueIdr;
                         const mosVal = joeliardiEval.marginOfSafetyPct;
-                        const stopPriceIdr = Math.round(( Math.min(spotIdr, fairIdr) * 0.91 ) / 5) * 5;
+                        const stopPriceIdr =
+                          joeliardiEval.riskSizingResult?.stopLossPriceIDR ??
+                          Math.round((spotIdr * 0.86) / 5) * 5;
                         const rangeMatch = ex.idealEntryZone.match(/Rp\s*[\d.,]+\s*[–-]\s*Rp\s*[\d.,]+/i);
                         const extractedRange = rangeMatch
                           ? rangeMatch[0]

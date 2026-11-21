@@ -1,7 +1,9 @@
 import {
+  EnsembleComponent,
   EnsembleValuationLeg,
   SectorValuationArchetype,
   StockMetrics,
+  ValuationLedger,
   ValuationModuleRoute,
   ValuationReport
 } from '../types/quant';
@@ -13,6 +15,8 @@ import {
   calculateInvariantGrahamJoeliardiFloor,
   calculateTwoStageCapexAggressorRI,
   calculateVolatilityTargetedSizingAndStop,
+  computeIdxTtmAndSnapshotFromQuarters,
+  decumulateIDXQuarters,
   validateFundamentalSanity
 } from './institutionalGuardrailsEngine';
 
@@ -24,6 +28,8 @@ export {
   calculateInvariantGrahamJoeliardiFloor,
   calculateTwoStageCapexAggressorRI,
   calculateVolatilityTargetedSizingAndStop,
+  computeIdxTtmAndSnapshotFromQuarters,
+  decumulateIDXQuarters,
   validateFundamentalSanity
 };
 
@@ -1093,6 +1099,7 @@ export const ValuationEngine = {
 
 export interface DynamicEnsembleWeightingResult {
   legs: readonly [EnsembleValuationLeg, EnsembleValuationLeg, EnsembleValuationLeg];
+  components: readonly [EnsembleComponent, EnsembleComponent, EnsembleComponent];
   medianPriceIdr: number;
   intrinsicValueIdr: number;
   ensembleFormulaAudit: string;
@@ -1320,6 +1327,27 @@ export const DynamicEnsembleWeighter = {
       }
     ];
 
+    const components: readonly [EnsembleComponent, EnsembleComponent, EnsembleComponent] = [
+      {
+        id: 'SECTOR_2STAGE_RI',
+        label: sectorLabel,
+        value: sectorPriceIdr,
+        weight: normSector
+      },
+      {
+        id: 'MULTISTAGE_RIM',
+        label: rimLabel,
+        value: rimPriceIdr,
+        weight: normRim
+      },
+      {
+        id: 'HIST_EVEBITDA_BAND',
+        label: relValLabel,
+        value: relValPriceIdr,
+        weight: normEvEbitda
+      }
+    ];
+
     const ensembleAntiJunkMultiplier = ocfPolicy.ensembleAntiJunkMultiplier;
     const combinedDiscountMultiplier = Number(
       (hscDiscountMultiplier * ensembleAntiJunkMultiplier).toFixed(4)
@@ -1345,6 +1373,7 @@ export const DynamicEnsembleWeighter = {
 
     return {
       legs,
+      components,
       medianPriceIdr,
       intrinsicValueIdr,
       ensembleFormulaAudit,
@@ -1358,6 +1387,62 @@ export const DynamicEnsembleWeighter = {
     };
   }
 };
+
+/**
+ * HOTFIX 2: Builds the Single Source of Truth `ValuationLedger` guaranteeing that
+ * the 3 Ensemble components (`SECTOR_2STAGE_RI`, `MULTISTAGE_RIM`, `HIST_EVEBITDA_BAND`),
+ * their normalized weights (sum === 1.0), final `ensembleFairValue`, `standaloneFloor`,
+ * and TTM fundamental metrics (`roeTTM`, `epsTTM`, `bvps`) are identical across the
+ * UI modal, Chain-of-Thought narrative, catalyst header, PNG, and PDF exports.
+ */
+export function buildValuationLedger(params: {
+  ticker: string;
+  components: readonly [EnsembleComponent, EnsembleComponent, EnsembleComponent];
+  ensembleFairValue: number;
+  standaloneFloor: number;
+  formulaAudit: string;
+  epsTTM: number;
+  bvps: number;
+  roeTTM: number;
+  netIncomeYoYPct: number;
+  operatingProfitYoYPct: number;
+  isDualCatalystConfirmed: boolean;
+}): ValuationLedger {
+  const rawWeightSum =
+    params.components[0].weight +
+    params.components[1].weight +
+    params.components[2].weight || 1;
+
+  const w0 = Number((params.components[0].weight / rawWeightSum).toFixed(4));
+  const w1 = Number((params.components[1].weight / rawWeightSum).toFixed(4));
+  const w2 = Number(Math.max(0, 1 - w0 - w1).toFixed(4));
+
+  const normalizedComponents: readonly [
+    EnsembleComponent,
+    EnsembleComponent,
+    EnsembleComponent
+  ] = [
+    { ...params.components[0], weight: w0 },
+    { ...params.components[1], weight: w1 },
+    { ...params.components[2], weight: w2 }
+  ];
+
+  return {
+    ticker: params.ticker,
+    valuationBasis: 'TTM_DEFAULT',
+    components: normalizedComponents,
+    totalWeight: Number((w0 + w1 + w2).toFixed(4)),
+    ensembleFairValue: params.ensembleFairValue,
+    standaloneFloor: params.standaloneFloor,
+    formulaAudit: params.formulaAudit,
+    epsTTM: params.epsTTM,
+    bvps: params.bvps,
+    roeTTM: Number(params.roeTTM.toFixed(2)),
+    netIncomeYoYPct: Number(params.netIncomeYoYPct.toFixed(2)),
+    operatingProfitYoYPct: Number(params.operatingProfitYoYPct.toFixed(2)),
+    isDualCatalystConfirmed: params.isDualCatalystConfirmed
+  };
+}
 
 export interface GrahamJoeliardiBenchmarkResult {
   grahamJoeliardiRawIdr: number;
