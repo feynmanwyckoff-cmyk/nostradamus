@@ -3521,33 +3521,58 @@ export function renderInspectorReportCanvas(
     ctx.stroke();
 
     // Header Row
+    const dl = joeliardiEval.dataLineage;
+    const dlTag = dl
+      ? ` · LINEAGE: ${dl.overallIntegrityStatus} (FRESH:${dl.freshFieldCount} STALE:${dl.staleFieldCount} SEED:${dl.seedFieldCount})`
+      : '';
     ctx.fillStyle = '#F59E0B';
     ctx.font = '700 10px "Fira Code", monospace';
-    ctx.fillText(
-      `RAW DATA AUDIT STRIP (P0–P2 INSTITUTIONAL TELEMETRY) · ${raw.ticker} · BASIS: TTM_DEFAULT`,
+    drawTextAutoFit(
+      ctx,
+      `RAW DATA AUDIT STRIP (P0–P3 PROVENANCE) · ${raw.ticker} · BASIS: TTM_DEFAULT${dlTag}`,
       stripX + 14,
-      stripY + 20
+      stripY + 20,
+      stripW - 470,
+      700,
+      10,
+      7.5,
+      '"Fira Code", monospace'
     );
 
-    const statusBadgeText = `SANITY_CHECK: ${sanity.status}${
-      sanity.flags.length > 0 ? ` [${sanity.flags.join(', ')}]` : ''
+    const sbnWarnFlag = dl?.sbnMacroStatus.isStaleOrProxy
+      ? dl.sbnMacroStatus.source === 'PROXY_FORMULA'
+        ? 'SBN_PROXY_TNX'
+        : `SBN_STALE_${dl.sbnMacroStatus.ageDays}D`
+      : null;
+    const allFlags = [...sanity.flags];
+    if (sbnWarnFlag && !allFlags.includes(sbnWarnFlag as never)) {
+      allFlags.push(sbnWarnFlag as never);
+    }
+    if (dl?.convictionCappedByLineage) {
+      allFlags.push('GRADE_C_CAP_SEED' as never);
+    }
+
+    const statusBadgeText = `SANITY: ${sanity.status}${
+      allFlags.length > 0 ? ` [${allFlags.join(', ')}]` : ''
     }`;
     ctx.font = '700 9.5px "Fira Code", monospace';
     const sbW = Math.min(440, ctx.measureText(statusBadgeText).width + 18);
     const sbX = stripX + stripW - 14 - sbW;
     drawRoundedRect(ctx, sbX, stripY + 6, sbW, 20, 3);
+    const isWarnOrSeed =
+      sanity.status === 'WARN' || Boolean(dl?.sbnMacroStatus.isStaleOrProxy) || Boolean(dl?.convictionCappedByLineage);
     ctx.fillStyle =
-      sanity.status === 'PASS'
-        ? 'rgba(16, 185, 129, 0.16)'
-        : sanity.status === 'WARN'
+      sanity.status === 'FAIL'
+        ? 'rgba(244, 63, 94, 0.2)'
+        : isWarnOrSeed
         ? 'rgba(245, 158, 11, 0.18)'
-        : 'rgba(244, 63, 94, 0.2)';
+        : 'rgba(16, 185, 129, 0.16)';
     ctx.fill();
     ctx.strokeStyle =
-      sanity.status === 'PASS' ? '#10B981' : sanity.status === 'WARN' ? '#F59E0B' : '#F43F5E';
+      sanity.status === 'FAIL' ? '#F43F5E' : isWarnOrSeed ? '#F59E0B' : '#10B981';
     ctx.stroke();
     ctx.fillStyle =
-      sanity.status === 'PASS' ? '#34D399' : sanity.status === 'WARN' ? '#FBBF24' : '#FB7185';
+      sanity.status === 'FAIL' ? '#FB7185' : isWarnOrSeed ? '#FBBF24' : '#34D399';
     drawTextAutoFit(
       ctx,
       statusBadgeText,
@@ -3580,7 +3605,7 @@ export function renderInspectorReportCanvas(
 
     const auditCells = [
       {
-        label: 'SHARES (LEMBAR)',
+        label: `SHARES [${dl?.fields.sharesOutstanding.source === 'USER_OVERRIDE' ? 'OVERRIDE' : dl?.fields.sharesOutstanding.status ?? 'RAW'}]`,
         val:
           raw.sharesOutstanding >= 1e9
             ? `${(raw.sharesOutstanding / 1e9).toFixed(2)} M lbr`
@@ -3588,39 +3613,41 @@ export function renderInspectorReportCanvas(
         sub: `Δ Implied: ${(sanity.sharesMismatchPct * 100).toFixed(2)}%`
       },
       {
-        label: 'MARKETCAP',
+        label: `MARKETCAP [${dl?.fields.lastPrice.source === 'LIVE_YAHOO_API' ? 'LIVE' : 'SNAP'}]`,
         val: fmtCompactIdr(raw.marketCap),
         sub: `Px: Rp ${raw.price.toLocaleString('id-ID')}`
       },
       {
-        label: 'REV_TTM',
+        label: `REV_TTM [${dl?.fields.revenueTTMIdr.source === 'USER_OVERRIDE' ? 'OVERRIDE' : dl?.fields.revenueTTMIdr.status ?? 'RAW'}]`,
         val: fmtCompactIdr(raw.revenueTTM),
         sub: `OP YoY: ${(raw.operatingProfitYoYPct ?? 0) >= 0 ? '+' : ''}${(raw.operatingProfitYoYPct ?? 0).toFixed(1)}%`
       },
       {
-        label: 'NI_TTM',
+        label: `NI_TTM [${dl?.fields.netIncomeTTMIdr.source === 'USER_OVERRIDE' ? 'OVERRIDE' : dl?.fields.netIncomeTTMIdr.status ?? 'RAW'}]`,
         val: fmtCompactIdr(raw.netIncomeTTM),
         sub: `Δ EPS×Shr: ${(sanity.netIncomeMismatchPct * 100).toFixed(2)}%`
       },
       {
-        label: 'EQUITY',
+        label: `EQUITY [${dl?.fields.equityAttributableIdr.source === 'USER_OVERRIDE' ? 'OVERRIDE' : dl?.fields.equityAttributableIdr.status ?? 'RAW'}]`,
         val: fmtCompactIdr(raw.equityAttributable),
         sub: `Δ BVPS×Shr: ${(sanity.equityMismatchPct * 100).toFixed(2)}%`
       },
       {
-        label: 'CAPEX_TTM',
+        label: `CAPEX_TTM [${dl?.fields.capexTTMIdr.status ?? 'RAW'}]`,
         val: fmtCompactIdr(raw.capexTTM),
         sub: `ROIC: ${roicPct.toFixed(1)}%`
       },
       {
-        label: 'ADTV_20D_IDR',
+        label: `ADTV_20D [${dl?.fields.adtv20dIdr.source === 'LIVE_YAHOO_API' ? 'LIVE_VOL' : dl?.fields.adtv20dIdr.status ?? 'RAW'}]`,
         val: fmtCompactIdr(sanity.normalizedAdtv20dIDR),
         sub: `5% Cap: ${fmtCompactIdr(sanity.maxDailyAbsorption5PctIDR)}`
       },
       {
-        label: 'SBN_10Y (TANGGAL)',
-        val: `${spotRf10YPct.toFixed(2)}% (${raw.rfLastUpdated.slice(0, 10)})`,
-        sub: `Usia: ${sanity.rfAgeDays}hr ${sanity.keSafetyBufferBps > 0 ? `(+${sanity.keSafetyBufferBps}bps Ke)` : '(Fresh)'}`
+        label: `SBN_10Y [${dl?.sbnMacroStatus.isStaleOrProxy ? 'STALE/PROXY' : 'FRESH'}]`,
+        val: `${spotRf10YPct.toFixed(2)}% (${(dl?.sbnMacroStatus.asOfDate || raw.rfLastUpdated).slice(0, 10)})`,
+        sub: dl?.sbnMacroStatus.isStaleOrProxy
+          ? `${dl.sbnMacroStatus.source === 'PROXY_FORMULA' ? 'PROXY ^TNX' : `STALE ${dl.sbnMacroStatus.ageDays}hr`} ${sanity.keSafetyBufferBps > 0 ? `(+${sanity.keSafetyBufferBps}bps)` : ''}`
+          : `Usia: ${sanity.rfAgeDays}hr (Fresh)`
       }
     ];
 

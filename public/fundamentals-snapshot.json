@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "1.0.0",
+  "provenanceMode": "BOOTSTRAP_PLACEHOLDER",
+  "generatedAt": null,
+  "guardrailPolicy": "CRITICAL: Any ticker or root snapshot with provenanceMode === 'BOOTSTRAP_PLACEHOLDER' MUST be treated as HARDCODED_SEED (status: 'SEED_WARN') by dataLineageEngine.ts and cap Conviction Grade at C. Never fabricate LLM financial statement numbers as FRESH.",
+  "macroBenchmarks": {
+    "sbn1YPct": null,
+    "sbn5YPct": null,
+    "sbn10YPct": null,
+    "sbnAsOfDate": null,
+    "provenanceMode": "BOOTSTRAP_PLACEHOLDER",
+    "source": "PROXY_FORMULA",
+    "note": "Kurva SBN belum disuplai dari feed IBPA/BI terkini; engine menggunakan formula proksi ^TNX + IDR=X spread (PROXY_FORMULA)."
+  },
+  "tickers": {
+    "MIKA": {
+      "ticker": "MIKA",
+      "provenanceMode": "BOOTSTRAP_PLACEHOLDER",
+      "asOfDate": null,
+      "fiscalPeriod": "UNFETCHED_SEED",
+      "decumulationMethod": "NONE",
+      "decumulationNote": "Menunggu eksekusi GitHub Actions (scripts/fetch-fundamentals-snapshot.mjs) atau input Kalibrasi USER_OVERRIDE."
+    }
+  }
+}

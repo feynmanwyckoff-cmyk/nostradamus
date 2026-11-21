@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import Swal from 'sweetalert2';
 import {
   EmitenNewsCategory,
   MarketRegimeStatus,
@@ -16,13 +17,26 @@ import {
   resolveOfficialIdxSharesOutstanding,
   saveCustomCorporateActionOverride
 } from '../utils/corporateActionMiddleware';
+import {
+  clearSyncDiagnostics,
+  DataSourceType,
+  FieldFreshnessStatus,
+  getFundamentalUserOverride,
+  resetFundamentalUserOverride,
+  saveFundamentalUserOverride,
+  TrackedField
+} from '../utils/dataLineageEngine';
 import { runQuantValuationInWorkerAsync } from '../utils/quantWorkerBridge';
 import { QuantWorkerOutputPayload } from '../workers/quantValuationWorker';
 import {
+  clearLiveQuoteMemoryCache,
   fetchLiveEmitenSpecificNews,
   fetchLiveIdxTicker,
+  loadFundamentalsSnapshot,
   requestEmitenAiInspection,
-  stripRawMarkdownArtifacts
+  resolveTickerFundamentalOverlay,
+  stripRawMarkdownArtifacts,
+  tryFetchLiveTickerFundamentalsOnDemand
 } from '../utils/liveMarketFetcher';
 import {
   exportInspectToHdPng,
@@ -53,7 +67,13 @@ import {
   FileDown,
   FastForward,
   Cpu,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Database,
+  Copy,
+  Trash2,
+  Terminal,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 
 interface EmitenFundamentalInspectorModalProps {
@@ -464,20 +484,29 @@ export function EmitenFundamentalInspectorModal({
   const [isTypingComplete, setIsTypingComplete] = useState<boolean>(false);
   const [isExporting, setIsExporting] = useState<'PNG' | 'PDF' | null>(null);
 
-  // Corporate Action & Forward Annualizer Calibrator + Web Worker Telemetry States
+  // Corporate Action, Fundamental USER_OVERRIDE Calibrator & Forensic Lineage Drawer States
   const [catalystRevision, setCatalystRevision] = useState<number>(0);
   const [showCatalystCalibrator, setShowCatalystCalibrator] = useState<boolean>(false);
+  const [showForensicLineageDrawer, setShowForensicLineageDrawer] = useState<boolean>(false);
+  const [isFetchingLiveFundamentals, setIsFetchingLiveFundamentals] = useState<boolean>(false);
   const [splitRatioInput, setSplitRatioInput] = useState<string>('1');
   const [buybackNominalInput, setBuybackNominalInput] = useState<string>('0');
   const [quarterlyGrowthInput, setQuarterlyGrowthInput] = useState<string>('0');
   const [sharesMillionInput, setSharesMillionInput] = useState<string>('0');
   const [marketCapTrillionInput, setMarketCapTrillionInput] = useState<string>('0');
+  // Expanded Fundamental & Macro USER_OVERRIDE Inputs (in Miliar Rp -> * 1e9 on save)
+  const [revenueBillionInput, setRevenueBillionInput] = useState<string>('0');
+  const [ebitBillionInput, setEbitBillionInput] = useState<string>('0');
+  const [netIncomeBillionInput, setNetIncomeBillionInput] = useState<string>('0');
+  const [equityBillionInput, setEquityBillionInput] = useState<string>('0');
+  const [adtvBillionInput, setAdtvBillionInput] = useState<string>('0');
+  const [sbn10YInput, setSbn10YInput] = useState<string>('6.75');
   const [workerTelemetry, setWorkerTelemetry] =
     useState<QuantWorkerOutputPayload | null>(null);
 
   const typingTimerRef = useRef<number | null>(null);
 
-  // Active stock merges initial prop with on-demand live quote and corporate action overrides
+  // Active stock merges initial prop with on-demand live quote, snapshot overlay, and user fundamental overrides
   const activeStock = useMemo(() => {
     if (!stock) return null;
     const base =
@@ -495,13 +524,45 @@ export function EmitenFundamentalInspectorModal({
             kseiHscScorePenaltyPts: stock.kseiHscScorePenaltyPts
           }
         : stock;
-    return enrichStockMetrics(base);
+    const overlay = resolveTickerFundamentalOverlay(base.ticker, {
+      defaultRoe: base.trailingRoePct ?? base.roe,
+      defaultDer: base.debtToEquity,
+      defaultOpMargin: base.operatingMargin
+    });
+    const mergedWithOverlay: StockMetrics = {
+      ...base,
+      ...(overlay.adtv20dIdr ? { adtv20dIdr: overlay.adtv20dIdr, adtvSource: overlay.adtvSource, adtvAsOfDate: overlay.adtvAsOfDate } : {}),
+      ...(overlay.sharesOutstanding ? { sharesOutstanding: overlay.sharesOutstanding } : {}),
+      ...(overlay.revenueTTMIdr ? { revenueTTMIdr: overlay.revenueTTMIdr } : {}),
+      ...(overlay.operatingProfitTTMIdr ? { operatingProfitTTMIdr: overlay.operatingProfitTTMIdr } : {}),
+      ...(overlay.netIncomeTTMIdr ? { netIncomeTTMIdr: overlay.netIncomeTTMIdr } : {}),
+      ...(overlay.equityAttributableIdr ? { equityAttributableIdr: overlay.equityAttributableIdr } : {}),
+      ...(overlay.totalAssetsIdr ? { totalAssetsIdr: overlay.totalAssetsIdr } : {}),
+      ...(overlay.totalDebtIdr !== undefined ? { totalDebtIdr: overlay.totalDebtIdr } : {}),
+      ...(overlay.cashAndEquivalentsIdr !== undefined ? { cashAndEquivalentsIdr: overlay.cashAndEquivalentsIdr } : {}),
+      ...(overlay.ocfTTMIdr !== undefined ? { ocfTTMIdr: overlay.ocfTTMIdr } : {}),
+      ...(overlay.capexTTMIdr !== undefined ? { capexTTMIdr: overlay.capexTTMIdr } : {}),
+      ...(overlay.daTTMIdr !== undefined ? { daTTMIdr: overlay.daTTMIdr } : {}),
+      ...(overlay.computedRoePct ? { roe: overlay.computedRoePct, trailingRoePct: overlay.computedRoePct } : {}),
+      ...(overlay.computedOpMarginPct ? { operatingMargin: overlay.computedOpMarginPct } : {}),
+      ...(overlay.computedDer !== undefined ? { debtToEquity: overlay.computedDer } : {}),
+      ...(overlay.fundamentalsSource ? { fundamentalsSource: overlay.fundamentalsSource } : {}),
+      ...(overlay.fundamentalsAsOfDate ? { fundamentalsAsOfDate: overlay.fundamentalsAsOfDate } : {}),
+      ...(overlay.fundamentalsFiscalPeriod ? { fundamentalsFiscalPeriod: overlay.fundamentalsFiscalPeriod } : {}),
+      ...(overlay.fundamentalsNote ? { fundamentalsNote: overlay.fundamentalsNote } : {})
+    };
+    return enrichStockMetrics(mergedWithOverlay);
   }, [stock, liveStockOverride, catalystRevision]);
 
   const joeliardiEval = useMemo(() => {
     if (!activeStock) return null;
-    return evaluateJoeliardiOosFundamental(activeStock, undefined, availablePortfolioCashIdr);
-  }, [activeStock, catalystRevision, availablePortfolioCashIdr]);
+    return evaluateJoeliardiOosFundamental(
+      activeStock,
+      undefined,
+      availablePortfolioCashIdr,
+      regimeStatus
+    );
+  }, [activeStock, catalystRevision, availablePortfolioCashIdr, regimeStatus]);
 
   // Synchronize Corporate Action Calibrator inputs & trigger Web Worker offload when activeStock or live sync changes
   useEffect(() => {
@@ -536,6 +597,22 @@ export function EmitenFundamentalInspectorModal({
       Math.round(resolvedShares * activeStock.lastPrice);
     setSharesMillionInput((resolvedShares / 1_000_000).toFixed(2));
     setMarketCapTrillionInput((resolvedMcapIdr / 1_000_000_000_000).toFixed(2));
+
+    const userFundOv = getFundamentalUserOverride(activeStock.ticker);
+    const rawTkr = joeliardiEval.rawTickerData;
+    const revIdr = userFundOv?.revenueTTMIdr ?? rawTkr?.revenueTTM ?? 0;
+    const ebitIdr = userFundOv?.operatingProfitTTMIdr ?? rawTkr?.operatingProfitTTM ?? 0;
+    const niIdr = userFundOv?.netIncomeTTMIdr ?? rawTkr?.netIncomeTTM ?? 0;
+    const eqIdr = userFundOv?.equityAttributableIdr ?? rawTkr?.equityAttributable ?? 0;
+    const adtvIdr = userFundOv?.adtv20dIdr ?? joeliardiEval.adtv20dIdr ?? rawTkr?.adtv20dIDR ?? 0;
+    const sbn10YPct = userFundOv?.sbn10YOverridePct ?? joeliardiEval.sbnSpot10YPct ?? 6.75;
+
+    setRevenueBillionInput((revIdr / 1_000_000_000).toFixed(2));
+    setEbitBillionInput((ebitIdr / 1_000_000_000).toFixed(2));
+    setNetIncomeBillionInput((niIdr / 1_000_000_000).toFixed(2));
+    setEquityBillionInput((eqIdr / 1_000_000_000).toFixed(2));
+    setAdtvBillionInput((adtvIdr / 1_000_000_000).toFixed(2));
+    setSbn10YInput(sbn10YPct.toFixed(2));
 
     let cancelled = false;
     const boostMult = 1 + (joeliardiEval.catalystValuationBoostPct ?? 0) / 100;
@@ -597,6 +674,56 @@ export function EmitenFundamentalInspectorModal({
     catalystRevision
   ]);
 
+  // Real-Time Live Preview for Calibration Modal before saving
+  const liveCalibrationPreview = useMemo(() => {
+    if (!activeStock || !joeliardiEval) return null;
+    const px = Math.max(50, activeStock.lastPrice);
+    const sharesMil = Math.max(1, Number(sharesMillionInput.replace(',', '.')) || 1);
+    const sharesFull = Math.round(sharesMil * 1_000_000);
+    const revIdr = Math.max(0, (Number(revenueBillionInput.replace(',', '.')) || 0) * 1_000_000_000);
+    const ebitIdr = Math.max(0, (Number(ebitBillionInput.replace(',', '.')) || 0) * 1_000_000_000);
+    const niIdr = Math.max(1, (Number(netIncomeBillionInput.replace(',', '.')) || 0) * 1_000_000_000);
+    const eqIdr = Math.max(1, (Number(equityBillionInput.replace(',', '.')) || 0) * 1_000_000_000);
+    const sbn10Y = Math.max(3.0, Math.min(15.0, Number(sbn10YInput.replace(',', '.')) || 6.75));
+
+    const epsIdr = Math.max(1, Math.round(niIdr / sharesFull));
+    const bvpsIdr = Math.max(10, Math.round(eqIdr / sharesFull));
+    const impliedPer = Number((px / epsIdr).toFixed(2));
+    const impliedPbv = Number((px / bvpsIdr).toFixed(2));
+    const roePct = Number(((niIdr / eqIdr) * 100).toFixed(2));
+    const opMarginPct = revIdr > 0 ? Number(((ebitIdr / revIdr) * 100).toFixed(2)) : activeStock.operatingMargin;
+
+    const anchorDelta = sbn10Y - 6.75;
+    const sbn1Y = 6.15 + anchorDelta * 0.75;
+    const sbn5Y = 6.48 + anchorDelta * 0.90;
+    const blendedRf = Number((0.22 * sbn1Y + 0.38 * sbn5Y + 0.40 * sbn10Y).toFixed(2));
+    const rawBeta = Math.max(0.35, Number(activeStock.beta1Y) || 1.0);
+    const blumeBeta = Math.max(0.48, Math.min(1.55, 0.67 * rawBeta + 0.33 * 1.0));
+    const kePct = Number(Math.max(8.8, Math.min(16.2, blendedRf + blumeBeta * 5.5)).toFixed(2));
+
+    return {
+      sharesFull,
+      marketCapTrillion: Number(((sharesFull * px) / 1e12).toFixed(2)),
+      epsIdr,
+      bvpsIdr,
+      impliedPer,
+      impliedPbv,
+      roePct,
+      opMarginPct,
+      blendedRf,
+      kePct
+    };
+  }, [
+    activeStock,
+    joeliardiEval,
+    sharesMillionInput,
+    revenueBillionInput,
+    ebitBillionInput,
+    netIncomeBillionInput,
+    equityBillionInput,
+    sbn10YInput
+  ]);
+
   const handleSaveCatalystOverride = (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeStock) return;
@@ -606,16 +733,40 @@ export function EmitenFundamentalInspectorModal({
     const growthVal = Number(quarterlyGrowthInput.replace(',', '.')) || 0;
     const sharesMillionVal = Math.max(1, Number(sharesMillionInput.replace(',', '.')) || 0);
     const fullSharesVal = Math.round(sharesMillionVal * 1_000_000);
-    const rawMcapTrillion = Number(marketCapTrillionInput.replace(',', '.')) || 0;
-    const syncedMcapTrillion =
-      rawMcapTrillion > 0
-        ? rawMcapTrillion
-        : Number(((fullSharesVal * activeStock.lastPrice) / 1_000_000_000_000).toFixed(4));
-    const trailingRoe = activeStock.trailingRoePct ?? activeStock.roe;
-    const computedForwardRoe =
-      growthVal > 0
-        ? Number(Math.min(48, trailingRoe * (1 + Math.min(0.65, growthVal / 100) * 0.55)).toFixed(2))
-        : trailingRoe;
+    const syncedMcapTrillion = Number(
+      ((fullSharesVal * activeStock.lastPrice) / 1_000_000_000_000).toFixed(4)
+    );
+
+    // Explicit * 1e9 conversion guardrail from Miliar Rp to Full IDR
+    const revBillion = Math.max(0, Number(revenueBillionInput.replace(',', '.')) || 0);
+    const ebitBillion = Math.max(0, Number(ebitBillionInput.replace(',', '.')) || 0);
+    const niBillion = Math.max(0, Number(netIncomeBillionInput.replace(',', '.')) || 0);
+    const eqBillion = Math.max(0, Number(equityBillionInput.replace(',', '.')) || 0);
+    const adtvBillion = Math.max(0, Number(adtvBillionInput.replace(',', '.')) || 0);
+    const sbn10YPct = Math.max(3.0, Math.min(15.0, Number(sbn10YInput.replace(',', '.')) || 6.75));
+
+    const revenueTTMIdr = Math.round(revBillion * 1_000_000_000);
+    const operatingProfitTTMIdr = Math.round(ebitBillion * 1_000_000_000);
+    const netIncomeTTMIdr = Math.round(niBillion * 1_000_000_000);
+    const equityAttributableIdr = Math.round(eqBillion * 1_000_000_000);
+    const adtv20dIdr = Math.round(adtvBillion * 1_000_000_000);
+
+    const computedRoe =
+      netIncomeTTMIdr > 0 && equityAttributableIdr > 0
+        ? Number(Math.max(0.5, Math.min(65, (netIncomeTTMIdr / equityAttributableIdr) * 100)).toFixed(2))
+        : activeStock.trailingRoePct ?? activeStock.roe;
+
+    saveFundamentalUserOverride({
+      ticker: activeStock.ticker,
+      revenueTTMIdr: revenueTTMIdr > 0 ? revenueTTMIdr : undefined,
+      operatingProfitTTMIdr: operatingProfitTTMIdr > 0 ? operatingProfitTTMIdr : undefined,
+      netIncomeTTMIdr: netIncomeTTMIdr > 0 ? netIncomeTTMIdr : undefined,
+      equityAttributableIdr: equityAttributableIdr > 0 ? equityAttributableIdr : undefined,
+      sharesOutstanding: fullSharesVal > 0 ? fullSharesVal : undefined,
+      adtv20dIdr: adtv20dIdr > 0 ? adtv20dIdr : undefined,
+      sbn10YOverridePct: sbn10YPct,
+      overrideNote: `USER_OVERRIDE (${new Date().toISOString().slice(0, 10)}): Rev Rp ${revBillion.toFixed(2)}M · EBIT Rp ${ebitBillion.toFixed(2)}M · NI Rp ${niBillion.toFixed(2)}M · Equity Rp ${eqBillion.toFixed(2)}M · Shares ${(fullSharesVal / 1e9).toFixed(2)}M lbr · SBN 10Y ${sbn10YPct.toFixed(2)}%`
+    });
 
     saveCustomCorporateActionOverride({
       ticker: activeStock.ticker,
@@ -625,14 +776,25 @@ export function EmitenFundamentalInspectorModal({
       sharesOutstanding: fullSharesVal,
       liveMarketCapTrillionIdr: syncedMcapTrillion,
       earningsGrowthYoYPct: growthVal,
-      latestQuarterLabel: 'Manual Calibrator Override',
-      forwardAnnualizedRoePct: computedForwardRoe,
-      catalystNote: `Kalibrasi Manual (${activeStock.ticker}): Shares ${(fullSharesVal / 1e9).toFixed(2)}M lbr · Market Cap Rp ${syncedMcapTrillion.toFixed(2)}T · Split 1:${splitVal} · Buyback Rp ${buybackVal.toLocaleString('id-ID')} Miliar · Pertumbuhan Laba Kuartal ${growthVal >= 0 ? '+' : ''}${growthVal.toFixed(1)}% YoY.`
+      latestQuarterLabel: 'USER_OVERRIDE (TTM Verified)',
+      trailingRoePct: computedRoe,
+      forwardAnnualizedRoePct: computedRoe,
+      catalystNote: `Kalibrasi USER_OVERRIDE (${activeStock.ticker}): Rev Rp ${(revenueTTMIdr / 1e12).toFixed(2)}T · NI Rp ${(netIncomeTTMIdr / 1e12).toFixed(2)}T · Equity Rp ${(equityAttributableIdr / 1e12).toFixed(2)}T · ROE ${computedRoe.toFixed(2)}% · Shares ${(fullSharesVal / 1e9).toFixed(2)}M lbr · SBN 10Y ${sbn10YPct.toFixed(2)}%.`
     });
+
     setCatalystRevision((r) => r + 1);
     if (onStockSynced) {
       onStockSynced(enrichStockMetrics(activeStock));
     }
+    void Swal.fire({
+      toast: true,
+      position: 'top-end',
+      icon: 'success',
+      title: `Override ${activeStock.ticker} Disimpan (USER_OVERRIDE)`,
+      text: `ROE ${computedRoe.toFixed(2)}% · PER ${liveCalibrationPreview?.impliedPer ?? '-'}x · PBV ${liveCalibrationPreview?.impliedPbv ?? '-'}x · Ke ${liveCalibrationPreview?.kePct ?? '-'}%`,
+      showConfirmButton: false,
+      timer: 2600
+    });
   };
 
   const handleAutoSyncP0Sanity = () => {
@@ -667,9 +829,98 @@ export function EmitenFundamentalInspectorModal({
   const handleResetCatalystOverride = () => {
     if (!activeStock) return;
     resetCorporateActionOverride(activeStock.ticker);
+    resetFundamentalUserOverride(activeStock.ticker);
     setCatalystRevision((r) => r + 1);
     if (onStockSynced) {
       onStockSynced(enrichStockMetrics(activeStock));
+    }
+    void Swal.fire({
+      toast: true,
+      position: 'top-end',
+      icon: 'info',
+      title: `Override ${activeStock.ticker} Direset`,
+      text: 'Kembali ke sumber snapshot / seed default.',
+      showConfirmButton: false,
+      timer: 2000
+    });
+  };
+
+  const handleTryLiveYahooFundamentals = async () => {
+    if (!activeStock) return;
+    setIsFetchingLiveFundamentals(true);
+    try {
+      const liveEntry = await tryFetchLiveTickerFundamentalsOnDemand(activeStock.ticker);
+      setCatalystRevision((r) => r + 1);
+      if (liveEntry && (liveEntry.revenueTTMIdr || liveEntry.adtv20dIdr)) {
+        void Swal.fire({
+          toast: true,
+          position: 'top-end',
+          icon: 'success',
+          title: `Live Sync ${activeStock.ticker} Berhasil`,
+          text: liveEntry.revenueTTMIdr
+            ? `Laporan Keuangan & Volume 20D ditarik dari Yahoo API.`
+            : `ADTV 20D Live (Rp ${((liveEntry.adtv20dIdr ?? 0) / 1e9).toFixed(2)} M/hr) diperbarui dari Chart v8.`,
+          showConfirmButton: false,
+          timer: 2800
+        });
+      }
+    } finally {
+      setIsFetchingLiveFundamentals(false);
+    }
+  };
+
+  const handleClearCacheAndHardResync = async () => {
+    if (!activeStock) return;
+    resetFundamentalUserOverride(activeStock.ticker);
+    resetCorporateActionOverride(activeStock.ticker);
+    clearSyncDiagnostics();
+    clearLiveQuoteMemoryCache();
+    await loadFundamentalsSnapshot(true);
+    await handleTryLiveYahooFundamentals();
+    await handleManualRefreshSingleTicker();
+    setCatalystRevision((r) => r + 1);
+    void Swal.fire({
+      toast: true,
+      position: 'top-end',
+      icon: 'success',
+      title: `Hard Resync ${activeStock.ticker} Selesai`,
+      text: 'Cache lokal dibersihkan & data ditarik ulang dari endpoint live + snapshot.',
+      showConfirmButton: false,
+      timer: 2600
+    });
+  };
+
+  const handleCopyDebugJson = async () => {
+    if (!activeStock || !joeliardiEval) return;
+    const payload = {
+      ticker: activeStock.ticker,
+      exportedAt: new Date().toISOString(),
+      dataLineage: joeliardiEval.dataLineage,
+      rawTickerData: joeliardiEval.rawTickerData,
+      sanityReport: joeliardiEval.sanityReport,
+      valuationLedger: joeliardiEval.valuationLedger
+    };
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      void Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'success',
+        title: 'Debug JSON Disalin ke Clipboard',
+        text: `DataLineage & RawTickerData (${activeStock.ticker}) siap di-paste.`,
+        showConfirmButton: false,
+        timer: 2200
+      });
+    } catch {
+      void Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: 'warning',
+        title: 'Gagal Menyalin ke Clipboard',
+        text: 'Gunakan window.debugNostradamus("' + activeStock.ticker + '") di Console.',
+        showConfirmButton: false,
+        timer: 2600
+      });
     }
   };
 
@@ -1139,6 +1390,39 @@ export function EmitenFundamentalInspectorModal({
                       <span>SPLIT DIVISOR 1:{activeStock.splitRatioDivisor}</span>
                     </span>
                   )}
+                  {joeliardiEval.dataLineage && (
+                    <span
+                      title={
+                        joeliardiEval.isConvictionCappedBySeed
+                          ? joeliardiEval.seedCapWarningReason
+                          : `Provenance Status: ${joeliardiEval.dataLineage.overallStatus} (${joeliardiEval.dataLineage.freshFieldCount} Fresh / ${joeliardiEval.dataLineage.seedFieldCount} Seed)`
+                      }
+                      className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-xs border ${
+                        joeliardiEval.dataLineage.overallStatus === 'INSTITUTIONAL_GRADE'
+                          ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500/50'
+                          : joeliardiEval.dataLineage.overallStatus === 'SEED_CAPPED_GRADE_C'
+                          ? 'bg-rose-950/90 text-rose-300 border-rose-500/60'
+                          : 'bg-amber-950/90 text-amber-300 border-amber-500/50'
+                      }`}
+                    >
+                      {joeliardiEval.dataLineage.overallStatus === 'SEED_CAPPED_GRADE_C'
+                        ? 'SEED_WARN · GRADE C CAPPED'
+                        : `LINEAGE: ${joeliardiEval.dataLineage.overallStatus}`}
+                    </span>
+                  )}
+                  {joeliardiEval.dataLineage &&
+                    (joeliardiEval.dataLineage.isSbnMacroProxy ||
+                      joeliardiEval.dataLineage.isSbnMacroStale) && (
+                      <span
+                        title={joeliardiEval.dataLineage.sbnMacroWarningMessage}
+                        className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-xs bg-amber-950/90 text-amber-300 border border-amber-500/50"
+                      >
+                        ⚠ SBN 10Y:{' '}
+                        {joeliardiEval.dataLineage.isSbnMacroProxy
+                          ? 'PROXY ^TNX'
+                          : `STALE (${joeliardiEval.dataLineage.sbnAgeDays}D)`}
+                      </span>
+                    )}
                   {isSyncingOnDemand && (
                     <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-[#0284C7] bg-[#0284C7]/10 border border-[#0284C7]/30 px-2 py-0.5 rounded-xs">
                       <RefreshCw className="w-2.5 h-2.5 animate-spin" />
@@ -1169,7 +1453,7 @@ export function EmitenFundamentalInspectorModal({
             </button>
           </div>
 
-          {/* Action Toolbar Row: Strictly Single-Row Layout (Refresh -> Calibrator -> HSC -> Worker -> Export PNG -> Export PDF) */}
+          {/* Action Toolbar Row: Strictly Single-Row Layout (Refresh -> Calibrator -> Lineage -> HSC -> Worker -> Export PNG -> Export PDF) */}
           <div className="flex items-center justify-between gap-1.5 pt-2 border-t border-[#E4E2DD]/70 flex-nowrap overflow-x-auto no-scrollbar">
             <div className="flex items-center gap-1.5 flex-nowrap shrink-0">
               <button
@@ -1189,11 +1473,13 @@ export function EmitenFundamentalInspectorModal({
                 type="button"
                 onClick={() => setShowCatalystCalibrator((prev) => !prev)}
                 className={`inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold rounded-xs border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
-                  showCatalystCalibrator || Boolean(getCustomCorporateActionOverrides()[activeStock.ticker])
-                    ? 'bg-[#0D5C46] text-white border-[#0D5C46]'
+                  showCatalystCalibrator ||
+                  Boolean(getCustomCorporateActionOverrides()[activeStock.ticker]) ||
+                  Boolean(getFundamentalUserOverride(activeStock.ticker))
+                    ? 'bg-[#0D131C] text-emerald-300 border-emerald-500/60'
                     : 'bg-[#FFFFFF] text-[#0D5C46] border-[#059669]/40 hover:bg-[#059669]/10'
                 }`}
-                title="Kalibrasi Corporate Action (Stock Split Divisor, Nominal Buyback, & Laba Kuartal Forward ROE) — Autofill dari data terbaru emiten"
+                title="Kalibrasi Fundamental TTM (Revenue, EBIT, Net Income, Equity, ADTV, SBN 10Y) & Corporate Action (Split, Buyback, ROE)"
               >
                 <SlidersHorizontal className="w-3 h-3 shrink-0" />
                 <span>
@@ -1201,6 +1487,30 @@ export function EmitenFundamentalInspectorModal({
                     ? 'Tutup Kalibrator'
                     : 'Kalibrasi Split / Buyback / ROE'}
                 </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowForensicLineageDrawer((prev) => !prev)}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-bold rounded-xs border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                  showForensicLineageDrawer
+                    ? 'bg-[#0D131C] text-sky-300 border-sky-500/60'
+                    : joeliardiEval.isConvictionCappedBySeed
+                    ? 'bg-rose-950/90 text-rose-300 border-rose-500/60 hover:bg-rose-900'
+                    : 'bg-[#0D131C] text-slate-200 border-[#222C3C] hover:border-sky-500/50'
+                }`}
+                title="Buka Forensic Data Lineage & Freshness Debugger (20 TrackedField<T> & Log Jaringan)"
+              >
+                <Database className="w-3 h-3 shrink-0 text-sky-400" />
+                <span>
+                  Forensic Lineage ({joeliardiEval.dataLineage?.freshFieldCount ?? 0}F/
+                  {joeliardiEval.dataLineage?.seedFieldCount ?? 0}S)
+                </span>
+                {showForensicLineageDrawer ? (
+                  <ChevronUp className="w-3 h-3 shrink-0" />
+                ) : (
+                  <ChevronDown className="w-3 h-3 shrink-0" />
+                )}
               </button>
 
               {onToggleHscFlag && (
@@ -1263,48 +1573,139 @@ export function EmitenFundamentalInspectorModal({
             </div>
           </div>
 
-          {/* Collapsible Corporate Action & Forward Annualizer Calibrator Drawer (Autofilled from Latest Emiten Data) */}
+          {/* Dark Mode Terminal Calibration Modal (Fundamental USER_OVERRIDE + Corporate Action + Live Preview) */}
           {showCatalystCalibrator && (
             <form
               onSubmit={handleSaveCatalystOverride}
-              className="mt-3 p-3.5 bg-[#FFFFFF] border border-[#059669]/50 rounded-xs space-y-2.5"
+              className="mt-3 p-4 bg-[#0D131C] border border-[#222C3C] rounded-xs text-slate-200 space-y-3 font-mono tabular-nums shadow-xl"
             >
-              <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[#1E2736]">
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-[#0D5C46]">
-                      CORPORATE ACTION INTERCEPTOR &amp; FORWARD ANNUALIZER ({activeStock.ticker})
+                    <span className="text-[10.5px] font-bold uppercase tracking-wider text-emerald-400">
+                      FUNDAMENTAL &amp; CORPORATE ACTION CALIBRATOR ({activeStock.ticker})
                     </span>
-                    <span className="px-2 py-0.5 text-[9.5px] font-mono font-bold bg-[#059669]/15 text-[#0D5C46] border border-[#059669]/40 rounded-xs">
-                      ✓ Autofill Data Terbaru Emiten ({joeliardiEval.latestQuarterLabel || 'Live Q3/Q4-2026'})
+                    <span className="px-2 py-0.5 text-[9.5px] font-bold bg-indigo-950/90 text-indigo-300 border border-indigo-500/40 rounded-xs">
+                      TAG: USER_OVERRIDE · SATUAN MILIAR RP (× 10⁹ IDR)
                     </span>
                   </div>
-                  <p className="text-[11px] text-neutral-600 mt-0.5">
-                    Terisi otomatis dari parameter terbaru {activeStock.ticker}: Trailing ROE{' '}
-                    <strong className="font-mono">{(joeliardiEval.trailingRoePct ?? activeStock.roe).toFixed(1)}%</strong>{' '}
-                    → Forward Annualized ROE{' '}
-                    <strong className="font-mono text-[#0D5C46]">
-                      {(joeliardiEval.forwardAnnualizedRoePct ?? activeStock.roe).toFixed(1)}%
-                    </strong>{' '}
-                    · Dynamic Buyback Yield{' '}
-                    <strong className="font-mono text-[#0284C7] bb-cyan">
-                      +{(joeliardiEval.dynamicBuybackYieldPct ?? 0).toFixed(2)}%
-                    </strong>
-                    . Anda juga dapat melakukan simulasi/override manual di bawah ini:
+                  <p className="text-[11px] text-slate-400 mt-0.5 font-sans">
+                    Override laporan keuangan TTM &amp; kurva SBN di bawah ini akan menggantikan data{' '}
+                    <code className="text-rose-300 font-mono">HARDCODED_SEED</code> dengan tag{' '}
+                    <code className="text-indigo-300 font-mono">USER_OVERRIDE</code> (status{' '}
+                    <code className="text-emerald-300 font-mono">FRESH</code>) dan mencabut batas Grade C.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={handleResetCatalystOverride}
-                  className="px-2.5 py-1 text-[11px] font-mono font-semibold text-neutral-600 hover:text-[#9E2A2B] bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs cursor-pointer"
-                >
-                  Reset ke Data Default Emiten
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={handleTryLiveYahooFundamentals}
+                    disabled={isFetchingLiveFundamentals}
+                    className="px-2.5 py-1 text-[10.5px] font-mono font-bold text-sky-300 bg-sky-950/70 hover:bg-sky-900/80 border border-sky-500/40 rounded-xs cursor-pointer disabled:opacity-50"
+                  >
+                    {isFetchingLiveFundamentals ? 'Menarik Yahoo API...' : 'Tarik Live Yahoo API'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleResetCatalystOverride}
+                    className="px-2.5 py-1 text-[10.5px] font-mono font-semibold text-rose-300 hover:bg-rose-950/80 bg-[#131B28] border border-rose-500/40 rounded-xs cursor-pointer"
+                  >
+                    Reset Override
+                  </button>
+                </div>
               </div>
 
+              {/* Row 1: Fundamental Financial Statements & SBN 10Y Override (Miliar Rp -> * 1e9 IDR) */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+                <div>
+                  <label className="block text-[9.5px] font-bold uppercase text-slate-400 mb-1">
+                    Revenue TTM (Miliar Rp)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={revenueBillionInput}
+                    onChange={(e) => setRevenueBillionInput(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] focus:border-emerald-400 rounded-xs text-slate-100"
+                    title="Pendapatan TTM dalam Miliar Rupiah (otomatis dikonversi × 1e9 ke Rupiah penuh)"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[9.5px] font-bold uppercase text-slate-400 mb-1">
+                    EBIT / Laba Usaha (Miliar Rp)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={ebitBillionInput}
+                    onChange={(e) => setEbitBillionInput(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] focus:border-emerald-400 rounded-xs text-slate-100"
+                    title="Operating Profit (EBIT) TTM dalam Miliar Rupiah (× 1e9 IDR)"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[9.5px] font-bold uppercase text-emerald-300 mb-1">
+                    Net Income TTM (Miliar Rp)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={netIncomeBillionInput}
+                    onChange={(e) => setNetIncomeBillionInput(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#131B28] border border-emerald-500/50 focus:border-emerald-400 rounded-xs text-emerald-200 font-bold"
+                    title="Laba Bersih TTM dalam Miliar Rupiah (menentukan EPS TTM & Implied PER)"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[9.5px] font-bold uppercase text-emerald-300 mb-1">
+                    Ekuitas Induk (Miliar Rp)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="1"
+                    value={equityBillionInput}
+                    onChange={(e) => setEquityBillionInput(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#131B28] border border-emerald-500/50 focus:border-emerald-400 rounded-xs text-emerald-200 font-bold"
+                    title="Total Ekuitas yang Dapat Diatribusikan ke Pemilik Entitas Induk dalam Miliar Rupiah (menentukan BVPS, PBV & ROE)"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[9.5px] font-bold uppercase text-sky-300 mb-1">
+                    ADTV 20D (Miliar Rp/Hr)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    value={adtvBillionInput}
+                    onChange={(e) => setAdtvBillionInput(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#131B28] border border-sky-500/40 focus:border-sky-400 rounded-xs text-sky-200"
+                    title="Rata-rata Nilai Transaksi Harian 20 Hari (Average Daily Trading Value) dalam Miliar Rupiah"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[9.5px] font-bold uppercase text-amber-300 mb-1">
+                    SBN 10Y Spot (%)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="3.0"
+                    max="15.0"
+                    value={sbn10YInput}
+                    onChange={(e) => setSbn10YInput(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#131B28] border border-amber-500/40 focus:border-amber-400 rounded-xs text-amber-200 font-bold"
+                    title="Yield Acuan SBN 10 Tahun Indonesia (%) untuk menghitung Blended Spot Rf & Dynamic Cost of Equity (Ke)"
+                  />
+                </div>
+              </div>
+
+              {/* Row 2: Shares, Market Cap, Split, Buyback, Quarterly Growth & Submit */}
               <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 pt-1">
                 <div>
-                  <label className="block text-[10px] font-bold uppercase text-neutral-600 mb-1">
+                  <label className="block text-[9.5px] font-bold uppercase text-slate-400 mb-1">
                     Saham Beredar BEI (Juta Lbr)
                   </label>
                   <input
@@ -1317,16 +1718,17 @@ export function EmitenFundamentalInspectorModal({
                       setSharesMillionInput(val);
                       const numMillion = Number(val.replace(',', '.'));
                       if (Number.isFinite(numMillion) && numMillion > 0) {
-                        const syncedTrillion = (numMillion * 1_000_000 * activeStock.lastPrice) / 1_000_000_000_000;
+                        const syncedTrillion =
+                          (numMillion * 1_000_000 * activeStock.lastPrice) / 1_000_000_000_000;
                         setMarketCapTrillionInput(syncedTrillion.toFixed(2));
                       }
                     }}
-                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs text-[#111315]"
-                    title="Jumlah saham tercatat/beredar resmi BEI dalam Juta Lembar (otomatis menyinkronkan Market Cap = Shares × Harga Live)"
+                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] rounded-xs text-slate-100"
+                    title="Jumlah saham tercatat resmi BEI dalam Juta Lembar (× 1e6 lembar)"
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold uppercase text-neutral-600 mb-1">
+                  <label className="block text-[9.5px] font-bold uppercase text-slate-400 mb-1">
                     Market Cap Live (Rp Triliun)
                   </label>
                   <input
@@ -1335,12 +1737,12 @@ export function EmitenFundamentalInspectorModal({
                     min="0.05"
                     value={marketCapTrillionInput}
                     onChange={(e) => setMarketCapTrillionInput(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs text-[#111315]"
-                    title="Kapitalisasi pasar dalam Rp Triliun (P0 Sanity Check lolos bila selisih MarketCap/Price vs Shares ≤ 3,0%)"
+                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] rounded-xs text-slate-100"
+                    title="Kapitalisasi pasar dalam Rp Triliun (P0 Sanity Check lolos bila Δ Implied Shares ≤ 3,0%)"
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold uppercase text-neutral-600 mb-1">
+                  <label className="block text-[9.5px] font-bold uppercase text-slate-400 mb-1">
                     Rasio Stock Split (1 : N)
                   </label>
                   <input
@@ -1350,12 +1752,12 @@ export function EmitenFundamentalInspectorModal({
                     max="20"
                     value={splitRatioInput}
                     onChange={(e) => setSplitRatioInput(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs text-[#111315]"
+                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] rounded-xs text-slate-100"
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold uppercase text-neutral-600 mb-1">
-                    Nominal Buyback Aktif (Rp Miliar)
+                  <label className="block text-[9.5px] font-bold uppercase text-slate-400 mb-1">
+                    Buyback Aktif (Miliar Rp)
                   </label>
                   <input
                     type="number"
@@ -1363,39 +1765,344 @@ export function EmitenFundamentalInspectorModal({
                     min="0"
                     value={buybackNominalInput}
                     onChange={(e) => setBuybackNominalInput(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs text-[#111315]"
+                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] rounded-xs text-slate-100"
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-bold uppercase text-neutral-600 mb-1">
-                    Lonjakan Laba Kuartal YoY (%)
+                  <label className="block text-[9.5px] font-bold uppercase text-slate-400 mb-1">
+                    Lonjakan Laba YoY (%)
                   </label>
                   <input
                     type="number"
                     step="0.5"
                     value={quarterlyGrowthInput}
                     onChange={(e) => setQuarterlyGrowthInput(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs text-[#111315]"
+                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] rounded-xs text-slate-100"
                   />
                 </div>
                 <div className="flex flex-col justify-end gap-1">
                   <button
                     type="button"
                     onClick={handleAutoSyncP0Sanity}
-                    className="w-full px-2.5 py-1 text-[10px] font-mono font-bold text-[#0D5C46] bg-[#059669]/10 hover:bg-[#059669]/20 border border-[#059669]/40 rounded-xs cursor-pointer transition-colors"
-                    title="Sinkronkan otomatis Saham Beredar Resmi BEI × Harga Live agar Δ Implied Shares = 0,00% (SANITY: PASS)"
+                    className="w-full px-2.5 py-1 text-[10px] font-mono font-bold text-sky-300 bg-sky-950/70 hover:bg-sky-900/90 border border-sky-500/40 rounded-xs cursor-pointer transition-colors"
+                    title="Sinkronkan otomatis Saham Beredar × Harga Live agar Δ Implied Shares = 0,00% (SANITY: PASS)"
                   >
                     Auto-Sync P0 (Shares×Px)
                   </button>
                   <button
                     type="submit"
-                    className="w-full px-3 py-1.5 text-xs font-bold text-white bg-[#0D5C46] hover:bg-[#059669] rounded-xs cursor-pointer transition-colors"
+                    className="w-full px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-xs cursor-pointer transition-colors"
                   >
-                    Terapkan Kalibrasi
+                    Simpan USER_OVERRIDE
                   </button>
                 </div>
               </div>
+
+              {/* Real-Time Live Preview Bar inside Calibration Modal */}
+              {liveCalibrationPreview && (
+                <div className="p-2.5 bg-[#090C10] border border-[#1E2736] rounded-xs flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400">
+                    ⚡ LIVE PREVIEW SEBELUM SIMPAN (@ Px Rp{' '}
+                    {formatIdrPriceDisplay(activeStock.lastPrice)}):
+                  </span>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span>
+                      EPS TTM:{' '}
+                      <strong className="text-slate-100">
+                        Rp {liveCalibrationPreview.epsIdr.toLocaleString('id-ID')}
+                      </strong>
+                    </span>
+                    <span>
+                      BVPS:{' '}
+                      <strong className="text-slate-100">
+                        Rp {liveCalibrationPreview.bvpsIdr.toLocaleString('id-ID')}
+                      </strong>
+                    </span>
+                    <span>
+                      Implied PER:{' '}
+                      <strong className="text-emerald-400">
+                        {liveCalibrationPreview.impliedPer.toFixed(2)}x
+                      </strong>
+                    </span>
+                    <span>
+                      Implied PBV:{' '}
+                      <strong className="text-sky-400">
+                        {liveCalibrationPreview.impliedPbv.toFixed(2)}x
+                      </strong>
+                    </span>
+                    <span>
+                      ROE TTM:{' '}
+                      <strong className="text-emerald-400">
+                        {liveCalibrationPreview.roePct.toFixed(2)}%
+                      </strong>
+                    </span>
+                    <span>
+                      Op Margin:{' '}
+                      <strong className="text-slate-200">
+                        {liveCalibrationPreview.opMarginPct.toFixed(1)}%
+                      </strong>
+                    </span>
+                    <span>
+                      Blended Rf:{' '}
+                      <strong className="text-amber-300">
+                        {liveCalibrationPreview.blendedRf.toFixed(2)}%
+                      </strong>{' '}
+                      → Dynamic Ke:{' '}
+                      <strong className="text-amber-400">
+                        {liveCalibrationPreview.kePct.toFixed(2)}%
+                      </strong>
+                    </span>
+                  </div>
+                </div>
+              )}
             </form>
+          )}
+
+          {/* Expandable Dark Mode Terminal Forensic Data Lineage & Freshness Debugger Drawer */}
+          {showForensicLineageDrawer && joeliardiEval.dataLineage && (
+            <div className="mt-3 p-4 bg-[#090C10] border border-[#222C3C] rounded-xs text-slate-200 space-y-3 font-mono tabular-nums shadow-2xl">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-[#1E2736]">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-sky-400 flex items-center gap-1.5">
+                      <Database className="w-3.5 h-3.5" />
+                      <span>
+                        FORENSIC DATA LINEAGE &amp; FRESHNESS DEBUGGER ({activeStock.ticker}.JK)
+                      </span>
+                    </span>
+                    <span
+                      className={`px-2 py-0.5 text-[9.5px] font-bold rounded-xs border ${
+                        joeliardiEval.dataLineage.overallStatus === 'INSTITUTIONAL_GRADE'
+                          ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500/50'
+                          : joeliardiEval.dataLineage.overallStatus === 'SEED_CAPPED_GRADE_C'
+                          ? 'bg-rose-950/90 text-rose-300 border-rose-500/60'
+                          : 'bg-amber-950/90 text-amber-300 border-amber-500/50'
+                      }`}
+                    >
+                      STATUS: {joeliardiEval.dataLineage.overallStatus}
+                    </span>
+                    <span className="px-2 py-0.5 text-[9.5px] font-bold bg-[#131B28] text-slate-300 border border-[#2A364B] rounded-xs">
+                      FRESH: {joeliardiEval.dataLineage.freshFieldCount} · STALE:{' '}
+                      {joeliardiEval.dataLineage.staleFieldCount} · SEED_WARN:{' '}
+                      {joeliardiEval.dataLineage.seedFieldCount}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1 font-sans">
+                    {joeliardiEval.dataLineage.seedCapReason ||
+                      'Seluruh variabel kunci diaudit dengan metadata sumber (DataSourceType) dan tanggal (asOfDate).'}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={handleTryLiveYahooFundamentals}
+                    disabled={isFetchingLiveFundamentals}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[10.5px] font-bold text-sky-300 bg-sky-950/80 hover:bg-sky-900 border border-sky-500/40 rounded-xs cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw
+                      className={`w-3 h-3 ${isFetchingLiveFundamentals ? 'animate-spin' : ''}`}
+                    />
+                    <span>Pull Live Yahoo API</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleClearCacheAndHardResync}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[10.5px] font-bold text-amber-300 bg-amber-950/80 hover:bg-amber-900 border border-amber-500/40 rounded-xs cursor-pointer"
+                    title="Bersihkan seluruh cache lokal & override, lalu tarik ulang snapshot + live quote"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    <span>Clear Cache &amp; Hard Resync</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCopyDebugJson}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[10.5px] font-bold text-emerald-300 bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/40 rounded-xs cursor-pointer"
+                    title="Salin JSON lengkap DataLineage, RawTickerData, dan SanityReport ke Clipboard"
+                  >
+                    <Copy className="w-3 h-3" />
+                    <span>Copy Debug JSON</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* SBN Macro Benchmark Freshness Alert inside Drawer */}
+              {(joeliardiEval.dataLineage.isSbnMacroProxy ||
+                joeliardiEval.dataLineage.isSbnMacroStale) && (
+                <div className="p-2.5 bg-amber-950/50 border border-amber-500/40 rounded-xs text-[11px] text-amber-200 flex items-center justify-between gap-2">
+                  <span>{joeliardiEval.dataLineage.sbnMacroWarningMessage}</span>
+                  <button
+                    type="button"
+                    onClick={() => setShowCatalystCalibrator(true)}
+                    className="px-2 py-0.5 text-[10px] font-bold bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/50 rounded-xs text-amber-200 shrink-0 cursor-pointer"
+                  >
+                    Override SBN 10Y Manual
+                  </button>
+                </div>
+              )}
+
+              {/* 20-Field TrackedField<T> Forensic Audit Table */}
+              <div className="overflow-x-auto max-h-64 border border-[#1E2736] rounded-xs">
+                <table className="w-full text-left border-collapse text-[10.5px]">
+                  <thead className="bg-[#131B28] text-slate-300 sticky top-0 z-10 border-b border-[#222C3C]">
+                    <tr>
+                      <th className="py-1.5 px-2.5 font-bold uppercase">Variabel (TrackedField)</th>
+                      <th className="py-1.5 px-2.5 font-bold uppercase text-right">Nilai Aktif</th>
+                      <th className="py-1.5 px-2.5 font-bold uppercase">Source Tag</th>
+                      <th className="py-1.5 px-2.5 font-bold uppercase">Freshness</th>
+                      <th className="py-1.5 px-2.5 font-bold uppercase">As-Of / Periode</th>
+                      <th className="py-1.5 px-2.5 font-bold uppercase">Catatan Forensik</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#17202E]">
+                    {(
+                      Object.entries(joeliardiEval.dataLineage.fields) as [
+                        string,
+                        TrackedField<number>
+                      ][]
+                    ).map(([fieldKey, tf]) => {
+                      const isBigIdr =
+                        Math.abs(tf.value) >= 1_000_000_000 &&
+                        !fieldKey.toLowerCase().includes('shares');
+                      const formattedVal = isBigIdr
+                        ? `Rp ${(tf.value / 1_000_000_000).toLocaleString('id-ID', {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2
+                          })} M`
+                        : fieldKey.toLowerCase().includes('shares')
+                        ? `${(tf.value / 1_000_000).toLocaleString('id-ID', {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2
+                          })} Jt lbr`
+                        : fieldKey.toLowerCase().includes('pct') ||
+                          fieldKey.toLowerCase().includes('roe')
+                        ? `${tf.value.toFixed(2)}%`
+                        : tf.value.toLocaleString('id-ID', {
+                            maximumFractionDigits: 2
+                          });
+
+                      const srcCls: Record<DataSourceType, string> = {
+                        LIVE_YAHOO_API:
+                          'bg-emerald-950/90 text-emerald-300 border-emerald-500/50',
+                        SNAPSHOT_JSON: 'bg-sky-950/90 text-sky-300 border-sky-500/50',
+                        FUNDAMENTALS_JSON:
+                          'bg-teal-950/90 text-teal-300 border-teal-500/50',
+                        USER_OVERRIDE:
+                          'bg-indigo-950/90 text-indigo-300 border-indigo-500/50',
+                        PROXY_FORMULA:
+                          'bg-amber-950/90 text-amber-300 border-amber-500/50',
+                        HARDCODED_SEED:
+                          'bg-rose-950/90 text-rose-300 border-rose-500/60'
+                      };
+
+                      const statusCls: Record<FieldFreshnessStatus, string> = {
+                        FRESH: 'text-emerald-400',
+                        STALE: 'text-amber-400',
+                        SEED_WARN: 'text-rose-400 font-bold',
+                        ERROR: 'text-rose-500 font-bold'
+                      };
+
+                      return (
+                        <tr key={fieldKey} className="hover:bg-[#131B28]/70">
+                          <td className="py-1.5 px-2.5 font-semibold text-slate-200">
+                            {fieldKey}
+                          </td>
+                          <td className="py-1.5 px-2.5 text-right font-bold text-slate-100">
+                            {formattedVal}
+                          </td>
+                          <td className="py-1.5 px-2.5">
+                            <span
+                              className={`px-1.5 py-0.5 text-[9px] font-bold rounded-xs border ${
+                                srcCls[tf.source]
+                              }`}
+                            >
+                              {tf.source}
+                            </span>
+                          </td>
+                          <td className={`py-1.5 px-2.5 font-bold ${statusCls[tf.status]}`}>
+                            {tf.status}
+                          </td>
+                          <td className="py-1.5 px-2.5 text-slate-400">
+                            {tf.asOfDate || 'N/A'}
+                            {tf.fiscalPeriod ? ` (${tf.fiscalPeriod})` : ''}
+                          </td>
+                          <td className="py-1.5 px-2.5 text-slate-400 font-sans text-[10px]">
+                            {tf.note || '-'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Network Sync Diagnostics Log & DevTools Console Hint */}
+              <div className="space-y-1.5 pt-1">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-400">
+                  <span className="font-bold uppercase text-slate-300">
+                    LOG DIAGNOSTIK JARINGAN &amp; CORS RELAY (
+                    {joeliardiEval.dataLineage.syncDiagnostics.length} Entri Terakhir)
+                  </span>
+                  <span className="inline-flex items-center gap-1 text-sky-300 bg-[#131B28] px-2 py-0.5 rounded-xs border border-[#222C3C]">
+                    <Terminal className="w-3 h-3" />
+                    <span>
+                      DevTools Console: <code>window.debugNostradamus(&apos;{activeStock.ticker}&apos;)</code>
+                    </span>
+                  </span>
+                </div>
+
+                {joeliardiEval.dataLineage.syncDiagnostics.length > 0 && (
+                  <div className="overflow-x-auto max-h-36 border border-[#1E2736] rounded-xs">
+                    <table className="w-full text-left border-collapse text-[10px]">
+                      <thead className="bg-[#131B28] text-slate-400 border-b border-[#222C3C]">
+                        <tr>
+                          <th className="py-1 px-2">Waktu</th>
+                          <th className="py-1 px-2">Endpoint</th>
+                          <th className="py-1 px-2">Relay</th>
+                          <th className="py-1 px-2">HTTP</th>
+                          <th className="py-1 px-2 text-right">Ukuran</th>
+                          <th className="py-1 px-2">Status</th>
+                          <th className="py-1 px-2">Pesan Diagnostik</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#17202E]">
+                        {joeliardiEval.dataLineage.syncDiagnostics.slice(0, 8).map((diag) => (
+                          <tr key={diag.id} className="hover:bg-[#131B28]/60">
+                            <td className="py-1 px-2 text-slate-400">
+                              {diag.timestamp.slice(11, 19)}
+                            </td>
+                            <td className="py-1 px-2 text-slate-300">{diag.endpoint}</td>
+                            <td className="py-1 px-2 text-slate-400">{diag.proxyUsed}</td>
+                            <td className="py-1 px-2 text-slate-300">
+                              {diag.httpStatus ?? '-'}
+                            </td>
+                            <td className="py-1 px-2 text-right text-slate-300">
+                              {diag.payloadBytes
+                                ? `${(diag.payloadBytes / 1024).toFixed(1)} kB`
+                                : '-'}
+                            </td>
+                            <td
+                              className={`py-1 px-2 font-bold ${
+                                diag.status === 'OK'
+                                  ? 'text-emerald-400'
+                                  : diag.status === 'FALLBACK_USED'
+                                  ? 'text-amber-400'
+                                  : 'text-rose-400'
+                              }`}
+                            >
+                              {diag.status}
+                            </td>
+                            <td className="py-1 px-2 text-slate-400 font-sans">
+                              {diag.errorMessage || 'OK'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
           )}
         </div>
 
@@ -1530,16 +2237,30 @@ export function EmitenFundamentalInspectorModal({
             </div>
           )}
 
-          {/* Top Valuation & Intrinsic Value Bar with MetricTooltips */}
+          {/* Top Valuation & Intrinsic Value Bar with MetricTooltips & Inline Provenance Badges */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="p-3.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
-              <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
+              <div className="flex items-center justify-between gap-1 text-[10px] font-bold uppercase tracking-wider text-neutral-500">
                 <MetricTooltip
                   label="HARGA PASAR LIVE (BEI)"
                   title="Kuotasi Harga Pasar Reguler BEI (.JK)"
                   laymanExplanation="Harga transaksi terakhir saham di pasar reguler Bursa Efek Indonesia beserta acuan harga penutupan sesi sebelumnya (Previous Close), persentase perubahan harian (1D), bulanan (30D), dan sepanjang tahun berjalan (YTD)."
                   practicalGuide="Bandingkan harga pasar ini terhadap Nilai Intrinsik Wajar di sebelahnya untuk melihat apakah saham sedang terdiskon atau sudah mahal."
                 />
+                {joeliardiEval.dataLineage && (
+                  <span
+                    className={`px-1.5 py-0.2 text-[8.5px] font-mono font-bold rounded-xs border ${
+                      joeliardiEval.dataLineage.fields.lastPrice.source === 'LIVE_YAHOO_API'
+                        ? 'bg-emerald-950 text-emerald-300 border-emerald-500/50'
+                        : 'bg-sky-950 text-sky-300 border-sky-500/50'
+                    }`}
+                    title={`Price Source: ${joeliardiEval.dataLineage.fields.lastPrice.source} (${joeliardiEval.dataLineage.fields.lastPrice.asOfDate || 'N/A'})`}
+                  >
+                    {joeliardiEval.dataLineage.fields.lastPrice.source === 'LIVE_YAHOO_API'
+                      ? 'LIVE_API'
+                      : 'SNAPSHOT'}
+                  </span>
+                )}
               </div>
               <div className="flex items-baseline justify-between gap-2 mt-1">
                 <div className="text-lg font-bold font-mono text-[#111315]">
@@ -1623,7 +2344,7 @@ export function EmitenFundamentalInspectorModal({
                 <MetricTooltip
                   label="MARGIN OF SAFETY & STATE"
                   title="Sabuk Pengaman Valuasi Dinamis (Excess Return) & Catalyst Override"
-                  laymanExplanation="Syarat MoS dikompresi ke 0%–10% bila Excess Return (Forward ROE − Ke) > 10%. Jika emiten memiliki katalis aktif (hasActiveCatalyst: Buyback, lonjakan laba >20%, atau akuisisi), status otomatis beralih ke Buy on Strength dengan harga spot sebagai floor."
+                  laymanExplanation="Syarat MoS dikompresi ke 0%–10% bila Excess Return (Forward ROE − Ke) > 10% (atau dikunci minimal 25,0% saat IHSG VOLATIL). Jika emiten memiliki katalis aktif (hasActiveCatalyst: Buyback, lonjakan laba >20%, atau akuisisi), status otomatis beralih ke Buy on Strength dengan harga spot sebagai floor."
                   practicalGuide="MoS ≥ Syarat Dinamis = Akumulasi Rasional; Katalis Aktif = Buy on Strength; Siklikal PBV Z ≤ -1.5σ = Strong Buy."
                 />
               </div>
@@ -1655,7 +2376,7 @@ export function EmitenFundamentalInspectorModal({
             </div>
 
             <div className="p-3.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
-              <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
+              <div className="flex items-center justify-between gap-1 text-[10px] font-bold uppercase tracking-wider text-neutral-500">
                 <MetricTooltip
                   label={`MATRIKS SEKTOR (${joeliardiEval.sectorPrimaryMetricShort ?? 'PBV'}) & PBV`}
                   title={`Matriks Spesifik Sektor (${joeliardiEval.sectorPrimaryMetricLabel ?? 'Justified PBV'}) & Damodaran PBV`}
@@ -1663,6 +2384,24 @@ export function EmitenFundamentalInspectorModal({
                   practicalGuide="Bandingkan rasio sektor aktual terhadap kelipatan wajarnya serta Implied PBV terhadap Justified PBV Damodaran."
                   align="right"
                 />
+                {joeliardiEval.dataLineage && (
+                  <span
+                    className={`px-1.5 py-0.2 text-[8.5px] font-mono font-bold rounded-xs border ${
+                      joeliardiEval.dataLineage.fields.netIncomeTTMIdr.source === 'HARDCODED_SEED'
+                        ? 'bg-rose-950 text-rose-300 border-rose-500/60'
+                        : joeliardiEval.dataLineage.fields.netIncomeTTMIdr.source === 'USER_OVERRIDE'
+                        ? 'bg-indigo-950 text-indigo-300 border-indigo-500/50'
+                        : 'bg-emerald-950 text-emerald-300 border-emerald-500/50'
+                    }`}
+                    title={`Fundamental Source: ${joeliardiEval.dataLineage.fields.netIncomeTTMIdr.source}`}
+                  >
+                    {joeliardiEval.dataLineage.fields.netIncomeTTMIdr.source === 'HARDCODED_SEED'
+                      ? 'SEED_WARN'
+                      : joeliardiEval.dataLineage.fields.netIncomeTTMIdr.source === 'USER_OVERRIDE'
+                      ? 'OVERRIDE'
+                      : 'VERIFIED'}
+                  </span>
+                )}
               </div>
               <div className="text-sm font-bold font-mono text-[#111315] mt-1">
                 {joeliardiEval.sectorPrimaryMetricShort ?? 'PBV'}{' '}
@@ -3236,8 +3975,10 @@ export function EmitenFundamentalInspectorModal({
               valuationResult={joeliardiEval.valuationResult}
               tacticalOverlay={joeliardiEval.tacticalOverlay}
               riskSizingResult={joeliardiEval.riskSizingResult}
+              dataLineage={joeliardiEval.dataLineage}
               onAutoSyncSharesMarketCap={handleAutoSyncP0Sanity}
               onOpenCalibrator={() => setShowCatalystCalibrator(true)}
+              onOpenLineageDrawer={() => setShowForensicLineageDrawer((prev) => !prev)}
             />
           )}
         </div>

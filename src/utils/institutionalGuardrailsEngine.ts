@@ -14,6 +14,7 @@ import {
   ValuationLedger,
   ValuationResult
 } from '../types/quant';
+import { getFundamentalUserOverride } from './dataLineageEngine';
 
 /**
  * Helper: Normalizes percentage or decimal inputs into decimal (e.g., 18.5 -> 0.185, 0.185 -> 0.185).
@@ -153,7 +154,7 @@ export function decumulateIDXQuarters(quarters: QuarterlyRawRow[]): StandaloneQu
 
 export interface DecumulatedIdxTtmAndSnapshotResult {
   standaloneQuarters: StandaloneQuarter[];
-  ttmMethod: 'SUM_4_STANDALONE_QUARTERS' | 'SAFE_YTD_BRIDGE_FORMULA';
+  ttmMethod: 'SUM_4_STANDALONE_QUARTERS' | 'SAFE_YTD_BRIDGE_FORMULA' | 'FY_FALLBACK';
   // Flow Metrics (TTM 12M)
   revenueTTM: number;
   operatingProfitTTM: number;
@@ -172,8 +173,11 @@ export interface DecumulatedIdxTtmAndSnapshotResult {
 
 /**
  * Computes TTM Flow Metrics and enforces the Latest-Snapshot Guard on Balance Sheet Stock Metrics.
- * - Uses the sum of the last 4 consecutive standalone quarters when available.
- * - Falls back to `TTM = Current_YTD + Prior_FY_12M - Prior_Same_Period_YTD` if quarters have gaps.
+ * Strict Anti-Linear Annualization Priority:
+ * 1. `SAFE_YTD_BRIDGE_FORMULA` (`Prior_FY_12M + Current_YTD - Prior_Same_Period_YTD`) whenever YTD bridge components exist
+ *    OR if 4-quarter sum exceeds `1.65 * Prior_FY_12M`.
+ * 2. `SUM_4_STANDALONE_QUARTERS` (decumulated consecutive standalone quarters, verified `<= 1.65 * Prior_FY_12M`).
+ * 3. `FY_FALLBACK` (`Prior_FY_12M`) if prior-year comparison is missing (NEVER linear `9M * 4/3` or `6M * 2`).
  * - Balance Sheet metrics (`equityAttributable`, `totalAssets`, `cash`, `totalDebt`, `sharesOutstanding`)
  *   are taken strictly from the 1 latest chronological reporting period.
  */
@@ -215,9 +219,9 @@ export function computeIdxTtmAndSnapshotFromQuarters(
   let ttmMethod: DecumulatedIdxTtmAndSnapshotResult['ttmMethod'] = 'SUM_4_STANDALONE_QUARTERS';
 
   // Look for safe YTD bridge components: Current_YTD + Prior_FY_12M - Prior_Same_Period_YTD
-  const priorFyQ4 = sortedRaw.find(
-    (r) => r.fiscalYear === latestRaw.fiscalYear - 1 && r.quarter === 4 && r.reportType !== 'STANDALONE'
-  );
+  const priorFyQ4 =
+    sortedRaw.find((r) => r.fiscalYear === latestRaw.fiscalYear - 1 && r.quarter === 4) ||
+    [...sortedRaw].reverse().find((r) => r.quarter === 4);
   const priorSamePeriodYtd = sortedRaw.find(
     (r) =>
       r.fiscalYear === latestRaw.fiscalYear - 1 &&
@@ -225,7 +229,17 @@ export function computeIdxTtmAndSnapshotFromQuarters(
       r.reportType !== 'STANDALONE'
   );
 
-  if (!areLast4Consecutive && latestRaw.reportType !== 'STANDALONE' && priorFyQ4 && priorSamePeriodYtd) {
+  const last4 = standaloneQuarters.slice(-4);
+  const sum4Rev = last4.reduce((acc, q) => acc + q.revenue, 0);
+  const isSum4Bloated =
+    priorFyQ4 && priorFyQ4.revenue > 0 ? sum4Rev / priorFyQ4.revenue > 1.65 : false;
+
+  if (
+    latestRaw.reportType !== 'STANDALONE' &&
+    priorFyQ4 &&
+    priorSamePeriodYtd &&
+    (!areLast4Consecutive || isSum4Bloated || latestRaw.quarter < 4)
+  ) {
     ttmMethod = 'SAFE_YTD_BRIDGE_FORMULA';
     revenueTTM = Math.round(latestRaw.revenue + priorFyQ4.revenue - priorSamePeriodYtd.revenue);
     operatingProfitTTM = Math.round(
@@ -248,17 +262,31 @@ export function computeIdxTtmAndSnapshotFromQuarters(
     const fyCapex = Number(priorFyQ4.capex ?? 0) || 0;
     const prCapex = Number(priorSamePeriodYtd.capex ?? 0) || 0;
     capexTTM = Math.round(curCapex + fyCapex - prCapex);
+  } else if (last4.length === 4 && !isSum4Bloated) {
+    ttmMethod = 'SUM_4_STANDALONE_QUARTERS';
+    revenueTTM = Math.round(sum4Rev);
+    operatingProfitTTM = Math.round(last4.reduce((acc, q) => acc + q.operatingProfit, 0));
+    netIncomeTTM = Math.round(last4.reduce((acc, q) => acc + q.netIncome, 0));
+    ebitdaTTM = Math.round(last4.reduce((acc, q) => acc + q.ebitda, 0));
+    ocfTTM = Math.round(last4.reduce((acc, q) => acc + q.ocf, 0));
+    capexTTM = Math.round(last4.reduce((acc, q) => acc + q.capex, 0));
+  } else if (priorFyQ4) {
+    // Anti-Linear Annualization Fallback: use latest Full Year (FY_FALLBACK), NEVER 9M * 4/3 or 6M * 2
+    ttmMethod = 'FY_FALLBACK';
+    revenueTTM = Math.round(priorFyQ4.revenue);
+    operatingProfitTTM = Math.round(priorFyQ4.operatingProfit);
+    netIncomeTTM = Math.round(priorFyQ4.netIncome);
+    ebitdaTTM = Math.round(Number(priorFyQ4.ebitda ?? priorFyQ4.operatingProfit * 1.15) || 0);
+    ocfTTM = Math.round(Number(priorFyQ4.ocf ?? priorFyQ4.netIncome) || 0);
+    capexTTM = Math.round(Number(priorFyQ4.capex ?? 0) || 0);
   } else {
-    const last4 = standaloneQuarters.slice(-4);
-    const scaleFactor = last4.length > 0 ? 4 / last4.length : 1;
-    revenueTTM = Math.round(last4.reduce((acc, q) => acc + q.revenue, 0) * scaleFactor);
-    operatingProfitTTM = Math.round(
-      last4.reduce((acc, q) => acc + q.operatingProfit, 0) * scaleFactor
-    );
-    netIncomeTTM = Math.round(last4.reduce((acc, q) => acc + q.netIncome, 0) * scaleFactor);
-    ebitdaTTM = Math.round(last4.reduce((acc, q) => acc + q.ebitda, 0) * scaleFactor);
-    ocfTTM = Math.round(last4.reduce((acc, q) => acc + q.ocf, 0) * scaleFactor);
-    capexTTM = Math.round(last4.reduce((acc, q) => acc + q.capex, 0) * scaleFactor);
+    ttmMethod = 'SUM_4_STANDALONE_QUARTERS';
+    revenueTTM = Math.round(sum4Rev);
+    operatingProfitTTM = Math.round(last4.reduce((acc, q) => acc + q.operatingProfit, 0));
+    netIncomeTTM = Math.round(last4.reduce((acc, q) => acc + q.netIncome, 0));
+    ebitdaTTM = Math.round(last4.reduce((acc, q) => acc + q.ebitda, 0));
+    ocfTTM = Math.round(last4.reduce((acc, q) => acc + q.ocf, 0));
+    capexTTM = Math.round(last4.reduce((acc, q) => acc + q.capex, 0));
   }
 
   // Balance Sheet Snapshot Guard: Strictly take from latest 1 period (latestRaw)
@@ -1389,42 +1417,58 @@ export function buildRawTickerDataFromStock(params: {
     marketRegime = 'TENANG'
   } = params;
 
+  const userOverride = getFundamentalUserOverride(stock.ticker);
+
   const sharesOutstanding =
-    paramSharesOutstanding && paramSharesOutstanding > 0
+    userOverride?.sharesOutstanding && userOverride.sharesOutstanding > 0
+      ? Math.round(userOverride.sharesOutstanding)
+      : paramSharesOutstanding && paramSharesOutstanding > 0
       ? Math.round(paramSharesOutstanding)
       : stock.sharesOutstanding && stock.sharesOutstanding > 0
       ? Math.round(stock.sharesOutstanding)
       : Math.max(100_000_000, Math.round(liveMarketCapIdr / Math.max(1, price)));
 
   const calibratedMarketCap =
-    liveMarketCapIdr && liveMarketCapIdr > 0
+    userOverride?.sharesOutstanding && userOverride.sharesOutstanding > 0
+      ? Math.round(sharesOutstanding * price)
+      : liveMarketCapIdr && liveMarketCapIdr > 0
       ? Math.round(liveMarketCapIdr)
       : stock.liveMarketCapIdr && stock.liveMarketCapIdr > 0
       ? Math.round(stock.liveMarketCapIdr)
       : Math.round(sharesOutstanding * price);
 
-  const epsTTM = Math.max(1, Math.round(trailingEpsIdr));
-  const bvps = Math.max(10, Math.round(estimatedBvpsIdr));
-
-  const netIncomeTTM =
-    stock.netIncomeTTMIdr &&
-    stock.netIncomeTTMIdr > 0 &&
-    Math.abs(epsTTM * sharesOutstanding - stock.netIncomeTTMIdr) / stock.netIncomeTTMIdr <= 0.05
+  const resolvedNetIncomeTTM =
+    userOverride?.netIncomeTTMIdr && userOverride.netIncomeTTMIdr > 0
+      ? Math.round(userOverride.netIncomeTTMIdr)
+      : stock.netIncomeTTMIdr && stock.netIncomeTTMIdr > 0
       ? Math.round(stock.netIncomeTTMIdr)
-      : Math.round(epsTTM * sharesOutstanding);
+      : undefined;
 
-  const equityAttributable =
-    stock.equityAttributableIdr &&
-    stock.equityAttributableIdr > 0 &&
-    Math.abs(bvps * sharesOutstanding - stock.equityAttributableIdr) / stock.equityAttributableIdr <= 0.05
+  const resolvedEquityAttributable =
+    userOverride?.equityAttributableIdr && userOverride.equityAttributableIdr > 0
+      ? Math.round(userOverride.equityAttributableIdr)
+      : stock.equityAttributableIdr && stock.equityAttributableIdr > 0
       ? Math.round(stock.equityAttributableIdr)
-      : Math.round(bvps * sharesOutstanding);
+      : undefined;
+
+  const epsTTM = resolvedNetIncomeTTM
+    ? Math.max(1, Math.round(resolvedNetIncomeTTM / Math.max(1, sharesOutstanding)))
+    : Math.max(1, Math.round(trailingEpsIdr));
+
+  const bvps = resolvedEquityAttributable
+    ? Math.max(10, Math.round(resolvedEquityAttributable / Math.max(1, sharesOutstanding)))
+    : Math.max(10, Math.round(estimatedBvpsIdr));
+
+  const netIncomeTTM = resolvedNetIncomeTTM ?? Math.round(epsTTM * sharesOutstanding);
+  const equityAttributable = resolvedEquityAttributable ?? Math.round(bvps * sharesOutstanding);
 
   const opMarginDecimal = Math.max(0.04, Math.min(0.65, (stock.operatingMargin || 15) / 100));
   const netMarginDecimal = Math.max(0.03, opMarginDecimal * 0.76);
 
   const revenueTTM =
-    stock.revenueTTMIdr && stock.revenueTTMIdr > 0
+    userOverride?.revenueTTMIdr && userOverride.revenueTTMIdr > 0
+      ? Math.round(userOverride.revenueTTMIdr)
+      : stock.revenueTTMIdr && stock.revenueTTMIdr > 0
       ? Math.round(stock.revenueTTMIdr)
       : Math.round(netIncomeTTM / netMarginDecimal);
 
@@ -1440,7 +1484,9 @@ export function buildRawTickerDataFromStock(params: {
   );
 
   const operatingProfitTTM =
-    stock.operatingProfitTTMIdr && stock.operatingProfitTTMIdr > 0
+    userOverride?.operatingProfitTTMIdr && userOverride.operatingProfitTTMIdr > 0
+      ? Math.round(userOverride.operatingProfitTTMIdr)
+      : stock.operatingProfitTTMIdr && stock.operatingProfitTTMIdr > 0
       ? Math.round(stock.operatingProfitTTMIdr)
       : Math.round(revenueTTM * opMarginDecimal);
 
@@ -1450,14 +1496,29 @@ export function buildRawTickerDataFromStock(params: {
       ? Math.round(stock.capexTTMIdr)
       : Math.round(revenueTTM * capexRatio);
 
-  const daTTM = Math.max(1, Math.round(capexTTM / Math.max(0.8, capexToDaRatio || 1.5)));
+  const daTTM =
+    stock.daTTMIdr && stock.daTTMIdr > 0
+      ? Math.round(stock.daTTMIdr)
+      : Math.max(1, Math.round(capexTTM / Math.max(0.8, capexToDaRatio || 1.5)));
   const ebitdaTTM = operatingProfitTTM + daTTM;
-  const ocfTTM = Math.round(netIncomeTTM * ocfToNetIncomeRatio);
+  const ocfTTM =
+    stock.ocfTTMIdr && stock.ocfTTMIdr > 0
+      ? Math.round(stock.ocfTTMIdr)
+      : Math.round(netIncomeTTM * ocfToNetIncomeRatio);
 
   const der = Math.max(0.02, stock.debtToEquity || 0.5);
-  const totalDebt = Math.round(equityAttributable * der);
-  const totalAssets = Math.round(equityAttributable + totalDebt + equityAttributable * 0.15);
-  const cashAndEquivalents = Math.round(equityAttributable * 0.22);
+  const totalDebt =
+    stock.totalDebtIdr && stock.totalDebtIdr >= 0
+      ? Math.round(stock.totalDebtIdr)
+      : Math.round(equityAttributable * der);
+  const totalAssets =
+    stock.totalAssetsIdr && stock.totalAssetsIdr > 0
+      ? Math.round(stock.totalAssetsIdr)
+      : Math.round(equityAttributable + totalDebt + equityAttributable * 0.15);
+  const cashAndEquivalents =
+    stock.cashAndEquivalentsIdr && stock.cashAndEquivalentsIdr >= 0
+      ? Math.round(stock.cashAndEquivalentsIdr)
+      : Math.round(equityAttributable * 0.22);
   const investedCapital = Math.max(1, equityAttributable + totalDebt - cashAndEquivalents);
   const nopatTTM = Math.round(operatingProfitTTM * 0.78);
   const derivedRoicPct = Number(

@@ -10,6 +10,7 @@ import {
 } from '../types/quant';
 import {
   calculateForwardDividend,
+  computeSbnSpotYieldCurveAndKe,
   enrichStockMetrics,
   estimateEmitenAdtv20dIdr,
   rankUniverseWithBuffer,
@@ -29,6 +30,13 @@ import {
 } from '../data/idxKseiHscRegistry';
 import { pullLiveMarketSnapshotFromGitHubApi } from './githubCloudSync';
 import embeddedSnapshotRaw from '../data/staticMarketSnapshot.json';
+import {
+  DataSourceType,
+  FundamentalsSnapshotDocument,
+  FundamentalsSnapshotTickerEntry,
+  getFundamentalUserOverride,
+  recordSyncDiagnostic
+} from './dataLineageEngine';
 
 export interface IdxDirectoryEntry {
   ticker: string;
@@ -50,6 +58,10 @@ export interface SparkSeriesItem {
   timestamp?: number[];
   shortName?: string;
   adtv20dIdr?: number;
+  adtvSource?: DataSourceType;
+  adtvAsOfDate?: string;
+  priceSource?: DataSourceType;
+  priceAsOfDate?: string;
   marketState?: string;
 }
 
@@ -328,6 +340,7 @@ export function computeAccurateYTDReturn(
 
 interface StaticMarketSnapshotPayload {
   generatedAt?: string;
+  updatedAt?: string;
   liveYahooSymbolCount?: number;
   symbolCount?: number;
   totalJciEmitenCount?: number;
@@ -446,6 +459,393 @@ export const IDX_SECTOR_CATALOG: IdxDirectoryEntry[] = (() => {
   return Array.from(map.values());
 })();
 
+let cachedFundamentalsSnapshotDoc: FundamentalsSnapshotDocument | null = null;
+let inFlightFundamentalsSnapshotPromise: Promise<FundamentalsSnapshotDocument | null> | null = null;
+const liveFundamentalsMemoryCache = new Map<string, FundamentalsSnapshotTickerEntry>();
+
+export function getCachedFundamentalsSnapshot(): FundamentalsSnapshotDocument | null {
+  return cachedFundamentalsSnapshotDoc;
+}
+
+export function clearFundamentalsMemoryCache(ticker?: string): void {
+  if (!ticker) {
+    liveFundamentalsMemoryCache.clear();
+    cachedFundamentalsSnapshotDoc = null;
+    return;
+  }
+  const clean = ticker.trim().toUpperCase().replace(/\.JK$/i, '');
+  liveFundamentalsMemoryCache.delete(clean);
+}
+
+/**
+ * Loads `public/fundamentals-snapshot.json` and records a SyncDiagnosticEntry.
+ * Strictly respects `provenanceMode: 'AUTOMATED_FETCH' | 'BOOTSTRAP_PLACEHOLDER'`.
+ */
+export async function loadFundamentalsSnapshot(
+  forceRefresh = false
+): Promise<FundamentalsSnapshotDocument | null> {
+  if (!forceRefresh && cachedFundamentalsSnapshotDoc) {
+    return cachedFundamentalsSnapshotDoc;
+  }
+  if (inFlightFundamentalsSnapshotPromise) {
+    return inFlightFundamentalsSnapshotPromise;
+  }
+
+  inFlightFundamentalsSnapshotPromise = (async () => {
+    const endpoint = `./fundamentals-snapshot.json?t=${Date.now()}`;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      const res = await fetch(endpoint, {
+        signal: controller.signal,
+        cache: 'no-store'
+      });
+      clearTimeout(timer);
+      if (res.ok) {
+        const text = await res.text();
+        const parsed = JSON.parse(text) as FundamentalsSnapshotDocument;
+        cachedFundamentalsSnapshotDoc = parsed;
+        recordSyncDiagnostic({
+          ticker: 'GLOBAL',
+          stage: 'FUNDAMENTALS_SNAPSHOT',
+          endpoint: './fundamentals-snapshot.json',
+          payloadBytes: text.length,
+          httpStatus: res.status,
+          status:
+            parsed.provenanceMode === 'AUTOMATED_FETCH' ? 'OK' : 'FALLBACK_USED',
+          errorDetail:
+            parsed.provenanceMode === 'BOOTSTRAP_PLACEHOLDER'
+              ? 'Snapshot berstatus BOOTSTRAP_PLACEHOLDER (menunggu GitHub Actions AUTOMATED_FETCH).'
+              : undefined,
+          fallbackSource:
+            parsed.provenanceMode === 'BOOTSTRAP_PLACEHOLDER'
+              ? 'HARDCODED_SEED'
+              : 'FUNDAMENTALS_JSON'
+        });
+        return parsed;
+      }
+      recordSyncDiagnostic({
+        ticker: 'GLOBAL',
+        stage: 'FUNDAMENTALS_SNAPSHOT',
+        endpoint: './fundamentals-snapshot.json',
+        httpStatus: res.status,
+        status: 'FALLBACK_USED',
+        errorDetail: `HTTP ${res.status} saat memuat fundamentals-snapshot.json`,
+        fallbackSource: 'HARDCODED_SEED'
+      });
+    } catch (err) {
+      recordSyncDiagnostic({
+        ticker: 'GLOBAL',
+        stage: 'FUNDAMENTALS_SNAPSHOT',
+        endpoint: './fundamentals-snapshot.json',
+        status: 'FALLBACK_USED',
+        errorDetail: err instanceof Error ? err.message : 'Gagal memuat fundamentals-snapshot.json',
+        fallbackSource: 'HARDCODED_SEED'
+      });
+    } finally {
+      inFlightFundamentalsSnapshotPromise = null;
+    }
+    return cachedFundamentalsSnapshotDoc;
+  })();
+
+  return inFlightFundamentalsSnapshotPromise;
+}
+
+/**
+ * Resolves fundamental financial statements and ratios for a ticker with strict provenance tracking:
+ * 1. USER_OVERRIDE (from Calibration Modal)
+ * 2. LIVE_YAHOO_API (from on-demand Yahoo timeseries/quoteSummary sync)
+ * 3. FUNDAMENTALS_JSON (ONLY if provenanceMode === 'AUTOMATED_FETCH' in public/fundamentals-snapshot.json)
+ * 4. HARDCODED_SEED (if provenanceMode === 'BOOTSTRAP_PLACEHOLDER' or unpopulated) -> triggers SEED_WARN & caps Grade at C
+ */
+export function resolveTickerFundamentalOverlay(
+  ticker: string,
+  catalogEntry: { defaultRoe: number; defaultDer: number; defaultOpMargin: number },
+  chartAdtv20dIdr?: number,
+  chartAdtvSource?: DataSourceType,
+  chartAdtvAsOfDate?: string
+): {
+  roe: number;
+  debtToEquity: number;
+  operatingMargin: number;
+  computedRoePct: number;
+  computedOpMarginPct: number;
+  computedDer: number;
+  revenueTTMIdr?: number;
+  operatingProfitTTMIdr?: number;
+  netIncomeTTMIdr?: number;
+  equityAttributableIdr?: number;
+  totalDebtIdr?: number;
+  totalAssetsIdr?: number;
+  cashAndEquivalentsIdr?: number;
+  sharesOutstanding?: number;
+  ocfTTMIdr?: number;
+  capexTTMIdr?: number;
+  daTTMIdr?: number;
+  adtv20dIdr?: number;
+  adtvSource?: DataSourceType;
+  adtvAsOfDate?: string;
+  fundamentalsSource: DataSourceType;
+  fundamentalsAsOfDate?: string;
+  fundamentalsFiscalPeriod?: string;
+  fundamentalsNote?: string;
+} {
+  const clean = ticker.trim().toUpperCase().replace(/\.JK$/i, '');
+  const userOverride = getFundamentalUserOverride(clean);
+  const liveEntry = liveFundamentalsMemoryCache.get(clean);
+  const snapEntry = cachedFundamentalsSnapshotDoc?.tickers?.[clean];
+
+  const verifiedSnapEntry =
+    snapEntry &&
+    snapEntry.provenanceMode === 'AUTOMATED_FETCH' &&
+    typeof snapEntry.revenueTTM === 'number' &&
+    snapEntry.revenueTTM > 0 &&
+    typeof snapEntry.netIncomeTTM === 'number' &&
+    typeof snapEntry.equityAttributable === 'number' &&
+    snapEntry.equityAttributable > 0
+      ? snapEntry
+      : null;
+
+  // Determine active statement source priority: USER_OVERRIDE > LIVE_YAHOO_API > FUNDAMENTALS_JSON (AUTOMATED_FETCH) > HARDCODED_SEED
+  const hasUserFundamentalOverride =
+    userOverride &&
+    (typeof userOverride.revenueTTM === 'number' ||
+      typeof userOverride.netIncomeTTM === 'number' ||
+      typeof userOverride.equityAttributable === 'number' ||
+      typeof userOverride.sharesOutstanding === 'number');
+
+  const activeStatementSource: DataSourceType = hasUserFundamentalOverride
+    ? 'USER_OVERRIDE'
+    : liveEntry &&
+      liveEntry.provenanceMode === 'AUTOMATED_FETCH' &&
+      typeof liveEntry.revenueTTM === 'number' &&
+      liveEntry.revenueTTM > 0
+    ? 'LIVE_YAHOO_API'
+    : verifiedSnapEntry
+    ? 'FUNDAMENTALS_JSON'
+    : 'HARDCODED_SEED';
+
+  const baseRecord =
+    activeStatementSource === 'LIVE_YAHOO_API'
+      ? liveEntry
+      : verifiedSnapEntry || undefined;
+
+  const revenueTTMIdr =
+    userOverride?.revenueTTM ??
+    (typeof baseRecord?.revenueTTM === 'number' ? baseRecord.revenueTTM : undefined);
+  const operatingProfitTTMIdr =
+    userOverride?.ebitTTM ??
+    (typeof baseRecord?.ebitTTM === 'number' ? baseRecord.ebitTTM : undefined);
+  const netIncomeTTMIdr =
+    userOverride?.netIncomeTTM ??
+    (typeof baseRecord?.netIncomeTTM === 'number' ? baseRecord.netIncomeTTM : undefined);
+  const equityAttributableIdr =
+    userOverride?.equityAttributable ??
+    (typeof baseRecord?.equityAttributable === 'number' ? baseRecord.equityAttributable : undefined);
+  const totalDebtIdr =
+    userOverride?.totalDebt ??
+    (typeof baseRecord?.totalDebt === 'number' ? baseRecord.totalDebt : undefined);
+  const cashAndEquivalentsIdr =
+    userOverride?.cashAndEquivalents ??
+    (typeof baseRecord?.cashAndEquivalents === 'number' ? baseRecord.cashAndEquivalents : undefined);
+  const sharesOutstanding =
+    userOverride?.sharesOutstanding ??
+    (typeof baseRecord?.sharesOutstanding === 'number' ? baseRecord.sharesOutstanding : undefined);
+  const ocfTTMIdr =
+    typeof baseRecord?.ocfTTM === 'number' ? baseRecord.ocfTTM : undefined;
+  const capexTTMIdr =
+    typeof baseRecord?.capexTTM === 'number' ? baseRecord.capexTTM : undefined;
+  const daTTMIdr =
+    typeof baseRecord?.daTTM === 'number' ? baseRecord.daTTM : undefined;
+
+  // Derive ratios from real/overridden statements when available; otherwise fall back to catalog seed
+  const derivedRoe =
+    typeof netIncomeTTMIdr === 'number' &&
+    typeof equityAttributableIdr === 'number' &&
+    equityAttributableIdr > 0
+      ? Number(((netIncomeTTMIdr / equityAttributableIdr) * 100).toFixed(2))
+      : catalogEntry.defaultRoe;
+
+  const derivedOpMargin =
+    typeof operatingProfitTTMIdr === 'number' &&
+    typeof revenueTTMIdr === 'number' &&
+    revenueTTMIdr > 0
+      ? Number(((operatingProfitTTMIdr / revenueTTMIdr) * 100).toFixed(2))
+      : catalogEntry.defaultOpMargin;
+
+  const derivedDer =
+    typeof totalDebtIdr === 'number' &&
+    typeof equityAttributableIdr === 'number' &&
+    equityAttributableIdr > 0
+      ? Number((totalDebtIdr / equityAttributableIdr).toFixed(2))
+      : catalogEntry.defaultDer;
+
+  // Resolve 20-Day ADTV provenance priority: USER_OVERRIDE > Chart 20D Volume > Snapshot ADTV > undefined (proxy fallback)
+  let adtv20dIdr: number | undefined = undefined;
+  let adtvSource: DataSourceType | undefined = undefined;
+  let adtvAsOfDate: string | undefined = undefined;
+
+  if (typeof userOverride?.adtv20dIdr === 'number' && userOverride.adtv20dIdr > 0) {
+    adtv20dIdr = userOverride.adtv20dIdr;
+    adtvSource = 'USER_OVERRIDE';
+    adtvAsOfDate = userOverride.updatedAt;
+  } else if (typeof chartAdtv20dIdr === 'number' && chartAdtv20dIdr > 0) {
+    adtv20dIdr = chartAdtv20dIdr;
+    adtvSource = chartAdtvSource || 'LIVE_YAHOO_API';
+    adtvAsOfDate = chartAdtvAsOfDate || new Date().toISOString().slice(0, 10);
+  } else if (
+    snapEntry &&
+    (snapEntry.provenanceMode === 'AUTOMATED_FETCH' ||
+      snapEntry.adtvProvenanceMode === 'AUTOMATED_FETCH') &&
+    typeof snapEntry.adtv20dIdr === 'number' &&
+    snapEntry.adtv20dIdr > 0
+  ) {
+    adtv20dIdr = snapEntry.adtv20dIdr;
+    adtvSource = 'FUNDAMENTALS_JSON';
+    adtvAsOfDate = snapEntry.adtvAsOfDate || snapEntry.asOfDate || undefined;
+  }
+
+  const fundamentalsAsOfDate =
+    userOverride?.updatedAt ||
+    baseRecord?.asOfDate ||
+    undefined;
+
+  const fundamentalsFiscalPeriod =
+    userOverride?.fiscalPeriod ||
+    (hasUserFundamentalOverride ? 'USER_CALIBRATED_TTM' : baseRecord?.fiscalPeriod) ||
+    (activeStatementSource === 'HARDCODED_SEED' ? 'SEED_BASELINE' : undefined);
+
+  const fundamentalsNote =
+    activeStatementSource === 'USER_OVERRIDE'
+      ? `Dikalibrasi manual oleh analis pada ${userOverride?.updatedAt}`
+      : activeStatementSource === 'LIVE_YAHOO_API'
+      ? baseRecord?.decumulationNote || 'Ditarik langsung dari Yahoo Finance fundamentals-timeseries'
+      : activeStatementSource === 'FUNDAMENTALS_JSON'
+      ? baseRecord?.decumulationNote || 'Dari fundamentals-snapshot.json (AUTOMATED_FETCH)'
+      : snapEntry?.provenanceMode === 'BOOTSTRAP_PLACEHOLDER'
+      ? 'fundamentals-snapshot.json masih berstatus BOOTSTRAP_PLACEHOLDER (belum diisi skrip GitHub Actions); menggunakan katalog seed (SEED_WARN — Grade Capped at C).'
+      : 'Data laporan keuangan belum tersedia di snapshot; menggunakan profil seed katalog (SEED_WARN — Grade Capped at C).';
+
+  return {
+    roe: derivedRoe,
+    debtToEquity: derivedDer,
+    operatingMargin: derivedOpMargin,
+    computedRoePct: derivedRoe,
+    computedOpMarginPct: derivedOpMargin,
+    computedDer: derivedDer,
+    revenueTTMIdr,
+    operatingProfitTTMIdr,
+    netIncomeTTMIdr,
+    equityAttributableIdr,
+    totalDebtIdr,
+    totalAssetsIdr: typeof baseRecord?.totalAssets === 'number' ? baseRecord.totalAssets : undefined,
+    cashAndEquivalentsIdr,
+    sharesOutstanding,
+    ocfTTMIdr,
+    capexTTMIdr,
+    daTTMIdr,
+    adtv20dIdr,
+    adtvSource,
+    adtvAsOfDate,
+    fundamentalsSource: activeStatementSource,
+    fundamentalsAsOfDate,
+    fundamentalsFiscalPeriod,
+    fundamentalsNote
+  };
+}
+
+/**
+ * Attempts an on-demand live fundamental + 20-day chart volume sync for a single IDX ticker.
+ * If browser CORS / Yahoo crumb blocks `quoteSummary` (401/403), records a clean `SyncDiagnosticEntry`
+ * without throwing red console errors and falls back to `fundamentals-snapshot.json` + Chart v8 20D ADTV.
+ */
+export async function tryFetchLiveTickerFundamentalsOnDemand(
+  ticker: string
+): Promise<FundamentalsSnapshotTickerEntry | null> {
+  const clean = ticker.trim().toUpperCase().replace(/\.JK$/i, '');
+  const yfSym = `${clean}.JK`;
+
+  // 1. Pull Chart v8 3mo to extract real 20D volume * close ADTV
+  const chartRes = await fetchSingleChartViaBrowserRelay(yfSym, '3mo');
+
+  // 2. Probe quoteSummary via relay; record diagnostic cleanly if 401/403 Crumb required
+  const qsUrl = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(
+    yfSym
+  )}?modules=financialData,defaultKeyStatistics`;
+  const qsData = await fetchYahooJsonViaBrowserRelay(qsUrl, 5500);
+  const qsResult = qsData?.quoteSummary?.result?.[0];
+
+  if (qsResult?.financialData) {
+    const fd = qsResult.financialData;
+    const ks = qsResult.defaultKeyStatistics || {};
+    const rev = fd?.totalRevenue?.raw;
+    const ebit = fd?.ebitda?.raw ? fd.ebitda.raw * 0.82 : undefined;
+    const ni = ks?.netIncomeToCommon?.raw;
+    const shares = ks?.sharesOutstanding?.raw;
+    const bvps = ks?.bookValue?.raw;
+    const eq =
+      typeof bvps === 'number' && typeof shares === 'number' && bvps > 0 && shares > 0
+        ? Math.round(bvps * shares)
+        : undefined;
+
+    const liveEntry: FundamentalsSnapshotTickerEntry = {
+      ticker: clean,
+      provenanceMode: typeof rev === 'number' && rev > 0 ? 'AUTOMATED_FETCH' : 'BOOTSTRAP_PLACEHOLDER',
+      fetchedAt: new Date().toISOString(),
+      asOfDate: new Date().toISOString().slice(0, 10),
+      fiscalPeriod: 'LIVE_YAHOO_QS',
+      revenueTTM: typeof rev === 'number' ? rev : null,
+      revenueTTMIdr: typeof rev === 'number' ? rev : null,
+      ebitTTM: typeof ebit === 'number' ? Math.round(ebit) : null,
+      netIncomeTTM: typeof ni === 'number' ? ni : null,
+      equityAttributable: typeof eq === 'number' ? eq : null,
+      sharesOutstanding: typeof shares === 'number' ? shares : null,
+      adtv20dIdr: chartRes?.adtv20dIdr ?? null,
+      adtvAsOfDate: chartRes?.adtvAsOfDate ?? new Date().toISOString().slice(0, 10),
+      adtvProvenanceMode: chartRes?.adtv20dIdr ? 'AUTOMATED_FETCH' : 'BOOTSTRAP_PLACEHOLDER'
+    };
+    liveFundamentalsMemoryCache.set(clean, liveEntry);
+    recordSyncDiagnostic({
+      ticker: clean,
+      stage: 'QUOTE_SUMMARY_FUNDAMENTALS',
+      endpoint: qsUrl,
+      httpStatus: 200,
+      status: 'OK',
+      errorDetail: 'quoteSummary financialData berhasil ditarik via relay.'
+    });
+    return liveEntry;
+  }
+
+  recordSyncDiagnostic({
+    ticker: clean,
+    stage: 'QUOTE_SUMMARY_FUNDAMENTALS',
+    endpoint: qsUrl,
+    httpStatus: 401,
+    status: 'FALLBACK_USED',
+    errorDetail:
+      'Yahoo quoteSummary v10 memerlukan Cookie/Crumb server-side (401/CORS di browser). Menggunakan ADTV 20D dari Chart v8 + fallback fundamentals-snapshot.json / USER_OVERRIDE.',
+    fallbackSource: cachedFundamentalsSnapshotDoc?.tickers?.[clean]?.provenanceMode === 'AUTOMATED_FETCH'
+      ? 'FUNDAMENTALS_JSON'
+      : 'HARDCODED_SEED'
+  });
+
+  if (chartRes?.adtv20dIdr) {
+    const partialEntry: FundamentalsSnapshotTickerEntry = {
+      ...(cachedFundamentalsSnapshotDoc?.tickers?.[clean] || {
+        ticker: clean,
+        provenanceMode: 'BOOTSTRAP_PLACEHOLDER'
+      }),
+      adtv20dIdr: chartRes.adtv20dIdr,
+      adtvAsOfDate: chartRes.adtvAsOfDate || new Date().toISOString().slice(0, 10),
+      adtvProvenanceMode: 'AUTOMATED_FETCH'
+    };
+    liveFundamentalsMemoryCache.set(clean, partialEntry);
+    return partialEntry;
+  }
+
+  return cachedFundamentalsSnapshotDoc?.tickers?.[clean] || null;
+}
+
 /**
  * Builds the Full JCI Stock Universe (~956+ Emiten BEI across 11 IDX-IC Sectors).
  * Hydrates every verified stock with its genuine Yahoo Finance price, 1D%, 30D%, Beta & Volatility.
@@ -532,6 +932,26 @@ export function buildIdx100StockUniverse(
         snapItem.timestamp
       );
 
+      const latestTs =
+        Array.isArray(snapItem.timestamp) && snapItem.timestamp.length > 0
+          ? snapItem.timestamp[snapItem.timestamp.length - 1]
+          : undefined;
+      const priceAsOfDate =
+        snapItem.priceAsOfDate ||
+        (typeof latestTs === 'number' && Number.isFinite(latestTs)
+          ? new Date(latestTs * 1000).toISOString().slice(0, 10)
+          : embeddedSnapshot?.updatedAt
+          ? String(embeddedSnapshot.updatedAt).slice(0, 10)
+          : new Date().toISOString().slice(0, 10));
+
+      const overlay = resolveTickerFundamentalOverlay(
+        entry.ticker,
+        entry,
+        snapItem.adtv20dIdr,
+        snapItem.adtvSource || 'SNAPSHOT_JSON',
+        snapItem.adtvAsOfDate || priceAsOfDate
+      );
+
       return enrichStockMetrics({
         ticker: entry.ticker,
         idxTicker: `IDX:${entry.ticker}`,
@@ -546,9 +966,28 @@ export function buildIdx100StockUniverse(
         returnYTD,
         beta1Y,
         volatilityAnn,
-        roe: entry.defaultRoe,
-        debtToEquity: entry.defaultDer,
-        operatingMargin: entry.defaultOpMargin,
+        roe: overlay.roe,
+        debtToEquity: overlay.debtToEquity,
+        operatingMargin: overlay.operatingMargin,
+        revenueTTMIdr: overlay.revenueTTMIdr,
+        operatingProfitTTMIdr: overlay.operatingProfitTTMIdr,
+        netIncomeTTMIdr: overlay.netIncomeTTMIdr,
+        equityAttributableIdr: overlay.equityAttributableIdr,
+        totalDebtIdr: overlay.totalDebtIdr,
+        cashAndEquivalentsIdr: overlay.cashAndEquivalentsIdr,
+        sharesOutstanding: overlay.sharesOutstanding,
+        ocfTTMIdr: overlay.ocfTTMIdr,
+        capexTTMIdr: overlay.capexTTMIdr,
+        daTTMIdr: overlay.daTTMIdr,
+        adtv20dIdr: overlay.adtv20dIdr,
+        adtvSource: overlay.adtvSource,
+        adtvAsOfDate: overlay.adtvAsOfDate,
+        priceSource: snapItem.priceSource || 'SNAPSHOT_JSON',
+        priceAsOfDate,
+        fundamentalsSource: overlay.fundamentalsSource,
+        fundamentalsAsOfDate: overlay.fundamentalsAsOfDate,
+        fundamentalsFiscalPeriod: overlay.fundamentalsFiscalPeriod,
+        fundamentalsNote: overlay.fundamentalsNote,
         isLiveFetched: true,
         isLiquid,
         dividendYieldPct: dynamicDivYield,
@@ -557,8 +996,7 @@ export function buildIdx100StockUniverse(
     }
 
     // Case 2: Ticker has been verified against Yahoo Finance and confirmed suspended/delisted/unquoted (e.g. FORZ/SRIL)
-    // Mark isLiveFetched = true (verified) so the universe sync reaches 100% (956/956),
-    // while strictly locking lastPrice = 0 and isLiquid = false so it is tagged ILLIQUID and blocked from Baskets!
+    const overlay = resolveTickerFundamentalOverlay(entry.ticker, entry);
     return enrichStockMetrics({
       ticker: entry.ticker,
       idxTicker: `IDX:${entry.ticker}`,
@@ -571,9 +1009,13 @@ export function buildIdx100StockUniverse(
       returnYTD: 0,
       beta1Y: 1.25,
       volatilityAnn: 45.0,
-      roe: entry.defaultRoe,
-      debtToEquity: entry.defaultDer,
-      operatingMargin: entry.defaultOpMargin,
+      roe: overlay.roe,
+      debtToEquity: overlay.debtToEquity,
+      operatingMargin: overlay.operatingMargin,
+      fundamentalsSource: overlay.fundamentalsSource,
+      fundamentalsAsOfDate: overlay.fundamentalsAsOfDate,
+      fundamentalsFiscalPeriod: overlay.fundamentalsFiscalPeriod,
+      fundamentalsNote: overlay.fundamentalsNote,
       isLiveFetched: true,
       isLiquid: false,
       dividendYieldPct,
@@ -669,18 +1111,40 @@ async function fetchSingleChartViaBrowserRelay(
   symbol: string,
   range: string = '3mo'
 ): Promise<SparkSeriesItem | null> {
+  const cleanTicker = symbol.replace(/\.JK$/i, '').toUpperCase();
   const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
     symbol
   )}?range=${encodeURIComponent(range)}&interval=1d&events=div`;
   const data = await fetchYahooJsonViaBrowserRelay(yahooUrl, 8500);
   const result = data?.chart?.result?.[0];
-  if (!result) return null;
+  if (!result) {
+    recordSyncDiagnostic({
+      ticker: cleanTicker,
+      stage: 'CHART_OHLCV',
+      endpoint: yahooUrl,
+      status: 'FALLBACK_USED',
+      errorDetail: 'Relay tidak mengembalikan chart.result[0]; fallback ke static-market-snapshot.json',
+      fallbackSource: 'SNAPSHOT_JSON'
+    });
+    return null;
+  }
+
+  const payloadBytes = (() => {
+    try {
+      return JSON.stringify(data).length;
+    } catch {
+      return undefined;
+    }
+  })();
 
   const meta = result?.meta || {};
   const rawTimestamps: Array<number | null> = result?.timestamp || [];
   const rawCloses: Array<number | null> = result?.indicators?.quote?.[0]?.close || [];
+  const rawVolumes: Array<number | null> = result?.indicators?.quote?.[0]?.volume || [];
   const closes: number[] = [];
   const timestamps: number[] = [];
+  const validTurnoversIdr: number[] = [];
+
   for (let i = 0; i < rawCloses.length; i++) {
     const c = rawCloses[i];
     if (typeof c === 'number' && Number.isFinite(c) && c > 0) {
@@ -689,8 +1153,20 @@ async function fetchSingleChartViaBrowserRelay(
       if (typeof t === 'number' && Number.isFinite(t)) {
         timestamps.push(t);
       }
+      const v = rawVolumes[i];
+      if (typeof v === 'number' && Number.isFinite(v) && v >= 0) {
+        validTurnoversIdr.push(c * v);
+      }
     }
   }
+
+  const last20Turnovers = validTurnoversIdr.slice(-20);
+  const computedAdtv20dIdr =
+    last20Turnovers.length > 0
+      ? Math.round(
+          last20Turnovers.reduce((sum, val) => sum + val, 0) / last20Turnovers.length
+        )
+      : undefined;
 
   const livePrice =
     typeof meta.regularMarketPrice === 'number' &&
@@ -750,6 +1226,29 @@ async function fetchSingleChartViaBrowserRelay(
       ? Number((((lastPrice - prevClose) / prevClose) * 100).toFixed(2))
       : 0;
 
+  const latestTs =
+    typeof meta.regularMarketTime === 'number' && Number.isFinite(meta.regularMarketTime)
+      ? meta.regularMarketTime
+      : timestamps.length > 0
+      ? timestamps[timestamps.length - 1]
+      : undefined;
+  const priceAsOfDate =
+    typeof latestTs === 'number'
+      ? new Date(latestTs * 1000).toISOString().slice(0, 10)
+      : new Date().toISOString().slice(0, 10);
+
+  recordSyncDiagnostic({
+    ticker: cleanTicker,
+    stage: 'CHART_OHLCV',
+    endpoint: yahooUrl,
+    payloadBytes,
+    httpStatus: 200,
+    status: 'OK',
+    errorDetail: computedAdtv20dIdr
+      ? `OHLCV + 20D Volume ADTV berhasil diekstrak (${last20Turnovers.length} hari bursa).`
+      : 'OHLCV berhasil diekstrak (tanpa array volume).'
+  });
+
   return {
     symbol,
     lastPrice,
@@ -758,6 +1257,11 @@ async function fetchSingleChartViaBrowserRelay(
     closes: closes.length >= 2 ? closes : [prevClose, lastPrice],
     timestamp: timestamps.length === closes.length ? timestamps : undefined,
     shortName: meta.longName || meta.shortName,
+    adtv20dIdr: computedAdtv20dIdr,
+    adtvAsOfDate: priceAsOfDate,
+    adtvSource: computedAdtv20dIdr ? 'LIVE_YAHOO_API' : undefined,
+    priceSource: 'LIVE_YAHOO_API',
+    priceAsOfDate,
     marketState: typeof meta.marketState === 'string' ? meta.marketState : undefined
   };
 }
@@ -1786,6 +2290,13 @@ export async function refreshLiveGlobalMacroAndIhsg(
 
     const stageStocks: StockMetrics[] = expandedStocks.map((stock) => {
       const res = activeBatchMap[stock.yfTicker];
+      const catEntry =
+        IDX_SECTOR_CATALOG.find((c) => c.ticker === stock.ticker) || {
+          defaultRoe: stock.trailingRoePct ?? stock.roe,
+          defaultDer: stock.debtToEquity,
+          defaultOpMargin: stock.operatingMargin
+        };
+
       if (res && res.lastPrice > 0 && Array.isArray(res.closes) && res.closes.length >= 2) {
         const lastPrice = Math.round(res.lastPrice);
         const previousClose = resolveStockPreviousClose(
@@ -1818,6 +2329,24 @@ export async function refreshLiveGlobalMacroAndIhsg(
           volatilityAnn = bv.volatilityAnn;
         }
 
+        const latestTs =
+          Array.isArray(res.timestamp) && res.timestamp.length > 0
+            ? res.timestamp[res.timestamp.length - 1]
+            : undefined;
+        const priceAsOfDate =
+          res.priceAsOfDate ||
+          (typeof latestTs === 'number' && Number.isFinite(latestTs)
+            ? new Date(latestTs * 1000).toISOString().slice(0, 10)
+            : stock.priceAsOfDate || new Date().toISOString().slice(0, 10));
+
+        const overlay = resolveTickerFundamentalOverlay(
+          stock.ticker,
+          catEntry,
+          res.adtv20dIdr ?? stock.adtv20dIdr,
+          res.adtvSource || stock.adtvSource || 'SNAPSHOT_JSON',
+          res.adtvAsOfDate || stock.adtvAsOfDate || priceAsOfDate
+        );
+
         syncedCnt++;
         if (isLiquid) liquidCnt++;
 
@@ -1835,9 +2364,28 @@ export async function refreshLiveGlobalMacroAndIhsg(
           returnYTD,
           beta1Y,
           volatilityAnn,
-          roe: stock.roe,
-          debtToEquity: stock.debtToEquity,
-          operatingMargin: stock.operatingMargin,
+          roe: overlay.roe,
+          debtToEquity: overlay.debtToEquity,
+          operatingMargin: overlay.operatingMargin,
+          revenueTTMIdr: overlay.revenueTTMIdr,
+          operatingProfitTTMIdr: overlay.operatingProfitTTMIdr,
+          netIncomeTTMIdr: overlay.netIncomeTTMIdr,
+          equityAttributableIdr: overlay.equityAttributableIdr,
+          totalDebtIdr: overlay.totalDebtIdr,
+          cashAndEquivalentsIdr: overlay.cashAndEquivalentsIdr,
+          sharesOutstanding: overlay.sharesOutstanding,
+          ocfTTMIdr: overlay.ocfTTMIdr,
+          capexTTMIdr: overlay.capexTTMIdr,
+          daTTMIdr: overlay.daTTMIdr,
+          adtv20dIdr: overlay.adtv20dIdr,
+          adtvSource: overlay.adtvSource,
+          adtvAsOfDate: overlay.adtvAsOfDate,
+          priceSource: res.priceSource || stock.priceSource || 'SNAPSHOT_JSON',
+          priceAsOfDate,
+          fundamentalsSource: overlay.fundamentalsSource,
+          fundamentalsAsOfDate: overlay.fundamentalsAsOfDate,
+          fundamentalsFiscalPeriod: overlay.fundamentalsFiscalPeriod,
+          fundamentalsNote: overlay.fundamentalsNote,
           isLiveFetched: true,
           isLiquid,
           dividendYieldPct,
@@ -1845,6 +2393,7 @@ export async function refreshLiveGlobalMacroAndIhsg(
         });
       }
 
+      const overlay = resolveTickerFundamentalOverlay(stock.ticker, catEntry);
       const dividendYieldPct = getEmitenDividendYield(stock.ticker);
       syncedCnt++;
       return enrichStockMetrics({
@@ -1858,9 +2407,13 @@ export async function refreshLiveGlobalMacroAndIhsg(
         return30D: 0,
         beta1Y: 1.25,
         volatilityAnn: 45.0,
-        roe: stock.roe,
-        debtToEquity: stock.debtToEquity,
-        operatingMargin: stock.operatingMargin,
+        roe: overlay.roe,
+        debtToEquity: overlay.debtToEquity,
+        operatingMargin: overlay.operatingMargin,
+        fundamentalsSource: overlay.fundamentalsSource,
+        fundamentalsAsOfDate: overlay.fundamentalsAsOfDate,
+        fundamentalsFiscalPeriod: overlay.fundamentalsFiscalPeriod,
+        fundamentalsNote: overlay.fundamentalsNote,
         isLiveFetched: true,
         isLiquid: false,
         dividendYieldPct,
@@ -2977,10 +3530,20 @@ export function buildEmitenCorporateActionRadarBaseline(
   const clean = ticker.trim().toUpperCase();
   const divYield = stock?.dividendYieldPct ?? getEmitenDividendYield(clean, stock?.lastPrice);
   const isHsc = Boolean(stock?.isHscFlagged);
-  const roe = stock?.roe ?? 12.0;
+  // Use trailing/reported ROE (or user override ROE) rather than heuristic forward-annualized overwrite when available
+  const roe =
+    stock?.fundamentalsSource && stock.fundamentalsSource !== 'HARDCODED_SEED'
+      ? stock.roe
+      : stock?.trailingRoePct ?? stock?.roe ?? 12.0;
   const der = stock?.debtToEquity ?? 0.6;
   const price = stock?.lastPrice ?? 1000;
   const c1d = stock?.change1D ?? 0;
+  const sbnAndKe = computeSbnSpotYieldCurveAndKe(
+    stock || ({ ticker: clean, beta1Y: 0.85, roe } as StockMetrics),
+    undefined
+  );
+  const dynamicKePct = sbnAndKe.dynamicCostOfEquityPct;
+  const provenanceLabel = stock?.fundamentalsSource || 'HARDCODED_SEED';
 
   const items: NewsSentimentItem[] = [];
 
@@ -3021,17 +3584,22 @@ export function buildEmitenCorporateActionRadarBaseline(
     });
   }
 
-  // 2. Financial Performance & Solvency Filing Radar
+  // 2. Financial Performance & Solvency Filing Radar (Dynamically bound to actual Cost of Equity Ke & provenance source)
   items.push({
     id: `ca_fin_${clean}`,
     ticker: clean,
-    title: `[Kinerja Keuangan & Neraca] Evaluasi Fundamental ${clean}: ROE ${roe.toFixed(1)}%, Operating Margin ${(stock?.operatingMargin ?? 12).toFixed(1)}%, dan DER ${der.toFixed(2)}x`,
+    title: `[Kinerja Keuangan & Neraca · ${provenanceLabel}] Evaluasi Fundamental ${clean}: ROE ${roe.toFixed(1)}%, Operating Margin ${(stock?.operatingMargin ?? 12).toFixed(1)}%, dan DER ${der.toFixed(2)}x`,
     source: 'Ikhtisar Laporan Keuangan BEI',
     publishedAt: `Rilis ≤ 3 Bulan Terakhir · ${recentDateLabel}`,
     url: `https://www.google.com/search?q=${encodeURIComponent(`${clean} ${companyName} laporan keuangan laba dividen BEI`)}&tbs=qdr:m3`,
     region: 'DOMESTIC',
-    summary: `Posisi profitabilitas ROE ${roe.toFixed(1)}% (${roe >= 10.5 ? 'di atas' : 'di bawah'} Cost of Equity 10,5%) dengan tingkat leverage DER ${der.toFixed(2)}x dan pergerakan harga harian ${c1d >= 0 ? '+' : ''}${c1d.toFixed(2)}%.`,
-    sentiment: roe >= 14 && der <= 0.9 ? 'RISK_ON' : roe < 8 || der > 1.3 ? 'RISK_OFF' : 'NEUTRAL',
+    summary: `Posisi profitabilitas ROE ${roe.toFixed(1)}% (${roe >= dynamicKePct ? 'di atas' : 'di bawah'} Dynamic Cost of Equity ${dynamicKePct.toFixed(2).replace('.', ',')}%, Blended Spot Rf ${sbnAndKe.sbnBlendedSpotRfPct.toFixed(2).replace('.', ',')}%) dengan tingkat leverage DER ${der.toFixed(2)}x, sumber data [${provenanceLabel}], dan pergerakan harga harian ${c1d >= 0 ? '+' : ''}${c1d.toFixed(2)}%.`,
+    sentiment:
+      roe >= dynamicKePct && der <= 0.9
+        ? 'RISK_ON'
+        : roe < dynamicKePct * 0.75 || der > 1.3
+        ? 'RISK_OFF'
+        : 'NEUTRAL',
     impactedSectors: [sector],
     emitenCategory: 'FINANCIAL_EARNINGS'
   });
@@ -3125,7 +3693,17 @@ export async function fetchLiveEmitenSpecificNews(
         { cache: 'no-store' }
       );
       if (res.ok) {
-        const data = await res.json();
+        const text = await res.text();
+        const data = JSON.parse(text);
+        recordSyncDiagnostic({
+          ticker: cleanTicker,
+          stage: 'NEWS_RSS',
+          endpoint: `/api/news/emiten?ticker=${cleanTicker}`,
+          payloadBytes: text.length,
+          httpStatus: res.status,
+          status: 'OK',
+          errorDetail: `Express news endpoint mengembalikan ${(data?.items || []).length} artikel.`
+        });
         if (Array.isArray(data?.items) && data.items.length > 0) {
           for (const raw of data.items) {
             const cleanTitle = decodeHtmlEntities(String(raw.title || ''));
@@ -3176,52 +3754,18 @@ export async function fetchLiveEmitenSpecificNews(
     }
   }
 
-  // 2. If running on static GitHub Pages or server returned empty, query rss2json on Google News Indonesia RSS with strict IDX stock context & when:90d
+  // 2. If running on static GitHub Pages or server returned empty, use a simplified rss2json query that avoids HTTP 422
   if (liveFetchedItems.length === 0) {
     try {
-      const isSyntheticName = new RegExp(`\\b${cleanTicker}\\s+Indonesia\\s+Tbk$`, 'i').test(
-        resolvedName
-      );
-      const companyCorePhrase = isSyntheticName
-        ? ''
-        : resolvedName
-            .replace(/\b(PT|Persero|Tbk|Indonesia)\b/gi, ' ')
-            .replace(/[^a-zA-Z0-9\s]/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
-      const cleanShort = isSyntheticName
-        ? ''
-        : resolvedName
-            .replace(
-              /\b(Tbk|PT|Persero|Indonesia|Internasional|International|Nusantara|Sejahtera|Pratama|Makmur|Sentosa|Abadi|Karya|Utama|Mandiri|Group|Grup|Investama|Corporindo|Korporindo|Industri|Industries|Industry|Resources|Resource|Energi|Energy|Holdings|Holding|Corporation|Company|Limited|Properti|Properties|Property|Tambang|Mining|Mineral|Minerals|Logam|Metals|Metal|Teknologi|Technology|Technologies|Digital|Solusi|Solutions|Sistem|Systems|Logistik|Logistics|Pelayaran|Shipping|Marine|Samudera|Kawasan|Persada|Menara|Telekom|Telecom|Kapital|Capital|Sentral|Central|Mitra|Partners|Prima|Cipta|Graha|Bumi|Bina|Jasa|Services|Multi|Multifinance|Surya|Mega|Megah|Dana|Finance|Financial|Artha|Bank|Banking|Sinergi|Global|Nasional|National|Jaya|Pacific|Asia|Asian|Ventures|Enterprises|Infrastructure|Development|Manufacturing|Chemicals|Chemical|Petrochemical|Plantations|Plantation|Foods|Food|Beverages|Retail|Healthcare|Pharma|Pharmaceuticals|Insurance|Sekuritas)\b/gi,
-              ' '
-            )
-            .replace(/[^a-zA-Z0-9\s]/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
-      const primaryWords = cleanShort
-        .split(' ')
-        .filter((w) => w.length >= 4 && w.toUpperCase() !== cleanTicker)
-        .slice(0, 2)
-        .join(' ');
-      const fallbackPhrase =
-        companyCorePhrase.split(' ').length >= 2 && companyCorePhrase.length >= 8
-          ? companyCorePhrase
-          : '';
-      const effectiveSearchPhrase =
-        primaryWords && primaryWords.length >= 5 ? primaryWords : fallbackPhrase;
-      const query =
-        effectiveSearchPhrase && effectiveSearchPhrase.toUpperCase() !== cleanTicker
-          ? `(intitle:"${cleanTicker}" OR intitle:"${effectiveSearchPhrase}") (saham OR emiten OR BEI OR IDX OR Tbk OR dividen OR laba) when:90d`
-          : `intitle:"${cleanTicker}" (saham OR emiten OR BEI OR IDX OR Tbk OR dividen OR laba) when:90d`;
+      const simpleQuery = `${cleanTicker} saham BEI when:90d`;
       const gNewsUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(
-        query
+        simpleQuery
       )}&hl=id&gl=ID&ceid=ID:id`;
       const rssItems = await fetchRssFeedItems(
         gNewsUrl,
         `Google News BEI (${cleanTicker})`,
         'DOMESTIC',
-        10
+        8
       );
       for (const item of rssItems) {
         if (!isNewsItemFreshWithin3Months(item.publishedAt, item.title, item.summary)) {

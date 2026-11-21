@@ -22,6 +22,7 @@ import {
   DEFAULT_GLOBAL_MACRO,
   DEFAULT_NEWS_SENTIMENT,
   DEFAULT_USER_PORTFOLIO_HOLDINGS,
+  evaluateJoeliardiOosFundamental,
   rankUniverseWithBuffer,
   REAL_IHSG_30D_RETURNS,
   SimRegimeMode,
@@ -36,8 +37,10 @@ import {
   getEmbeddedIhsgBaseline,
   getIdxMarketSessionStatus,
   ingestCloudStateIntoEmbeddedSnapshot,
+  loadFundamentalsSnapshot,
   refreshLiveGlobalMacroAndIhsg
 } from './utils/liveMarketFetcher';
+import { installWindowNostradamusDebugger } from './utils/dataLineageEngine';
 import {
   getActiveRepoScope,
   isGitHubCloudConfigured,
@@ -1156,19 +1159,32 @@ export default function App() {
     };
   }, []);
 
+  // Register global DevTools Console Forensic Debugger: window.debugNostradamus('MIKA')
+  useEffect(() => {
+    installWindowNostradamusDebugger((ticker: string) => {
+      const target = stocks.find((s) => s.ticker === ticker);
+      if (!target) return null;
+      const evalRes = evaluateJoeliardiOosFundamental(
+        target,
+        macroIndicators,
+        undefined,
+        regime.status
+      );
+      return evalRes.dataLineage ?? null;
+    });
+  }, [stocks, macroIndicators, regime.status]);
+
   // On initial mount: restore portfolio/vault configuration from GitHub Cloud if configured,
   // while strictly sourcing all market prices (^JKSE, ARNA, and 975 BEI stocks) from Yahoo Finance Live & static-market-snapshot.json.
   useEffect(() => {
     const initSync = async () => {
+      await loadFundamentalsSnapshot();
       const cfg = loadGitHubCloudConfig();
       const scope = getActiveRepoScope(cfg);
       if (isGitHubCloudConfigured(cfg)) {
         await handlePullFromGitHub(cfg, true);
       } else {
-        const candidatePaths = [
-          `./static-market-snapshot.json?t=${Date.now()}`,
-          `./data/nostradamus_cloud_state.json?t=${Date.now()}`
-        ];
+        const candidatePaths = [`./static-market-snapshot.json?t=${Date.now()}`];
         for (const path of candidatePaths) {
           try {
             const res = await fetch(path, { cache: 'no-store' });
@@ -1178,7 +1194,7 @@ export default function App() {
                 data?: Record<string, { lastPrice?: number; change1D?: number; closes?: number[] }>;
               };
               if (snap && snap.data && typeof snap.data === 'object') {
-                // Only update market prices from static-market-snapshot.json (never from nostradamus_cloud_state.json)
+                // Only update market prices from static-market-snapshot.json
                 const targetBuffer =
                   typeof snap.rebalanceBufferPct === 'number'
                     ? snap.rebalanceBufferPct

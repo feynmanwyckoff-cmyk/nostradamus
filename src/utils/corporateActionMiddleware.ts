@@ -1,9 +1,11 @@
 import {
   CorporateActionOverrideInput,
   EnsembleValuationLeg,
+  MarketRegimeStatus,
   RecommendationDecisionState,
   StockMetrics
 } from '../types/quant';
+import { getFundamentalUserOverride } from './dataLineageEngine';
 
 export interface BuiltInCorporateActionCatalogEntry {
   ticker: string;
@@ -593,6 +595,12 @@ export function interceptCorporateActionAndAnnualize(params: {
   const customOverrides = getCustomCorporateActionOverrides();
   const custom = customOverrides[clean];
   const builtIn = IDX_CORPORATE_ACTION_CATALYST_REGISTRY[clean];
+  const userFundOverride = getFundamentalUserOverride(clean);
+  const hasRealOrOverriddenFundamentals =
+    Boolean(
+      (userFundOverride?.netIncomeTTMIdr && userFundOverride?.equityAttributableIdr) ||
+        (stock.fundamentalsSource && stock.fundamentalsSource !== 'HARDCODED_SEED')
+    );
 
   // Heuristic detection if a stock is not in the explicit registry/override:
   // Detects automatic stock split (>1) or reverse split (<1) unit scale mismatch
@@ -632,15 +640,36 @@ export function interceptCorporateActionAndAnnualize(params: {
       : Math.max(50, rawAnchorPriceIdr);
 
   const adjustedAdtv20dIdr =
-    Math.abs(splitRatioDivisor - 1) > 1e-4
+    userFundOverride?.adtv20dIdr && userFundOverride.adtv20dIdr > 0
+      ? Math.round(userFundOverride.adtv20dIdr)
+      : Math.abs(splitRatioDivisor - 1) > 1e-4
       ? Math.max(250_000_000, Math.round(rawAdtv20dIdr / Math.pow(splitRatioDivisor, 0.35)))
       : rawAdtv20dIdr;
+
+  const overrideComputedRoePct =
+    userFundOverride?.netIncomeTTMIdr &&
+    userFundOverride?.equityAttributableIdr &&
+    userFundOverride.equityAttributableIdr > 0
+      ? Number(
+          Math.max(
+            0.5,
+            Math.min(65, (userFundOverride.netIncomeTTMIdr / userFundOverride.equityAttributableIdr) * 100)
+          ).toFixed(2)
+        )
+      : undefined;
 
   // Resolve Trailing ROE vs Forward Annualized ROE (latest quarterly run-rate)
   const trailingRoePct = Math.max(
     0.5,
     Number(
-      (custom?.trailingRoePct ?? builtIn?.trailingRoePct ?? stock.trailingRoePct ?? stock.roe).toFixed(2)
+      (
+        overrideComputedRoePct ??
+        custom?.trailingRoePct ??
+        (hasRealOrOverriddenFundamentals ? stock.roe : undefined) ??
+        builtIn?.trailingRoePct ??
+        stock.trailingRoePct ??
+        stock.roe
+      ).toFixed(2)
     )
   );
 
@@ -669,7 +698,10 @@ export function interceptCorporateActionAndAnnualize(params: {
   );
 
   const latestQuarterLabel =
-    custom?.latestQuarterLabel || builtIn?.latestQuarterLabel || 'Q3-2026 (9M26 Annualized)';
+    stock.fundamentalsFiscalPeriod ||
+    custom?.latestQuarterLabel ||
+    builtIn?.latestQuarterLabel ||
+    'Q3-2026 (9M26 Annualized)';
 
   // Detect Quarter (Q1/Q2/Q3/Q4) and apply (4 / Quarter) annualizer multiplier
   const upperQ = latestQuarterLabel.toUpperCase();
@@ -677,7 +709,7 @@ export function interceptCorporateActionAndAnnualize(params: {
     ? 1
     : upperQ.includes('Q2') || upperQ.includes('6M') || upperQ.includes('1H')
     ? 2
-    : upperQ.includes('Q4') || upperQ.includes('FY')
+    : upperQ.includes('Q4') || upperQ.includes('FY') || upperQ.includes('TTM')
     ? 4
     : 3;
   const annualizationFactor = Number((4 / detectedQuarter).toFixed(4));
@@ -696,7 +728,9 @@ export function interceptCorporateActionAndAnnualize(params: {
     0.5,
     Number(
       (
+        overrideComputedRoePct ??
         custom?.forwardAnnualizedRoePct ??
+        (hasRealOrOverriddenFundamentals ? trailingRoePct : undefined) ??
         builtIn?.latestQuarterAnnualizedRoePct ??
         stock.forwardAnnualizedRoePct ??
         derivedForwardRoeFromAnnualizer
@@ -737,8 +771,12 @@ export function interceptCorporateActionAndAnnualize(params: {
     : undefined;
 
   const sharesOutstanding =
-    custom?.sharesOutstanding && custom.sharesOutstanding > 0
+    userFundOverride?.sharesOutstanding && userFundOverride.sharesOutstanding > 0
+      ? Math.round(userFundOverride.sharesOutstanding)
+      : custom?.sharesOutstanding && custom.sharesOutstanding > 0
       ? Math.round(custom.sharesOutstanding)
+      : hasRealOrOverriddenFundamentals && stock.sharesOutstanding && stock.sharesOutstanding > 0
+      ? Math.round(stock.sharesOutstanding)
       : officialIdxShares && officialIdxShares > 0
       ? officialIdxShares
       : stock.sharesOutstanding && stock.sharesOutstanding > 0
@@ -753,7 +791,7 @@ export function interceptCorporateActionAndAnnualize(params: {
       : Math.max(100_000_000, Math.round(fallbackAdtvMarketCapIdr / Math.max(1, spotPrice)));
 
   const liveMarketCapIdr =
-    custom?.liveMarketCapTrillionIdr && custom.liveMarketCapTrillionIdr > 0
+    custom?.liveMarketCapTrillionIdr && custom.liveMarketCapTrillionIdr > 0 && !userFundOverride?.sharesOutstanding
       ? Math.max(10_000_000_000, Math.round(custom.liveMarketCapTrillionIdr * 1_000_000_000_000))
       : Math.max(10_000_000_000, Math.round(sharesOutstanding * spotPrice));
 
@@ -930,6 +968,7 @@ export function evaluateDynamicDecisionTree(params: {
   dmuCompositeScore: number;
   lastPriceIdr: number;
   intrinsicValueIdr: number;
+  marketRegime?: MarketRegimeStatus;
   tickRounder: (rawPrice: number) => number;
 }): {
   decisionState: RecommendationDecisionState;
@@ -955,18 +994,21 @@ export function evaluateDynamicDecisionTree(params: {
     dmuCompositeScore,
     lastPriceIdr,
     intrinsicValueIdr,
+    marketRegime = 'TENANG',
     tickRounder
   } = params;
 
   // Dynamic Margin of Safety (MoS) Compression linked to Excess Return (Forward ROE - Cost of Equity)
+  // Guardrail: Lock floor at >= 25.0% whenever IHSG market regime is VOLATIL
   const excessReturnSpreadPct = Number((forwardRoePct - costOfEquityPct).toFixed(2));
-  const dynamicRequiredMosPct = Number(
-    (excessReturnSpreadPct > 10.0
+  const rawDynamicMosPct =
+    excessReturnSpreadPct > 10.0
       ? Math.max(0.0, Math.min(10.0, 10.0 - (excessReturnSpreadPct - 10.0) * 0.8))
       : excessReturnSpreadPct >= 5.0
       ? 12.0
-      : 20.0
-    ).toFixed(1)
+      : 20.0;
+  const dynamicRequiredMosPct = Number(
+    (marketRegime === 'VOLATIL' ? Math.max(25.0, rawDynamicMosPct) : rawDynamicMosPct).toFixed(1)
   );
 
   if (isHscFlagged) {

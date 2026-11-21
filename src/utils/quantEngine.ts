@@ -55,6 +55,16 @@ import {
   validateFundamentalSanity,
   ValuationEngine
 } from './valuationEngine';
+import {
+  createTrackedField,
+  DataSourceType,
+  evaluateSbnMacroFreshness,
+  getFundamentalUserOverride,
+  getSyncDiagnosticsForTicker,
+  registerLineageReportForDebugger,
+  TickerDataLineageReport
+} from './dataLineageEngine';
+import { getCachedFundamentalsSnapshot } from './liveMarketFetcher';
 
 export type RawStockInput = Omit<
   StockMetrics,
@@ -1512,6 +1522,10 @@ const CALIBRATED_ADTV_20D_IDR_MAP: Record<string, number> = {
  * Estimates or retrieves the 20-Day Average Daily Trading Value (ADTV 20D in IDR).
  */
 export function estimateEmitenAdtv20dIdr(stock: StockMetrics): number {
+  const userOverride = getFundamentalUserOverride(stock.ticker);
+  if (userOverride?.adtv20dIdr && Number.isFinite(userOverride.adtv20dIdr) && userOverride.adtv20dIdr > 0) {
+    return Math.round(userOverride.adtv20dIdr);
+  }
   if (typeof stock.adtv20dIdr === 'number' && Number.isFinite(stock.adtv20dIdr) && stock.adtv20dIdr > 0) {
     return Math.round(stock.adtv20dIdr);
   }
@@ -1673,10 +1687,25 @@ export function computeSbnSpotYieldCurveAndKe(
   const fxRiskShift = Math.max(-0.20, Math.min(0.45, ((usdidr - 16200) / 4000) * 0.35));
   const curveShift = Number((globalRateShift + fxRiskShift).toFixed(2));
 
+  // Check for User SBN 10Y override or Snapshot macroBenchmarks SBN curve
+  const userOverride = getFundamentalUserOverride(stock.ticker);
+  const snapshotMacro = getCachedFundamentalsSnapshot()?.macroBenchmarks;
+  const proxySbn10Y = Number((6.75 + curveShift * 1.00).toFixed(2));
+  const effectiveSbn10Y =
+    userOverride?.sbn10YOverridePct && userOverride.sbn10YOverridePct > 0
+      ? Number(userOverride.sbn10YOverridePct.toFixed(2))
+      : snapshotMacro?.sbn10YPct &&
+        snapshotMacro.sbn10YPct > 0 &&
+        snapshotMacro.source !== 'PROXY_FORMULA'
+      ? Number(snapshotMacro.sbn10YPct.toFixed(2))
+      : proxySbn10Y;
+
+  const anchorDelta10Y = effectiveSbn10Y - 6.75;
+
   // Indonesian Government Bond (SBN) Spot Curve Tenors (1Y, 5Y, 10Y)
-  const sbnSpot1YPct = Number((6.15 + curveShift * 0.75).toFixed(2));
-  const sbnSpot5YPct = Number((6.48 + curveShift * 0.90).toFixed(2));
-  const sbnSpot10YPct = Number((6.75 + curveShift * 1.00).toFixed(2));
+  const sbnSpot1YPct = Number((6.15 + anchorDelta10Y * 0.75).toFixed(2));
+  const sbnSpot5YPct = Number((6.48 + anchorDelta10Y * 0.90).toFixed(2));
+  const sbnSpot10YPct = effectiveSbn10Y;
 
   // Equity Duration Weighting (Fabozzi 2012):
   // High-dividend / mature cashflow compounders have shorter Macaulay equity duration (higher 1Y & 5Y weight),
@@ -2479,7 +2508,8 @@ function computeStatArbAndAgnosticPeerValuation(params: {
 export function evaluateJoeliardiOosFundamental(
   stock: StockMetrics,
   macroIndicators: MacroIndicator[] = DEFAULT_GLOBAL_MACRO,
-  availablePortfolioCashIdr?: number
+  availablePortfolioCashIdr?: number,
+  explicitMarketRegime?: MarketRegimeStatus
 ): JoeliardiOosEvaluation {
   const price = Math.max(50, stock.lastPrice);
   const der = Math.max(0.05, stock.debtToEquity);
@@ -2539,7 +2569,22 @@ export function evaluateJoeliardiOosFundamental(
       ? 1.55
       : 1.45;
 
-  // Fundamental BVPS & EPS anchored on split-adjusted baseline via applyDynamicCorporateActionDivisor
+  // Fundamental BVPS & EPS: Use real/overridden Equity & Net Income per Share when available;
+  // otherwise fallback to split-adjusted baseline via applyDynamicCorporateActionDivisor
+  const userFundOverride = getFundamentalUserOverride(stock.ticker);
+  const resolvedRealEquityIdr =
+    userFundOverride?.equityAttributableIdr && userFundOverride.equityAttributableIdr > 0
+      ? userFundOverride.equityAttributableIdr
+      : stock.equityAttributableIdr && stock.equityAttributableIdr > 0
+      ? stock.equityAttributableIdr
+      : undefined;
+  const resolvedRealNetIncomeIdr =
+    userFundOverride?.netIncomeTTMIdr && userFundOverride.netIncomeTTMIdr > 0
+      ? userFundOverride.netIncomeTTMIdr
+      : stock.netIncomeTTMIdr && stock.netIncomeTTMIdr > 0
+      ? stock.netIncomeTTMIdr
+      : undefined;
+
   const anchorFairPbvBaseline = Math.max(
     0.45,
     Math.min(7.5, baseSectorPbv * (Math.max(10.5, trailingRoePct) / 16.5) * 0.88)
@@ -2555,9 +2600,18 @@ export function evaluateJoeliardiOosFundamental(
     splitRatioDivisor: corpIntercept.splitRatioDivisor
   });
 
-  const estimatedBvpsIdr = splitAdjustedStatic.bvpsIdr;
-  const trailingEpsIdr = splitAdjustedStatic.epsIdr;
-  const rawSplitAdtv20dIdr = splitAdjustedStatic.adtv20dIdr;
+  const estimatedBvpsIdr =
+    resolvedRealEquityIdr && corpIntercept.sharesOutstanding > 0
+      ? Math.max(10, Math.round(resolvedRealEquityIdr / corpIntercept.sharesOutstanding))
+      : splitAdjustedStatic.bvpsIdr;
+  const trailingEpsIdr =
+    resolvedRealNetIncomeIdr && corpIntercept.sharesOutstanding > 0
+      ? Math.max(1, Math.round(resolvedRealNetIncomeIdr / corpIntercept.sharesOutstanding))
+      : splitAdjustedStatic.epsIdr;
+  const rawSplitAdtv20dIdr =
+    userFundOverride?.adtv20dIdr && userFundOverride.adtv20dIdr > 0
+      ? Math.round(userFundOverride.adtv20dIdr)
+      : splitAdjustedStatic.adtv20dIdr;
   void anchorPrice;
 
   // Multi-Tenor SBN Spot Curve (1Y, 5Y, 10Y) & Dynamic Cost of Equity (Ke)
@@ -2570,6 +2624,12 @@ export function evaluateJoeliardiOosFundamental(
     sbnBlendedSpotRfPct,
     erpBenchmarkPct
   } = sbnCurve;
+
+  const sbnFreshness = evaluateSbnMacroFreshness(
+    getCachedFundamentalsSnapshot(),
+    userFundOverride?.sbn10YOverridePct,
+    userFundOverride?.updatedAt
+  );
 
   // Quarterly Earnings Annualizer (for diagnostic comparison; P0.3 enforces TTM as default valuation basis)
   const annualizedEarnings = annualizeQuarterlyEarnings({
@@ -2586,11 +2646,17 @@ export function evaluateJoeliardiOosFundamental(
   // P0: DATA INTEGRITY GUARDRAILS (PRE-PROCESSING LAYER)
   // ============================================================================
   const prelimRouteInfo = ValuationEngine.resolveRoute(stock);
+  const vixVal = macroIndicators.find((m) => m.id === 'vix')?.value ?? 18;
+  const jkseChange = macroIndicators.find((m) => m.id === 'jkse')?.change1D ?? 0;
   const inferredMarketRegime: MarketRegimeStatus =
-    stock.volatilityAnn > 35 ? 'VOLATIL' : 'TENANG';
+    explicitMarketRegime ??
+    (stock.volatilityAnn > 35 || vixVal >= 24 || jkseChange <= -1.5 ? 'VOLATIL' : 'TENANG');
 
   const rawTickerData = buildRawTickerDataFromStock({
-    stock,
+    stock: {
+      ...stock,
+      rfLastUpdated: sbnFreshness.asOfDate || stock.rfLastUpdated
+    },
     price,
     trailingEpsIdr,
     forwardEpsIdr: annualizedEarnings.forwardEpsIdr,
@@ -3053,6 +3119,7 @@ export function evaluateJoeliardiOosFundamental(
     dmuCompositeScore: stock.dmuCompositeScore,
     lastPriceIdr: price,
     intrinsicValueIdr,
+    marketRegime: inferredMarketRegime,
     tickRounder: roundToIdxTick
   });
 
@@ -3211,10 +3278,407 @@ export function evaluateJoeliardiOosFundamental(
     tickRounder: roundToIdxTick
   });
 
-  const totalConvictionScore = riskSizingResult.adjustedConvictionScore;
-  // HOTFIX 3: Strict post-penalty score threshold mapping — block any < 82 override to A+ (CORE CONVICTION)
+  // ============================================================================
+  // P3: DATA PROVENANCE & FRESHNESS LINEAGE REPORT + CONVICTION GRADE CAPPING GUARDRAIL
+  // ============================================================================
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const priceSource: DataSourceType =
+    stock.priceSource ?? (stock.isLiveFetched ? 'LIVE_YAHOO_API' : 'SNAPSHOT_JSON');
+  const priceAsOf = stock.priceAsOfDate ?? todayIso;
+
+  const adtvSource: DataSourceType =
+    userFundOverride?.adtv20dIdr && userFundOverride.adtv20dIdr > 0
+      ? 'USER_OVERRIDE'
+      : stock.adtvSource ?? 'HARDCODED_SEED';
+  const adtvAsOf =
+    userFundOverride?.adtv20dIdr && userFundOverride.adtv20dIdr > 0
+      ? userFundOverride.updatedAt
+      : stock.adtvAsOfDate ?? null;
+
+  const baseFundSource: DataSourceType = stock.fundamentalsSource ?? 'HARDCODED_SEED';
+  const baseFundAsOf = stock.fundamentalsAsOfDate ?? null;
+  const baseFiscalPeriod = stock.fundamentalsFiscalPeriod ?? corpIntercept.latestQuarterLabel;
+
+  const revSource: DataSourceType =
+    userFundOverride?.revenueTTMIdr && userFundOverride.revenueTTMIdr > 0
+      ? 'USER_OVERRIDE'
+      : stock.revenueTTMIdr && stock.revenueTTMIdr > 0
+      ? baseFundSource
+      : 'HARDCODED_SEED';
+  const ebitSource: DataSourceType =
+    userFundOverride?.operatingProfitTTMIdr && userFundOverride.operatingProfitTTMIdr > 0
+      ? 'USER_OVERRIDE'
+      : stock.operatingProfitTTMIdr && stock.operatingProfitTTMIdr > 0
+      ? baseFundSource
+      : 'HARDCODED_SEED';
+  const niSource: DataSourceType =
+    userFundOverride?.netIncomeTTMIdr && userFundOverride.netIncomeTTMIdr > 0
+      ? 'USER_OVERRIDE'
+      : stock.netIncomeTTMIdr && stock.netIncomeTTMIdr > 0
+      ? baseFundSource
+      : 'HARDCODED_SEED';
+  const eqSource: DataSourceType =
+    userFundOverride?.equityAttributableIdr && userFundOverride.equityAttributableIdr > 0
+      ? 'USER_OVERRIDE'
+      : stock.equityAttributableIdr && stock.equityAttributableIdr > 0
+      ? baseFundSource
+      : 'HARDCODED_SEED';
+  const sharesSource: DataSourceType =
+    userFundOverride?.sharesOutstanding && userFundOverride.sharesOutstanding > 0
+      ? 'USER_OVERRIDE'
+      : baseFundSource !== 'HARDCODED_SEED' && stock.sharesOutstanding && stock.sharesOutstanding > 0
+      ? baseFundSource
+      : 'HARDCODED_SEED';
+
+  const debtSource: DataSourceType =
+    stock.totalDebtIdr !== undefined && baseFundSource !== 'HARDCODED_SEED'
+      ? baseFundSource
+      : 'HARDCODED_SEED';
+  const cashSource: DataSourceType =
+    stock.cashAndEquivalentsIdr !== undefined && baseFundSource !== 'HARDCODED_SEED'
+      ? baseFundSource
+      : 'HARDCODED_SEED';
+  const ocfSource: DataSourceType =
+    stock.ocfTTMIdr !== undefined && baseFundSource !== 'HARDCODED_SEED'
+      ? baseFundSource
+      : 'HARDCODED_SEED';
+  const capexSource: DataSourceType =
+    stock.capexTTMIdr !== undefined && baseFundSource !== 'HARDCODED_SEED'
+      ? baseFundSource
+      : 'HARDCODED_SEED';
+  const daSource: DataSourceType =
+    stock.daTTMIdr !== undefined && baseFundSource !== 'HARDCODED_SEED'
+      ? baseFundSource
+      : 'HARDCODED_SEED';
+
+  const epsSource: DataSourceType =
+    niSource === 'USER_OVERRIDE' || sharesSource === 'USER_OVERRIDE'
+      ? 'USER_OVERRIDE'
+      : niSource !== 'HARDCODED_SEED'
+      ? niSource
+      : 'HARDCODED_SEED';
+  const bvpsSource: DataSourceType =
+    eqSource === 'USER_OVERRIDE' || sharesSource === 'USER_OVERRIDE'
+      ? 'USER_OVERRIDE'
+      : eqSource !== 'HARDCODED_SEED'
+      ? eqSource
+      : 'HARDCODED_SEED';
+  const roeSource: DataSourceType =
+    niSource === 'USER_OVERRIDE' || eqSource === 'USER_OVERRIDE'
+      ? 'USER_OVERRIDE'
+      : niSource !== 'HARDCODED_SEED' && eqSource !== 'HARDCODED_SEED'
+      ? niSource
+      : 'HARDCODED_SEED';
+
+  const lineageFields: TickerDataLineageReport['fields'] = {
+    lastPrice: createTrackedField({
+      value: price,
+      source: priceSource,
+      asOfDate: priceAsOf,
+      category: 'PRICE',
+      note:
+        priceSource === 'LIVE_YAHOO_API'
+          ? 'Harga spot live dari Yahoo Chart v8 API'
+          : 'Harga penutupan dari static-market-snapshot.json'
+    }),
+    adtv20dIdr: createTrackedField({
+      value: adtv20dIdr,
+      source: adtvSource,
+      asOfDate: adtvAsOf ?? null,
+      category: 'ADTV',
+      note:
+        adtvSource === 'USER_OVERRIDE'
+          ? 'Override manual ADTV 20D via Modal Kalibrasi'
+          : adtvSource === 'LIVE_YAHOO_API'
+          ? 'Dihitung dari 20 hari perdagangan terakhir (close × volume) Yahoo Chart v8'
+          : adtvSource === 'FUNDAMENTALS_JSON'
+          ? 'ADTV 20D dari fundamentals-snapshot.json (GitHub Actions)'
+          : 'Estimasi katalog likuiditas statis CALIBRATED_ADTV_20D_IDR_MAP (SEED_WARN)'
+    }),
+    sharesOutstanding: createTrackedField({
+      value: rawTickerData.sharesOutstanding,
+      source: sharesSource,
+      asOfDate:
+        sharesSource === 'USER_OVERRIDE' ? userFundOverride?.updatedAt ?? todayIso : baseFundAsOf,
+      fiscalPeriod: baseFiscalPeriod,
+      category: 'FUNDAMENTAL',
+      note:
+        sharesSource === 'USER_OVERRIDE'
+          ? 'Override manual jumlah saham beredar'
+          : sharesSource !== 'HARDCODED_SEED'
+          ? 'Jumlah saham beredar aktual dari laporan keuangan'
+          : 'Katalog statis OFFICIAL_IDX_SHARES_OUTSTANDING_MAP (SEED_WARN)'
+    }),
+    marketCapIdr: createTrackedField({
+      value: rawTickerData.marketCap,
+      source: sharesSource === 'HARDCODED_SEED' ? 'HARDCODED_SEED' : priceSource,
+      asOfDate: priceAsOf,
+      category: 'FUNDAMENTAL',
+      note: `Shares (${rawTickerData.sharesOutstanding.toLocaleString('id-ID')}) × Spot Price (Rp ${price.toLocaleString('id-ID')})`
+    }),
+    revenueTTMIdr: createTrackedField({
+      value: rawTickerData.revenueTTM,
+      source: revSource,
+      asOfDate:
+        revSource === 'USER_OVERRIDE' ? userFundOverride?.updatedAt ?? todayIso : baseFundAsOf,
+      fiscalPeriod: baseFiscalPeriod,
+      category: 'FUNDAMENTAL',
+      note:
+        revSource === 'USER_OVERRIDE'
+          ? `Override manual Revenue TTM (${userFundOverride?.overrideNote || 'Kalibrasi Manual'})`
+          : revSource !== 'HARDCODED_SEED'
+          ? `Revenue TTM terdekumulasi (${stock.fundamentalsNote || 'Decumulated TTM'})`
+          : 'Reverse-engineered dari Net Income / Net Margin katalog statis (SEED_WARN — jalankan GitHub Actions / Override Kalibrasi)'
+    }),
+    operatingProfitTTMIdr: createTrackedField({
+      value: rawTickerData.operatingProfitTTM,
+      source: ebitSource,
+      asOfDate:
+        ebitSource === 'USER_OVERRIDE' ? userFundOverride?.updatedAt ?? todayIso : baseFundAsOf,
+      fiscalPeriod: baseFiscalPeriod,
+      category: 'FUNDAMENTAL',
+      note:
+        ebitSource === 'USER_OVERRIDE'
+          ? 'Override manual Laba Usaha (EBIT) TTM'
+          : ebitSource !== 'HARDCODED_SEED'
+          ? 'EBIT TTM dari laporan laba rugi terdekumulasi'
+          : 'Reverse-engineered dari Revenue × defaultOpMargin katalog statis (SEED_WARN)'
+    }),
+    ebitdaTTMIdr: createTrackedField({
+      value: rawTickerData.ebitdaTTM ?? rawTickerData.operatingProfitTTM,
+      source: ebitSource !== 'HARDCODED_SEED' ? ebitSource : 'HARDCODED_SEED',
+      asOfDate:
+        ebitSource === 'USER_OVERRIDE' ? userFundOverride?.updatedAt ?? todayIso : baseFundAsOf,
+      fiscalPeriod: baseFiscalPeriod,
+      category: 'FUNDAMENTAL',
+      note: 'EBIT TTM + D&A TTM'
+    }),
+    netIncomeTTMIdr: createTrackedField({
+      value: rawTickerData.netIncomeTTM,
+      source: niSource,
+      asOfDate:
+        niSource === 'USER_OVERRIDE' ? userFundOverride?.updatedAt ?? todayIso : baseFundAsOf,
+      fiscalPeriod: baseFiscalPeriod,
+      category: 'FUNDAMENTAL',
+      note:
+        niSource === 'USER_OVERRIDE'
+          ? 'Override manual Laba Bersih (Net Income) TTM'
+          : niSource !== 'HARDCODED_SEED'
+          ? 'Laba Bersih TTM yang diatribusikan ke entitas induk (terdekumulasi)'
+          : 'Reverse-engineered dari EPS sintetik × Shares katalog statis (SEED_WARN)'
+    }),
+    equityAttributableIdr: createTrackedField({
+      value: rawTickerData.equityAttributable,
+      source: eqSource,
+      asOfDate:
+        eqSource === 'USER_OVERRIDE' ? userFundOverride?.updatedAt ?? todayIso : baseFundAsOf,
+      fiscalPeriod: baseFiscalPeriod,
+      category: 'FUNDAMENTAL',
+      note:
+        eqSource === 'USER_OVERRIDE'
+          ? 'Override manual Ekuitas Entitas Induk (Book Value)'
+          : eqSource !== 'HARDCODED_SEED'
+          ? 'Snapshot Ekuitas kuartal terakhir (Balance Sheet Snapshot Guard)'
+          : 'Reverse-engineered dari BVPS sintetik × Shares katalog statis (SEED_WARN)'
+    }),
+    totalDebtIdr: createTrackedField({
+      value: rawTickerData.totalDebt ?? 0,
+      source: debtSource,
+      asOfDate: baseFundAsOf,
+      fiscalPeriod: baseFiscalPeriod,
+      category: 'FUNDAMENTAL',
+      note:
+        debtSource !== 'HARDCODED_SEED'
+          ? 'Snapshot Total Utang Berbunga neraca terakhir'
+          : 'Estimasi Equity × defaultDer katalog statis (SEED_WARN)'
+    }),
+    cashAndEquivalentsIdr: createTrackedField({
+      value: rawTickerData.cashAndEquivalents ?? 0,
+      source: cashSource,
+      asOfDate: baseFundAsOf,
+      fiscalPeriod: baseFiscalPeriod,
+      category: 'FUNDAMENTAL',
+      note:
+        cashSource !== 'HARDCODED_SEED'
+          ? 'Snapshot Kas & Setara Kas neraca terakhir'
+          : 'Estimasi 22% × Equity katalog statis (SEED_WARN)'
+    }),
+    ocfTTMIdr: createTrackedField({
+      value: rawTickerData.ocfTTM ?? 0,
+      source: ocfSource,
+      asOfDate: baseFundAsOf,
+      fiscalPeriod: baseFiscalPeriod,
+      category: 'FUNDAMENTAL',
+      note:
+        ocfSource !== 'HARDCODED_SEED'
+          ? 'Arus Kas Operasi (OCF) TTM aktual'
+          : 'Estimasi Net Income × rasio OCF/NI heuristik (SEED_WARN)'
+    }),
+    capexTTMIdr: createTrackedField({
+      value: rawTickerData.capexTTM ?? 0,
+      source: capexSource,
+      asOfDate: baseFundAsOf,
+      fiscalPeriod: baseFiscalPeriod,
+      category: 'FUNDAMENTAL',
+      note:
+        capexSource !== 'HARDCODED_SEED'
+          ? 'Belanja Modal (CapEx) TTM aktual'
+          : 'Estimasi Revenue × rasio CapEx/Revenue sektoral (SEED_WARN)'
+    }),
+    daTTMIdr: createTrackedField({
+      value: rawTickerData.daTTM ?? 0,
+      source: daSource,
+      asOfDate: baseFundAsOf,
+      fiscalPeriod: baseFiscalPeriod,
+      category: 'FUNDAMENTAL',
+      note:
+        daSource !== 'HARDCODED_SEED'
+          ? 'Depresiasi & Amortisasi (D&A) TTM aktual'
+          : 'Estimasi CapEx / rasio CapEx-to-DA sektoral (SEED_WARN)'
+    }),
+    epsTTMIdr: createTrackedField({
+      value: estimatedEpsIdr,
+      source: epsSource,
+      asOfDate:
+        epsSource === 'USER_OVERRIDE' ? userFundOverride?.updatedAt ?? todayIso : baseFundAsOf,
+      fiscalPeriod: baseFiscalPeriod,
+      category: 'FUNDAMENTAL',
+      note:
+        epsSource !== 'HARDCODED_SEED'
+          ? `Net Income TTM / Shares = Rp ${estimatedEpsIdr.toLocaleString('id-ID')}/shm`
+          : `Sintetik BVPS × defaultRoe (${trailingRoePct}%) dari approxPrice katalog (SEED_WARN)`
+    }),
+    bvpsIdr: createTrackedField({
+      value: estimatedBvpsIdr,
+      source: bvpsSource,
+      asOfDate:
+        bvpsSource === 'USER_OVERRIDE' ? userFundOverride?.updatedAt ?? todayIso : baseFundAsOf,
+      fiscalPeriod: baseFiscalPeriod,
+      category: 'FUNDAMENTAL',
+      note:
+        bvpsSource !== 'HARDCODED_SEED'
+          ? `Equity Attributable / Shares = Rp ${estimatedBvpsIdr.toLocaleString('id-ID')}/shm`
+          : `Sintetik approxPrice (Rp ${rawAnchorPrice.toLocaleString('id-ID')}) / anchorFairPbvBaseline (${anchorFairPbvBaseline.toFixed(2)}x) (SEED_WARN)`
+    }),
+    roeTTMPct: createTrackedField({
+      value: ttmRoeBasisPct,
+      source: roeSource,
+      asOfDate:
+        roeSource === 'USER_OVERRIDE' ? userFundOverride?.updatedAt ?? todayIso : baseFundAsOf,
+      fiscalPeriod: baseFiscalPeriod,
+      category: 'FUNDAMENTAL',
+      note:
+        roeSource !== 'HARDCODED_SEED'
+          ? `Net Income TTM / Equity Attributable = ${ttmRoeBasisPct.toFixed(2)}%`
+          : `Default ROE katalog statis idxAllEmitenCatalog.ts (${ttmRoeBasisPct.toFixed(2)}%) (SEED_WARN)`
+    }),
+    sbnSpot10YPct: createTrackedField({
+      value: sbnSpot10YPct,
+      source: sbnFreshness.source,
+      asOfDate: sbnFreshness.asOfDate,
+      category: 'MACRO',
+      statusOverride: sbnFreshness.status,
+      note: sbnFreshness.note
+    }),
+    sbnBlendedSpotRfPct: createTrackedField({
+      value: sbnBlendedSpotRfPct,
+      source: sbnFreshness.source,
+      asOfDate: sbnFreshness.asOfDate,
+      category: 'MACRO',
+      statusOverride: sbnFreshness.status,
+      note: `Duration-Weighted SBN 1Y (${sbnSpot1YPct}%) / 5Y (${sbnSpot5YPct}%) / 10Y (${sbnSpot10YPct}%) — ${sbnFreshness.note}`
+    }),
+    dynamicCostOfEquityPct: createTrackedField({
+      value: dynamicCostOfEquityPct,
+      source: sbnFreshness.source,
+      asOfDate: sbnFreshness.asOfDate,
+      category: 'MACRO',
+      statusOverride: sbnFreshness.status,
+      note: `Blended Rf ${sbnBlendedSpotRfPct}% + Blume Beta × ERP ${erpBenchmarkPct}%${sanityReport.keSafetyBufferBps > 0 ? ` + Buffer Stale +${sanityReport.keSafetyBufferBps} bps` : ''}`
+    })
+  };
+
+  const allTrackedFields = Object.values(lineageFields);
+  const freshFieldCount = allTrackedFields.filter((f) => f.status === 'FRESH').length;
+  const staleFieldCount = allTrackedFields.filter((f) => f.status === 'STALE').length;
+  const seedFieldCount = allTrackedFields.filter((f) => f.status === 'SEED_WARN').length;
+
+  const coreSeedFields = [
+    lineageFields.revenueTTMIdr,
+    lineageFields.netIncomeTTMIdr,
+    lineageFields.equityAttributableIdr,
+    lineageFields.sharesOutstanding
+  ].filter((f) => f.source === 'HARDCODED_SEED' || f.status === 'SEED_WARN');
+
+  const convictionCappedByLineage = coreSeedFields.length > 0;
+  const overallIntegrityStatus: TickerDataLineageReport['overallIntegrityStatus'] =
+    convictionCappedByLineage
+      ? 'SEED_FALLBACK_CAPPED'
+      : staleFieldCount > 0 || sbnFreshness.isStaleOrProxy
+      ? 'PARTIAL_HYBRID'
+      : 'INSTITUTIONAL_GRADE';
+  const overallStatus: TickerDataLineageReport['overallStatus'] =
+    convictionCappedByLineage
+      ? 'SEED_CAPPED_GRADE_C'
+      : staleFieldCount > 0 || sbnFreshness.isStaleOrProxy
+      ? 'PARTIAL_HYBRID'
+      : 'INSTITUTIONAL_GRADE';
+
+  const convictionCapReason = convictionCappedByLineage
+    ? `[GUARDRAIL PROVENANCE SEED_WARN] ${coreSeedFields.length} metrik laporan keuangan inti (${['Revenue TTM', 'Net Income TTM', 'Equity', 'Shares'].filter((_, idx) => [lineageFields.revenueTTMIdr, lineageFields.netIncomeTTMIdr, lineageFields.equityAttributableIdr, lineageFields.sharesOutstanding][idx].status === 'SEED_WARN').join(', ')}) masih berasal dari estimasi katalog statis (HARDCODED_SEED / BOOTSTRAP_PLACEHOLDER). Conviction Grade dikunci maksimal pada C (SPECULATIVE / Watchlist) hingga data laporan keuangan aktual dimuat via GitHub Actions (fundamentals-snapshot.json) atau dikalibrasi manual (USER_OVERRIDE).`
+    : undefined;
+
+  const isSbnMacroProxy = sbnFreshness.source === 'PROXY_FORMULA';
+  const isSbnMacroStale = sbnFreshness.status === 'STALE';
+
+  const dataLineage: TickerDataLineageReport = {
+    ticker: stock.ticker,
+    generatedAtIso: new Date().toISOString(),
+    overallStatus,
+    overallIntegrityStatus,
+    freshFieldCount,
+    staleFieldCount,
+    seedFieldCount,
+    convictionCappedByLineage,
+    convictionCapReason,
+    seedCapReason: convictionCapReason,
+    isSbnMacroProxy,
+    isSbnMacroStale,
+    sbnAgeDays: sbnFreshness.ageDays,
+    sbnMacroWarningMessage: sbnFreshness.note,
+    sbnMacroStatus: {
+      isStaleOrProxy: sbnFreshness.isStaleOrProxy,
+      ageDays: sbnFreshness.ageDays,
+      source: sbnFreshness.source,
+      asOfDate: sbnFreshness.asOfDate,
+      warningBadgeText: sbnFreshness.warningBadgeText
+    },
+    fields: lineageFields,
+    syncDiagnostics: getSyncDiagnosticsForTicker(stock.ticker)
+  };
+
+  registerLineageReportForDebugger(dataLineage);
+
+  const rawGrade = riskSizingResult.finalConvictionGrade;
+  const isGradeAboveC =
+    rawGrade === 'A+ (CORE CONVICTION)' ||
+    rawGrade === 'A (SOLID VALUE)' ||
+    rawGrade === 'B (WATCHLIST / HOLD)';
+
   const convictionGrade: JoeliardiOosEvaluation['convictionGrade'] =
-    riskSizingResult.finalConvictionGrade;
+    convictionCappedByLineage && isGradeAboveC ? 'C (SPECULATIVE)' : rawGrade;
+
+  if (convictionCappedByLineage && convictionCapReason) {
+    riskSizingResult.finalConvictionGrade = convictionGrade;
+    if (!riskSizingResult.penaltyReasons.includes(convictionCapReason)) {
+      riskSizingResult.penaltyReasons.unshift(convictionCapReason);
+    }
+    if (!finalValuationReport.ui_notifications.includes(convictionCapReason)) {
+      finalValuationReport.ui_notifications.unshift(convictionCapReason);
+    }
+  }
+
+  const totalConvictionScore = riskSizingResult.adjustedConvictionScore;
 
   const betaWeightedSizingCapPct = riskSizingResult.finalMaxAllocationPct;
   const maxSafeAllocationIdr = sanityReport.maxDailyAbsorption5PctIDR;
@@ -3622,7 +4086,10 @@ export function evaluateJoeliardiOosFundamental(
     valuationResult,
     valuationLedger,
     tacticalOverlay,
-    riskSizingResult
+    riskSizingResult,
+    dataLineage,
+    isConvictionCappedBySeed: convictionCappedByLineage,
+    seedCapWarningReason: convictionCapReason
   };
 }
 

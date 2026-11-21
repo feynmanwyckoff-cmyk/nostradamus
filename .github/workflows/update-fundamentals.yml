@@ -1,0 +1,49 @@
+name: Update IDX Fundamentals & ADTV Snapshot
+
+on:
+  schedule:
+    # Runs every Sunday at 23:00 UTC (Monday 06:00 WIB before IDX market open)
+    - cron: '0 23 * * 0'
+  workflow_dispatch:
+    inputs:
+      tickers:
+        description: 'Optional comma-separated IDX tickers to refresh (e.g. MIKA,BBCA,BMRI). Leave empty for full core universe.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-fundamentals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Fetch Yahoo Finance Fundamentals & 20D Volume ADTV
+        env:
+          TARGET_TICKERS: ${{ github.event.inputs.tickers }}
+        run: |
+          node scripts/fetch-fundamentals-snapshot.mjs
+
+      - name: Commit and push updated fundamentals-snapshot.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/fundamentals-snapshot.json
+          if git diff --staged --quiet; then
+            echo "No changes in public/fundamentals-snapshot.json"
+          else
+            git commit -m "chore(data): automated IDX fundamentals & 20D ADTV snapshot refresh [skip ci]"
+            git push
+          fi

@@ -1,3 +1,5 @@
+import type { DataSourceType, TickerDataLineageReport } from '../utils/dataLineageEngine';
+
 export type MarketRegimeStatus = 'TENANG' | 'WASPADA' | 'VOLATIL';
 
 export type BarbellRole = 'DEFENSIVE_QUALITY' | 'AGGRESSIVE_GROWTH' | 'NEUTRAL_HOLD' | 'AVOID_JUNK';
@@ -139,7 +141,20 @@ export interface StockMetrics {
   operatingProfitTTMIdr?: number;      // TTM Operating Profit / EBIT (Rupiah penuh)
   operatingProfitGrowthYoYPct?: number;// YoY Operating Profit Growth (%) for Dual-Confirmation Catalyst
   equityAttributableIdr?: number;      // Total Attributable Equity (Rupiah penuh)
+  totalDebtIdr?: number;               // Total Interest-Bearing Debt (Rupiah penuh)
+  totalAssetsIdr?: number;             // Total Assets (Rupiah penuh)
+  cashAndEquivalentsIdr?: number;      // Cash & Cash Equivalents (Rupiah penuh)
+  ocfTTMIdr?: number;                  // Operating Cash Flow TTM (Rupiah penuh)
   capexTTMIdr?: number;                // TTM Capital Expenditure (Rupiah penuh)
+  daTTMIdr?: number;                   // TTM Depreciation & Amortization (Rupiah penuh)
+  priceSource?: DataSourceType;
+  priceAsOfDate?: string;
+  adtvSource?: DataSourceType;
+  adtvAsOfDate?: string;
+  fundamentalsSource?: DataSourceType;
+  fundamentalsAsOfDate?: string;
+  fundamentalsFiscalPeriod?: string;
+  fundamentalsNote?: string;
   roicTTMPct?: number;                 // Return on Invested Capital TTM (%)
   incrementalRoicPct?: number;         // Incremental ROIC on new CapEx (%)
   epsAvg3YIdr?: number;                // 3-Year Historical Normalized Average EPS (IDR)
@@ -404,6 +419,9 @@ export interface JoeliardiOosEvaluation {
   valuationLedger?: ValuationLedger;
   tacticalOverlay?: TacticalOverlay;
   riskSizingResult?: RiskSizingResult;
+  dataLineage?: TickerDataLineageReport;
+  isConvictionCappedBySeed?: boolean;
+  seedCapWarningReason?: string;
 }
 
 /**
