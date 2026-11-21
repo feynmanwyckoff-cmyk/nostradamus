@@ -1,6 +1,6 @@
 {
   "schemaVersion": "3.0-DEMIGUEL-MF24",
-  "updatedAt": "2026-11-21T10:19:20.605Z",
+  "updatedAt": "2026-11-21T10:22:21.240Z",
   "strategyName": "Vol-Managed Multifactor + 40% Buffer",
   "rebalanceBufferPct": 40,
   "thresholdAnnVol": 18,
@@ -89,7 +89,7 @@
       "earningsGrowthYoYPct": 21,
       "hasActiveBuyback": true,
       "buybackNominalIdr": 150000000000,
-      "liveMarketCapIdr": 3744129759000,
+      "liveMarketCapIdr": 3744100000000,
       "dynamicBuybackYieldPct": 4.01,
       "splitRatioDivisor": 1,
       "isCatalystActive": true,
