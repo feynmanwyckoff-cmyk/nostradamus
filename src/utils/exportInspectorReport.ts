@@ -1099,25 +1099,25 @@ export function renderInspectorReportCanvas(
           color: '#D1D5DB'
         },
         {
-          label: '3. BATAS INVALIDATION',
-          badge: `STOP < ${extractedStop}`,
+          label: '3. DUAL STOP LOSS (ATR & TRANCHE)',
+          badge: `STOP < Rp ${formatIdrPriceDisplay(joeliardiEval.riskSizingResult?.stopLossPriceIDR ?? stopPriceIdr)}`,
           badgeColor: '#FB7185',
           kvRows: [] as Array<{ k: string; v: string; vColor: string }>,
           lines: [
-            `▸ Trigger Harga: Evaluasi/pangkas posisi bila harga tutup di bawah ${extractedStop}.`,
-            '▸ Trigger Moat & Kas: Penurunan struktural GP/A < 10% atau OCF/NI < 0,65x.',
-            '▸ Rotasi Kuantitatif: Emiten terlempar keluar dari zona Top 40% Buffer.'
+            `▸ ATR/Vol Stop: Rp ${formatIdrPriceDisplay(joeliardiEval.riskSizingResult?.stopLossPriceIDR ?? stopPriceIdr)} (-${joeliardiEval.riskSizingResult?.stopLossPct ?? 12}%, max[2.5×ATR20, 1.5×σ_m]).`,
+            `▸ Tranche & Floor: T1 (${joeliardiEval.riskSizingResult?.tranche1AllocationPct ?? 3.5}%) · T2 (${joeliardiEval.riskSizingResult?.tranche2AllocationPct ?? 2.8}%) · Floor Stop Rp ${formatIdrPriceDisplay(joeliardiEval.grahamJoeliardiBenchmarkIdr ?? stopPriceIdr)}.`,
+            `▸ Trigger Moat & Kas: Cut jika GP/A < 10% atau OCF/NI < 0,65x (${extractedStop}).`
           ],
           color: '#F3F4F6'
         },
         {
-          label: '4. PORSI 1/β & ADTV',
-          badge: `1/β Cap ≤${betaCapPct.toFixed(1)}%`,
+          label: '4. VOL-TARGETED BARBELL & ADTV',
+          badge: `Max Cap ≤${betaCapPct.toFixed(1)}%`,
           badgeColor: '#38BDF8',
           kvRows: [
             { k: 'Alokasi:', v: basketLabel, vColor: '#F9FAFB' },
             {
-              k: 'Porsi Ideal:',
+              k: 'min(1/β,1/Vol,Reg):',
               v: `${minAllocPct}% – ${betaCapPct.toFixed(1)}% (1/β ${betaProp.toFixed(2)}x)`,
               vColor: '#38BDF8'
             },
@@ -1237,6 +1237,8 @@ export function renderInspectorReportCanvas(
         14
       : 0;
 
+  const rawAuditStripH = joeliardiEval.rawTickerData && joeliardiEval.sanityReport ? 146 : 0;
+
   const LOGICAL_HEIGHT =
     124 + // Top Header + initial gap
     hscBannerTotalH +
@@ -1247,6 +1249,7 @@ export function renderInspectorReportCanvas(
     aiBoxH + // Complete Investment Committee AI Section
     18 +
     totalNewsSectionH +
+    (rawAuditStripH > 0 ? rawAuditStripH + 14 : 0) +
     72; // Footer
 
   const canvas = document.createElement('canvas');
@@ -3455,6 +3458,227 @@ export function renderInspectorReportCanvas(
     }
 
     curY = newsRowY + 2;
+  }
+
+  // 9B. Mandatory P2.4 Raw Data Audit Strip (Synchronized with PNG & PDF Exports)
+  if (joeliardiEval.rawTickerData && joeliardiEval.sanityReport) {
+    const raw = joeliardiEval.rawTickerData;
+    const sanity = joeliardiEval.sanityReport;
+    const valRes = joeliardiEval.valuationResult;
+    const tac = joeliardiEval.tacticalOverlay;
+    const risk = joeliardiEval.riskSizingResult;
+
+    const stripX = 38;
+    const stripW = LOGICAL_WIDTH - 76;
+    const stripY = curY + 6;
+
+    drawRoundedRect(ctx, stripX, stripY, stripW, rawAuditStripH, 5);
+    ctx.fillStyle = '#11161F';
+    ctx.fill();
+    ctx.strokeStyle =
+      sanity.status === 'PASS'
+        ? 'rgba(16, 185, 129, 0.45)'
+        : sanity.status === 'WARN'
+        ? 'rgba(245, 158, 11, 0.55)'
+        : 'rgba(244, 63, 94, 0.65)';
+    ctx.lineWidth = 1.3;
+    ctx.stroke();
+
+    // Header Row
+    ctx.fillStyle = '#F59E0B';
+    ctx.font = '700 10px "Fira Code", monospace';
+    ctx.fillText(
+      `RAW DATA AUDIT STRIP (P0–P2 INSTITUTIONAL TELEMETRY) · ${raw.ticker} · BASIS: TTM_DEFAULT`,
+      stripX + 14,
+      stripY + 20
+    );
+
+    const statusBadgeText = `SANITY_CHECK: ${sanity.status}${
+      sanity.flags.length > 0 ? ` [${sanity.flags.join(', ')}]` : ''
+    }`;
+    ctx.font = '700 9.5px "Fira Code", monospace';
+    const sbW = Math.min(440, ctx.measureText(statusBadgeText).width + 18);
+    const sbX = stripX + stripW - 14 - sbW;
+    drawRoundedRect(ctx, sbX, stripY + 6, sbW, 20, 3);
+    ctx.fillStyle =
+      sanity.status === 'PASS'
+        ? 'rgba(16, 185, 129, 0.16)'
+        : sanity.status === 'WARN'
+        ? 'rgba(245, 158, 11, 0.18)'
+        : 'rgba(244, 63, 94, 0.2)';
+    ctx.fill();
+    ctx.strokeStyle =
+      sanity.status === 'PASS' ? '#10B981' : sanity.status === 'WARN' ? '#F59E0B' : '#F43F5E';
+    ctx.stroke();
+    ctx.fillStyle =
+      sanity.status === 'PASS' ? '#34D399' : sanity.status === 'WARN' ? '#FBBF24' : '#FB7185';
+    drawTextAutoFit(
+      ctx,
+      statusBadgeText,
+      sbX + 9,
+      stripY + 19,
+      sbW - 18,
+      700,
+      9.5,
+      7.5,
+      '"Fira Code", monospace'
+    );
+
+    ctx.strokeStyle = '#1F2A3C';
+    ctx.beginPath();
+    ctx.moveTo(stripX + 14, stripY + 30);
+    ctx.lineTo(stripX + stripW - 14, stripY + 30);
+    ctx.stroke();
+
+    const fmtCompactIdr = (v: number): string => {
+      const a = Math.abs(v);
+      if (a >= 1e12) return `Rp ${(v / 1e12).toFixed(2)} T`;
+      if (a >= 1e9) return `Rp ${(v / 1e9).toFixed(2)} M`;
+      if (a >= 1e6) return `Rp ${(v / 1e6).toFixed(1)} Jt`;
+      return `Rp ${Math.round(v).toLocaleString('id-ID')}`;
+    };
+
+    const spotRf10YPct = raw.spotRf10Y <= 1 ? raw.spotRf10Y * 100 : raw.spotRf10Y;
+    const rawRoic = raw.roicTTM ?? 0.14;
+    const roicPct = rawRoic <= 1 ? rawRoic * 100 : rawRoic;
+
+    const auditCells = [
+      {
+        label: 'SHARES (LEMBAR)',
+        val:
+          raw.sharesOutstanding >= 1e9
+            ? `${(raw.sharesOutstanding / 1e9).toFixed(2)} M lbr`
+            : `${Math.round(raw.sharesOutstanding).toLocaleString('id-ID')} lbr`,
+        sub: `Δ Implied: ${(sanity.sharesMismatchPct * 100).toFixed(2)}%`
+      },
+      {
+        label: 'MARKETCAP',
+        val: fmtCompactIdr(raw.marketCap),
+        sub: `Px: Rp ${raw.price.toLocaleString('id-ID')}`
+      },
+      {
+        label: 'REV_TTM',
+        val: fmtCompactIdr(raw.revenueTTM),
+        sub: `OP YoY: ${(raw.operatingProfitYoYPct ?? 0) >= 0 ? '+' : ''}${(raw.operatingProfitYoYPct ?? 0).toFixed(1)}%`
+      },
+      {
+        label: 'NI_TTM',
+        val: fmtCompactIdr(raw.netIncomeTTM),
+        sub: `Δ EPS×Shr: ${(sanity.netIncomeMismatchPct * 100).toFixed(2)}%`
+      },
+      {
+        label: 'EQUITY',
+        val: fmtCompactIdr(raw.equityAttributable),
+        sub: `Δ BVPS×Shr: ${(sanity.equityMismatchPct * 100).toFixed(2)}%`
+      },
+      {
+        label: 'CAPEX_TTM',
+        val: fmtCompactIdr(raw.capexTTM),
+        sub: `ROIC: ${roicPct.toFixed(1)}%`
+      },
+      {
+        label: 'ADTV_20D_IDR',
+        val: fmtCompactIdr(sanity.normalizedAdtv20dIDR),
+        sub: `5% Cap: ${fmtCompactIdr(sanity.maxDailyAbsorption5PctIDR)}`
+      },
+      {
+        label: 'SBN_10Y (TANGGAL)',
+        val: `${spotRf10YPct.toFixed(2)}% (${raw.rfLastUpdated.slice(0, 10)})`,
+        sub: `Usia: ${sanity.rfAgeDays}hr ${sanity.keSafetyBufferBps > 0 ? `(+${sanity.keSafetyBufferBps}bps Ke)` : '(Fresh)'}`
+      }
+    ];
+
+    const cellGap = 8;
+    const cellW = (stripW - 28 - cellGap * 7) / 8;
+    const cellY = stripY + 38;
+    const cellH = 56;
+
+    auditCells.forEach((cell, idx) => {
+      const cx = stripX + 14 + idx * (cellW + cellGap);
+      drawRoundedRect(ctx, cx, cellY, cellW, cellH, 3);
+      ctx.fillStyle = '#141B26';
+      ctx.fill();
+      ctx.strokeStyle = '#243044';
+      ctx.stroke();
+
+      ctx.fillStyle = '#9CA3AF';
+      drawTextAutoFit(
+        ctx,
+        cell.label,
+        cx + 7,
+        cellY + 14,
+        cellW - 14,
+        700,
+        7.8,
+        6.5,
+        '"Fira Code", monospace'
+      );
+
+      ctx.fillStyle = '#F9FAFB';
+      drawTextAutoFit(
+        ctx,
+        cell.val,
+        cx + 7,
+        cellY + 31,
+        cellW - 14,
+        700,
+        9.6,
+        7.5,
+        '"Fira Code", monospace'
+      );
+
+      ctx.fillStyle = '#38BDF8';
+      drawTextAutoFit(
+        ctx,
+        cell.sub,
+        cx + 7,
+        cellY + 46,
+        cellW - 14,
+        500,
+        7.8,
+        6.5,
+        '"Fira Code", monospace'
+      );
+    });
+
+    // Bottom P1 & P2 Summary Telemetry Line inside RawDataAuditStrip
+    const p1Summary = valRes
+      ? `P1: Ensemble Rp ${valRes.ensembleFairValue.toLocaleString('id-ID')} | Floor 3-5Y Rp ${valRes.standaloneFloor.toLocaleString('id-ID')} (${valRes.isFloorClamped ? 'CLAMPED ≤90%' : 'INVARIANT OK'}) | 2-Stage RI g1=${(valRes.stage1GrowthRate * 100).toFixed(1)}%·gT=${(valRes.terminalGrowthRate * 100).toFixed(1)}%`
+      : '';
+    const p2Summary = risk
+      ? `P2: MaxCap ${risk.finalMaxAllocationPct}% (1/β ${risk.inverseBetaCapPct}%·1/Vol ${risk.inverseVolatilityCapPct}%·Reg ${risk.regimeCapPct}%) | ATR/Vol Stop Rp ${risk.stopLossPriceIDR.toLocaleString('id-ID')} (-${risk.stopLossPct}%) | T1 ${risk.tranche1AllocationPct}% · T2 ${risk.tranche2AllocationPct}%${valRes ? ` | Dispersi ${(valRes.modelDispersion * 100).toFixed(1)}%` : ''}${risk.dispersionPenaltyPts > 0 ? ` (-${risk.dispersionPenaltyPts}pts)` : ''}`
+      : '';
+    const tacSummary = tac
+      ? `Tactical Overlay: ${tac.pairTicker} (Z=${tac.zScore >= 0 ? '+' : ''}${tac.zScore}σ · ${tac.action})`
+      : '';
+
+    ctx.fillStyle = '#D1D5DB';
+    drawTextAutoFit(
+      ctx,
+      `${p1Summary}   ||   ${tacSummary}`,
+      stripX + 14,
+      stripY + 113,
+      stripW - 28,
+      600,
+      8.6,
+      7.0,
+      '"Fira Code", monospace'
+    );
+
+    ctx.fillStyle = '#34D399';
+    drawTextAutoFit(
+      ctx,
+      p2Summary,
+      stripX + 14,
+      stripY + 131,
+      stripW - 28,
+      600,
+      8.6,
+      7.0,
+      '"Fira Code", monospace'
+    );
+
+    curY = stripY + rawAuditStripH + 8;
   }
 
   // 10. Institutional Footer Bar

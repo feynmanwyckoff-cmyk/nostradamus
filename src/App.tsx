@@ -71,7 +71,8 @@ import {
   ChangePassphraseModal
 } from './components/TerminalSecurityGate';
 import { EmitenFundamentalInspectorModal } from './components/EmitenFundamentalInspectorModal';
-import { Sun, Moon, Cloud, RefreshCw, Lock, KeyRound } from 'lucide-react';
+import { QuantAuditTestLabModal } from './components/QuantAuditTestLabModal';
+import { Sun, Moon, Cloud, RefreshCw, Lock, KeyRound, FlaskConical } from 'lucide-react';
 
 const SCREENER_CACHE_KEY = 'nostradamus_dmu24_screener_v17_yahoo_live_sync_fix';
 const LEGACY_SCREENER_KEYS = [
@@ -172,6 +173,7 @@ export default function App() {
     loadLocalSecurityVault(getActiveRepoScope(loadGitHubCloudConfig()))
   );
   const [isChangePassModalOpen, setIsChangePassModalOpen] = useState<boolean>(false);
+  const [isAuditTestLabOpen, setIsAuditTestLabOpen] = useState<boolean>(false);
 
   // Multifactor + 40% Rebalancing Buffer State
   const [simRegimeMode, setSimRegimeMode] = useState<SimRegimeMode>('LIVE');
@@ -1513,6 +1515,16 @@ export default function App() {
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
+                  onClick={() => setIsAuditTestLabOpen(true)}
+                  title="Buka Audit & Unit Test Lab (Verifikasi Guardrails P0, Valuasi P1 & Risiko P2)"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold text-[#0D5C46] bg-[#FFFFFF] border border-[#059669]/50 rounded-xs hover:bg-[#059669]/10 transition-colors cursor-pointer"
+                >
+                  <FlaskConical className="w-3.5 h-3.5 text-[#0D5C46]" />
+                  <span>Audit Test P0–P2</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={() => setIsChangePassModalOpen(true)}
                   title="Ubah Sandi Terminal & Enkripsi Ulang Portofolio (AES-256)"
                   className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs hover:border-[#F59E0B] transition-colors cursor-pointer"
@@ -1759,6 +1771,12 @@ export default function App() {
             confirmButtonColor: '#D97706'
           });
         }}
+      />
+
+      {/* P0-P2 Institutional Guardrails Unit Test Lab Modal */}
+      <QuantAuditTestLabModal
+        isOpen={isAuditTestLabOpen}
+        onClose={() => setIsAuditTestLabOpen(false)}
       />
 
       {/* Compact Sticky Bottom Footer Bar: Proportional 8px-12px Distance from Main Container */}

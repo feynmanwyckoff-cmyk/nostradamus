@@ -33,6 +33,7 @@ import {
 } from '../data/idxKseiHscRegistry';
 import { formatIdrPriceDisplay } from '../utils/numberFormat';
 import { MetricTooltip } from './MetricTooltip';
+import { RawDataAuditStrip } from './RawDataAuditStrip';
 import {
   X,
   ShieldAlert,
@@ -1046,6 +1047,22 @@ export function EmitenFundamentalInspectorModal({
                   >
                     {joeliardiEval.convictionGrade} · SKOR {joeliardiEval.totalConvictionScore}/100
                   </span>
+                  {joeliardiEval.sanityReport && (
+                    <span
+                      className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-xs border ${
+                        joeliardiEval.sanityReport.status === 'PASS'
+                          ? 'bg-emerald-50 text-emerald-900 border-emerald-300'
+                          : joeliardiEval.sanityReport.status === 'WARN'
+                          ? 'bg-amber-50 text-amber-900 border-amber-300'
+                          : 'bg-rose-50 text-rose-900 border-rose-300'
+                      }`}
+                    >
+                      SANITY: {joeliardiEval.sanityReport.status}
+                      {joeliardiEval.sanityReport.keSafetyBufferBps > 0
+                        ? ` (+${joeliardiEval.sanityReport.keSafetyBufferBps}bps Ke)`
+                        : ''}
+                    </span>
+                  )}
                   {joeliardiEval.isCatalystActive && (
                     <span
                       title={
@@ -2814,15 +2831,15 @@ export function EmitenFundamentalInspectorModal({
                               </p>
                             </div>
 
-                            {/* Card 3: Batas Invalidation / Risiko */}
+                            {/* Card 3: Dual Stop Loss (ATR/Vol Stop + Tranche Fundamental Invalidation) */}
                             <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2 min-w-0 overflow-hidden">
                               <div className="space-y-2 min-w-0">
                                 <div className="flex items-center justify-between gap-1 border-b border-[#E4E2DD]/80 pb-1.5 min-w-0">
                                   <span className="text-[8.5px] tracking-tight font-bold uppercase text-[#9E2A2B] whitespace-nowrap truncate min-w-0">
-                                    3. Batas Invalidation
+                                    3. Dual Stop Loss (ATR/Vol &amp; Tranche)
                                   </span>
                                   <span className="px-1 py-0.5 text-[7.5px] tracking-tighter font-mono font-bold uppercase bg-[#E11D48]/15 text-[#9E2A2B] border border-[#E11D48]/40 rounded-xs whitespace-nowrap shrink-0">
-                                    STOP &lt; {extractedStop}
+                                    STOP &lt; Rp {formatIdrPriceDisplay(joeliardiEval.riskSizingResult?.stopLossPriceIDR ?? stopPriceIdr)}
                                   </span>
                                 </div>
 
@@ -2830,38 +2847,45 @@ export function EmitenFundamentalInspectorModal({
                                   <li className="flex items-start gap-1.5">
                                     <span className="text-[#9E2A2B] font-bold">▸</span>
                                     <span>
-                                      <strong className="text-[#9E2A2B]">Trigger Harga:</strong> Evaluasi/pangkas posisi bila harga tutup di bawah{' '}
-                                      <strong className="font-mono text-[#9E2A2B]">{extractedStop}</strong>.
+                                      <strong className="text-[#9E2A2B]">ATR/Vol Stop (12%–18%):</strong>{' '}
+                                      <strong className="font-mono text-[#9E2A2B]">
+                                        Rp {formatIdrPriceDisplay(joeliardiEval.riskSizingResult?.stopLossPriceIDR ?? stopPriceIdr)} (-{joeliardiEval.riskSizingResult?.stopLossPct ?? 12}%)
+                                      </strong>{' '}
+                                      (max[2.5×ATR20, 1.5×σ_monthly]).
                                     </span>
                                   </li>
                                   <li className="flex items-start gap-1.5">
                                     <span className="text-[#9E2A2B] font-bold">▸</span>
                                     <span>
-                                      <strong className="text-[#111315]">Trigger Moat &amp; Kas:</strong> Penurunan struktural{' '}
-                                      <strong className="font-mono">GP/A &lt; 10%</strong> atau konversi kas{' '}
-                                      <strong className="font-mono">OCF/NI &lt; 0,65x</strong>.
+                                      <strong className="text-[#111315]">Tranche &amp; Invalidation Stop:</strong>{' '}
+                                      T1 ({joeliardiEval.riskSizingResult?.tranche1AllocationPct ?? 3.5}%) · T2 ({joeliardiEval.riskSizingResult?.tranche2AllocationPct ?? 2.8}%) · Floor G-J Stop:{' '}
+                                      <strong className="font-mono text-[#9E2A2B]">
+                                        Rp {formatIdrPriceDisplay(joeliardiEval.grahamJoeliardiBenchmarkIdr ?? stopPriceIdr)}
+                                      </strong>
+                                      .
                                     </span>
                                   </li>
                                   <li className="flex items-start gap-1.5">
                                     <span className="text-[#9E2A2B] font-bold">▸</span>
                                     <span>
-                                      <strong className="text-[#111315]">Rotasi Kuantitatif:</strong> Emiten terlempar keluar dari zona{' '}
-                                      <strong className="font-mono">Top 40% Buffer</strong>.
+                                      <strong className="text-[#111315]">Trigger Moat &amp; Kas:</strong>{' '}
+                                      Cut jika <strong className="font-mono">GP/A &lt; 10%</strong> atau{' '}
+                                      <strong className="font-mono">OCF/NI &lt; 0,65x</strong> ({extractedStop}).
                                     </span>
                                   </li>
                                 </ul>
                               </div>
                             </div>
 
-                            {/* Card 4: Panduan Porsi Keranjang & Batas ADTV */}
+                            {/* Card 4: Volatility-Targeted Barbell Sizing & Batas ADTV */}
                             <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2 min-w-0 overflow-hidden">
                               <div className="space-y-2 min-w-0">
                                 <div className="flex items-center justify-between gap-1 border-b border-[#E4E2DD]/80 pb-1.5 min-w-0">
                                   <span className="text-[8.5px] tracking-tight font-bold uppercase text-[#0284C7] bb-cyan whitespace-nowrap truncate min-w-0">
-                                    4. Porsi 1/β &amp; ADTV
+                                    4. Vol-Targeted Barbell &amp; ADTV
                                   </span>
                                   <span className="px-1 py-0.5 text-[7.5px] tracking-tighter font-mono font-bold uppercase bg-[#0284C7]/15 text-[#0284C7] bb-cyan border border-[#0284C7]/40 rounded-xs whitespace-nowrap shrink-0">
-                                    1/β Cap ≤{betaCapPct.toFixed(1)}%
+                                    Max Cap ≤{betaCapPct.toFixed(1)}%
                                   </span>
                                 </div>
 
@@ -2871,7 +2895,7 @@ export function EmitenFundamentalInspectorModal({
                                     <strong className="text-[#111315] text-[9px] tracking-tight shrink-0">{basketLabel}</strong>
                                   </div>
                                   <div className="flex items-center justify-between gap-1 whitespace-nowrap">
-                                    <span className="text-neutral-500 text-[9px] shrink-0">Porsi Ideal:</span>
+                                    <span className="text-neutral-500 text-[9px] shrink-0">min(1/β,1/Vol,Reg):</span>
                                     <strong className="text-[#0284C7] bb-cyan text-[9px] tracking-tight shrink-0">
                                       {minAllocPct}% – {betaCapPct.toFixed(1)}% (1/β {betaProp.toFixed(2)}x)
                                     </strong>
@@ -3067,6 +3091,17 @@ export function EmitenFundamentalInspectorModal({
               })}
             </div>
           </div>
+
+          {/* Mandatory P2.4 Raw Data Audit Strip Footer */}
+          {joeliardiEval.rawTickerData && joeliardiEval.sanityReport && (
+            <RawDataAuditStrip
+              rawTickerData={joeliardiEval.rawTickerData}
+              sanityReport={joeliardiEval.sanityReport}
+              valuationResult={joeliardiEval.valuationResult}
+              tacticalOverlay={joeliardiEval.tacticalOverlay}
+              riskSizingResult={joeliardiEval.riskSizingResult}
+            />
+          )}
         </div>
       </div>
     </div>

@@ -5,6 +5,27 @@ import {
   ValuationModuleRoute,
   ValuationReport
 } from '../types/quant';
+import {
+  applyDispersionPenalty,
+  buildRawTickerDataFromStock,
+  buildTacticalOverlayFromStatArb,
+  calculateHistoricalEvEbitda5YAnchor,
+  calculateInvariantGrahamJoeliardiFloor,
+  calculateTwoStageCapexAggressorRI,
+  calculateVolatilityTargetedSizingAndStop,
+  validateFundamentalSanity
+} from './institutionalGuardrailsEngine';
+
+export {
+  applyDispersionPenalty,
+  buildRawTickerDataFromStock,
+  buildTacticalOverlayFromStatArb,
+  calculateHistoricalEvEbitda5YAnchor,
+  calculateInvariantGrahamJoeliardiFloor,
+  calculateTwoStageCapexAggressorRI,
+  calculateVolatilityTargetedSizingAndStop,
+  validateFundamentalSanity
+};
 
 export const CAPEX_ANOMALY_NOTIFICATION_TEXT =
   "⚠️ CAPEX ANOMALY DETECTED: Rasio belanja modal (Capex/D&A) melebihi batas normal (>3.0x). Sistem otomatis memindahkan emiten ini dari 'Pure Cyclical' ke modul 'Capex Aggressor' untuk memvaluasi proyeksi laba dari aset baru.";
@@ -739,17 +760,17 @@ export const ValuationEngine = {
     // =========================================================================
     // MODULE 1: THE STEADY COMPOUNDER MODULE (Financials, FMCG)
     // Trigger: Sector == Financials OR Consumer_Non_Cyclical
-    // Logic: Traditional approach using TTM/Sustainable EPS & ROE
-    // Anchor: Justified PBV = (ROE - g) / (Ke - g) -> Target Price = Justified PBV * Current BVPS
+    // P0.3 Guardrail: Strict TTM default basis (no linear 9M * 1.33x annualization in primary intrinsic value)
+    // Anchor: Justified PBV = (ROE_TTM - g) / (Ke - g) -> Target Price = Justified PBV * Current BVPS
     // =========================================================================
     if (route === 'STEADY_COMPOUNDER') {
       const effectiveRoe = Math.max(
         6.0,
-        Math.min(32.0, stock.sector === 'Financials' ? ttmRoePct * 0.65 + forwardRoePct * 0.35 : forwardRoePct)
+        Math.min(32.0, ttmRoePct)
       );
-      const g = Math.min(baseGrowthRatePct, dynamicCostOfEquityPct - 2.0);
+      const g = Math.min(6.0, Math.min(baseGrowthRatePct, dynamicCostOfEquityPct - 4.0));
       const rawJustifiedPbv =
-        (effectiveRoe - g) / Math.max(2.0, dynamicCostOfEquityPct - g);
+        (effectiveRoe - g) / Math.max(4.0, dynamicCostOfEquityPct - g);
 
       const moatMultiplier =
         KBMI4_AND_CONSUMER_MONOPOLY_TICKERS.has(clean)
@@ -776,11 +797,11 @@ export const ValuationEngine = {
       const impliedPbv = Number((price / Math.max(1, currentBvpsIdr)).toFixed(2));
       const pbvTargetPriceIdr = currentBvpsIdr * justifiedPbv;
 
-      // For Consumer Non-Cyclicals, blend Justified PBV with Cash-Adjusted Quality P/E
+      // For Consumer Non-Cyclicals, blend Justified PBV with TTM Cash-Adjusted Quality P/E
       if (stock.sector !== 'Financials') {
         const cashEpsIdr = Math.max(
           2,
-          Math.round(forwardEpsIdr * Math.max(0.82, Math.min(1.16, 0.86 + ocfToNetIncomeRatio * 0.14)))
+          Math.round(ttmEpsIdr * Math.max(0.82, Math.min(1.16, 0.86 + ocfToNetIncomeRatio * 0.14)))
         );
         const impliedQualityPe = Number((price / Math.max(1, cashEpsIdr)).toFixed(2));
         const fairQualityPe = Number(
@@ -805,16 +826,16 @@ export const ValuationEngine = {
           ...valuationReport,
           valuationReport,
           route: 'STEADY_COMPOUNDER',
-          moduleLabel: 'Steady Compounder (FMCG Quality P/E & Justified PBV)',
+          moduleLabel: 'Steady Compounder (TTM Quality P/E & Justified PBV)',
           sectorValuationArchetype: 'CONSUMER_HEALTH_QUALITY_PE',
           sectorPrimaryMetricShort: 'Quality P/E',
-          sectorPrimaryMetricLabel: 'Steady Compounder: Quality P/E & Justified PBV',
+          sectorPrimaryMetricLabel: 'Steady Compounder: TTM Quality P/E & Justified PBV',
           sectorPrimaryImpliedMultiple: impliedQualityPe,
           sectorPrimaryFairMultiple: fairQualityPe,
           sectorPrimaryPerShareIdr: cashEpsIdr,
-          sectorPrimaryPerShareLabel: 'Cash EPS',
+          sectorPrimaryPerShareLabel: 'TTM Cash EPS',
           sectorSpecificFairValueIdr: blendedCompounderPrice,
-          sectorAcademicRationale: `[Modul 1: Steady Compounder — FMCG] Menggunakan jangkar ROE berkelanjutan ${effectiveRoe.toFixed(1)}% (g ${g.toFixed(1)}%, Ke ${dynamicCostOfEquityPct.toFixed(2)}%) dengan Justified PBV ${justifiedPbv}x (Rp ${Math.round(pbvTargetPriceIdr).toLocaleString('id-ID')}) dan Quality P/E ${fairQualityPe}x atas Cash EPS Rp ${cashEpsIdr.toLocaleString('id-ID')}/shm (GP/A ${grossProfitabilityToAssets.toFixed(1)}%, OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x, ω=${rimPersistenceOmega.toFixed(2)}).`,
+          sectorAcademicRationale: `[Modul 1: Steady Compounder — FMCG (Basis TTM Default)] Menggunakan jangkar ROE TTM berkelanjutan ${effectiveRoe.toFixed(1)}% (g ${g.toFixed(1)}%, Ke ${dynamicCostOfEquityPct.toFixed(2)}%) dengan Justified PBV ${justifiedPbv}x (Rp ${Math.round(pbvTargetPriceIdr).toLocaleString('id-ID')}) dan Quality P/E ${fairQualityPe}x atas TTM Cash EPS Rp ${cashEpsIdr.toLocaleString('id-ID')}/shm (GP/A ${grossProfitabilityToAssets.toFixed(1)}%, OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x, ω=${rimPersistenceOmega.toFixed(2)}).`,
           cwipToAssetsRatio,
           capexToDaRatio,
           capexToRevenueRatio,
@@ -836,16 +857,16 @@ export const ValuationEngine = {
         ...valuationReport,
         valuationReport,
         route: 'STEADY_COMPOUNDER',
-        moduleLabel: 'Steady Compounder (Justified PBV Anchor)',
+        moduleLabel: 'Steady Compounder (TTM Justified PBV Anchor)',
         sectorValuationArchetype: 'FINANCIALS_JUSTIFIED_PBV',
         sectorPrimaryMetricShort: 'Justified PBV',
-        sectorPrimaryMetricLabel: 'Steady Compounder: Damodaran Justified PBV',
+        sectorPrimaryMetricLabel: 'Steady Compounder: Damodaran TTM Justified PBV',
         sectorPrimaryImpliedMultiple: impliedPbv,
         sectorPrimaryFairMultiple: justifiedPbv,
         sectorPrimaryPerShareIdr: currentBvpsIdr,
         sectorPrimaryPerShareLabel: 'BVPS Saat Ini',
         sectorSpecificFairValueIdr: targetPriceIdr,
-        sectorAcademicRationale: `[Modul 1: Steady Compounder — Financials] Jangkar Justified PBV = (ROE ${effectiveRoe.toFixed(1)}% − g ${g.toFixed(1)}%) ÷ (Ke ${dynamicCostOfEquityPct.toFixed(2)}% − g) menghasilkan PBV Wajar ${justifiedPbv}x (vs Implied ${impliedPbv}x) × BVPS Rp ${currentBvpsIdr.toLocaleString('id-ID')} = Rp ${targetPriceIdr.toLocaleString('id-ID')}. Excess Return ${roeSpreadPct >= 0 ? '+' : ''}${roeSpreadPct}% dengan persistensi moat ω=${rimPersistenceOmega.toFixed(2)} (${rimFadeYears}Y RIM Rp ${rimFairValueIdr.toLocaleString('id-ID')}).`,
+        sectorAcademicRationale: `[Modul 1: Steady Compounder — Financials (Basis TTM Default)] Jangkar Justified PBV = (ROE_TTM ${effectiveRoe.toFixed(1)}% − g ${g.toFixed(1)}%) ÷ (Ke ${dynamicCostOfEquityPct.toFixed(2)}% − g) menghasilkan PBV Wajar ${justifiedPbv}x (vs Implied ${impliedPbv}x) × BVPS Rp ${currentBvpsIdr.toLocaleString('id-ID')} = Rp ${targetPriceIdr.toLocaleString('id-ID')}. Excess Return ${roeSpreadPct >= 0 ? '+' : ''}${roeSpreadPct}% dengan persistensi moat ω=${rimPersistenceOmega.toFixed(2)} (${rimFadeYears}Y RIM Rp ${rimFairValueIdr.toLocaleString('id-ID')}).`,
         cwipToAssetsRatio,
         capexToDaRatio,
         capexToRevenueRatio,
@@ -860,56 +881,48 @@ export const ValuationEngine = {
     }
 
     // =========================================================================
-    // MODULE 2: THE CAPEX AGGRESSOR / STEP-FUNCTION GROWTH MODULE
+    // MODULE 2: THE CAPEX AGGRESSOR / 2-STAGE RESIDUAL INCOME MODULE (P1.1 REFACTORED)
     // Trigger: (Capex/D&A > 3.0 OR Capex/Revenue > 0.15) OR Healthcare / Infrastructure / Basic_Materials_Metals
-    // Logic: Bypass TTM. Market prices in new smelter/hospital/network capacity coming online.
-    // Approach: Blended Valuation (50% Residual Income Justified PBV + 50% Forward Earnings Power)
+    // P1.1 Architecture:
+    // - REMOVED permanent +2% Capex Premium in single-stage perpetuity (Ke - g_adj)
+    // - REPLACED with 2-Stage Residual Income Model (5-Year Explicit + Terminal Value):
+    //   * Expansion bonus gatekeeper: ROIC > Ke (or Incremental_ROIC > Ke)
+    //   * Stage 1 (Years 1-5): g_high = Math.min(baseG + 0.02, 0.12) ONLY IF ROIC > Ke
+    //   * Terminal Stage (Year 6+): g_terminal <= 0.06 AND minimum spread (Ke - g_terminal) >= 0.04
     // =========================================================================
     if (route === 'CAPEX_AGGRESSOR') {
-      // Conservative Forward EPS extrapolation when CWIP capacity ramps up
-      const cwipStepUpMultiplier =
-        cwipToAssetsRatio > 0.15
-          ? 1 + Math.min(0.28, (cwipToAssetsRatio - 0.10) * 0.95)
-          : 1.08;
-      const effectiveForwardEpsIdr = Math.max(
-        forwardEpsIdr,
-        Math.round(ttmEpsIdr * cwipStepUpMultiplier)
-      );
+      const estimatedRoicPct =
+        stock.roicTTMPct ??
+        Number(
+          Math.max(
+            4.5,
+            Math.min(30.0, (ttmRoePct / (1 + der * 0.55)) + (grossProfitabilityToAssets >= 18 ? 1.5 : 0))
+          ).toFixed(2)
+        );
+      const estimatedIncrementalRoicPct =
+        stock.incrementalRoicPct ??
+        Number(
+          (cwipToAssetsRatio >= 0.15 && ocfToNetIncomeRatio > 0.50
+            ? estimatedRoicPct * 1.10
+            : estimatedRoicPct
+          ).toFixed(2)
+        );
 
-      // Expected BVPS incorporating retained forward earnings
-      const expectedBvpsIdr = Math.max(
-        25,
-        Math.round(currentBvpsIdr + effectiveForwardEpsIdr * 0.55)
-      );
+      const twoStageRI = calculateTwoStageCapexAggressorRI({
+        bvps0: currentBvpsIdr,
+        roeTTM: ttmRoePct / 100,
+        roicTTM: estimatedRoicPct / 100,
+        incrementalRoic: estimatedIncrementalRoicPct / 100,
+        costOfEquityKe: dynamicCostOfEquityPct / 100,
+        baseGrowthRate: baseGrowthRatePct / 100,
+        persistenceOmega: rimPersistenceOmega,
+        qualityMultiplier: accrualQualityMultiplier * hscDiscountMultiplier,
+        tickRounder
+      });
 
-      // Normalized Forward ROE = Forward_EPS / Expected BVPS (capped strictly at max 28-30%)
-      const rawForwardRoe = (effectiveForwardEpsIdr / expectedBvpsIdr) * 100;
-      const normalizedForwardRoePct = Number(
-        Math.max(8.0, Math.min(29.5, Math.max(forwardRoePct, rawForwardRoe))).toFixed(2)
-      );
+      const leg1TwoStageRIPriceIdr = twoStageRI.intrinsicValuePerShareIDR;
 
-      // Adjusted Growth Rate: g_adj = base_g + 2.0% (Capex premium), bounded below Ke
-      const gAdjPct = Number(
-        Math.min(dynamicCostOfEquityPct - 1.8, baseGrowthRatePct + 2.0).toFixed(2)
-      );
-
-      // Leg 1 (Residual Income - 50%): Justified PBV = (Normalized Forward ROE - g_adj) / (Ke - g_adj)
-      const capexJustifiedPbv = Number(
-        Math.max(
-          0.75,
-          Math.min(
-            5.2,
-            ((normalizedForwardRoePct - gAdjPct) /
-              Math.max(1.8, dynamicCostOfEquityPct - gAdjPct)) *
-              accrualQualityMultiplier *
-              hscDiscountMultiplier
-          )
-        ).toFixed(2)
-      );
-      const leg1ResidualIncomePriceIdr = expectedBvpsIdr * capexJustifiedPbv;
-
-      // Leg 2 (Earnings Power - 50%): Target Price = Forward_EPS * Target_Sector_PE
-      // Metals/Smelters: 8x - 10x; Infrastructure/Towers: 9.5x - 12.5x; Healthcare: 14x - 18.5x
+      // Leg 2 (Normalized TTM Earnings Power - 50%): Uses TTM EPS basis (not aggressive linear annualization)
       const targetSectorPe = Number(
         (stock.sector === 'Healthcare'
           ? grossProfitabilityToAssets >= 20
@@ -925,47 +938,51 @@ export const ValuationEngine = {
         ).toFixed(2)
       );
       const leg2EarningsPowerPriceIdr =
-        effectiveForwardEpsIdr * targetSectorPe * hscDiscountMultiplier * catalystValuationMultiplier;
+        ttmEpsIdr * targetSectorPe * hscDiscountMultiplier * catalystValuationMultiplier;
 
-      // Blended 50% Residual Income + 50% Earnings Power
+      // Blended 50% 2-Stage Residual Income + 50% Normalized TTM Earnings Power
       const blendedCapexFairValueIdr = tickRounder(
-        Math.max(50, 0.50 * leg1ResidualIncomePriceIdr + 0.50 * leg2EarningsPowerPriceIdr)
+        Math.max(50, 0.50 * leg1TwoStageRIPriceIdr + 0.50 * leg2EarningsPowerPriceIdr)
       );
 
-      const impliedForwardPe = Number(
-        Math.max(2.0, Math.min(65.0, price / Math.max(1, effectiveForwardEpsIdr))).toFixed(2)
+      const impliedTtmPe = Number(
+        Math.max(2.0, Math.min(65.0, price / Math.max(1, ttmEpsIdr))).toFixed(2)
       );
+      const gTerminalPct = Number((twoStageRI.terminalGrowthRate * 100).toFixed(2));
+      const gStage1Pct = Number((twoStageRI.stage1GrowthRate * 100).toFixed(2));
+
+      // P1.2: Strictly pass TTM EPS & TTM ROE (never Forward Annualized EPS) to Graham-Joeliardi Floor
       const valuationReport = buildDefaultReport(
         blendedCapexFairValueIdr,
-        effectiveForwardEpsIdr,
-        gAdjPct,
-        normalizedForwardRoePct
+        ttmEpsIdr,
+        gTerminalPct,
+        ttmRoePct
       );
 
       return {
         ...valuationReport,
         valuationReport,
         route: 'CAPEX_AGGRESSOR',
-        moduleLabel: `Capex Aggressor / Step-Function Growth (Capex/D&A ${capexToDaRatio.toFixed(1)}x · CWIP ${(cwipToAssetsRatio * 100).toFixed(0)}%)`,
+        moduleLabel: `Capex Aggressor 2-Stage RI (Capex/D&A ${capexToDaRatio.toFixed(1)}x · CWIP ${(cwipToAssetsRatio * 100).toFixed(0)}% · ROIC ${estimatedRoicPct.toFixed(1)}%)`,
         sectorValuationArchetype: 'CAPEX_AGGRESSOR_BLENDED',
-        sectorPrimaryMetricShort: 'Fwd P/E + RIM',
-        sectorPrimaryMetricLabel: 'Capex Aggressor Blended (50% Fwd RIM + 50% Earnings Power)',
-        sectorPrimaryImpliedMultiple: impliedForwardPe,
+        sectorPrimaryMetricShort: '2-Stage RI + PE',
+        sectorPrimaryMetricLabel: 'Capex Aggressor Blended (50% 2-Stage RI + 50% TTM Earnings Power)',
+        sectorPrimaryImpliedMultiple: impliedTtmPe,
         sectorPrimaryFairMultiple: targetSectorPe,
-        sectorPrimaryPerShareIdr: effectiveForwardEpsIdr,
-        sectorPrimaryPerShareLabel: 'Forward EPS',
+        sectorPrimaryPerShareIdr: ttmEpsIdr,
+        sectorPrimaryPerShareLabel: 'EPS TTM',
         sectorSpecificFairValueIdr: blendedCapexFairValueIdr,
-        sectorAcademicRationale: `[Modul 2: Capex Aggressor / Step-Function Growth] Memotong bias TTM karena ekspansi aset produktif (Capex/D&A ${capexToDaRatio.toFixed(2)}x, CWIP/Assets ${(cwipToAssetsRatio * 100).toFixed(0)}%). Menggunakan Forward EPS Rp ${effectiveForwardEpsIdr.toLocaleString('id-ID')}/shm, Normalized Forward ROE ${normalizedForwardRoePct.toFixed(1)}% (dipagari ≤30%), dan g_adj ${gAdjPct.toFixed(2)}% (base_g + 2% Capex Premium). Menggabungkan 50% Leg 1 Residual Income (Justified PBV ${capexJustifiedPbv}x → Rp ${Math.round(leg1ResidualIncomePriceIdr).toLocaleString('id-ID')}) + 50% Leg 2 Earnings Power (Target PE ${targetSectorPe}x → Rp ${Math.round(leg2EarningsPowerPriceIdr).toLocaleString('id-ID')}) = Rp ${blendedCapexFairValueIdr.toLocaleString('id-ID')} [${contextualOcfPolicy.policyRuleLabel}].`,
+        sectorAcademicRationale: `[Modul 2: Capex Aggressor — 2-Stage Residual Income (P1.1 Refactored)] Mengeliminasi ledakan perpetuitas single-stage. Syarat ekspansi: ROIC ${estimatedRoicPct.toFixed(1)}% (Inc. ROIC ${estimatedIncrementalRoicPct.toFixed(1)}%) ${twoStageRI.isRoicAboveKe ? '>' : '≤'} Ke ${dynamicCostOfEquityPct.toFixed(2)}% (${twoStageRI.isRoicAboveKe ? 'Bonus Fase-1 Aktif' : 'Value-Destroying Guard: Tanpa Bonus'}). Fase 1 (Thn 1–5): g_high = ${gStage1Pct.toFixed(1)}% (≤12%). Fase Terminal (Thn 6+): g_terminal = ${gTerminalPct.toFixed(1)}% (≤6,0%) dengan spread (Ke − g_term) = ${(twoStageRI.terminalSpread * 100).toFixed(2)}% (≥4,0%). Menggabungkan 50% 2-Stage RI (Rp ${leg1TwoStageRIPriceIdr.toLocaleString('id-ID')}) + 50% TTM Earnings Power (PE ${targetSectorPe}x × EPS_TTM Rp ${ttmEpsIdr.toLocaleString('id-ID')} = Rp ${Math.round(leg2EarningsPowerPriceIdr).toLocaleString('id-ID')}) → Rp ${blendedCapexFairValueIdr.toLocaleString('id-ID')} [${contextualOcfPolicy.policyRuleLabel}].`,
         cwipToAssetsRatio,
         capexToDaRatio,
         capexToRevenueRatio,
         isCapexOverrideTriggered,
-        normalizedEps7YIdr: effectiveForwardEpsIdr,
-        normalizedRoePct: normalizedForwardRoePct,
+        normalizedEps7YIdr: ttmEpsIdr,
+        normalizedRoePct: ttmRoePct,
         isCyclicalStrongBuyZScore: false,
         isCyclicalDerPenalized: false,
-        basisEpsForBenchmarkIdr: effectiveForwardEpsIdr,
-        adjustedGrowthRatePct: gAdjPct
+        basisEpsForBenchmarkIdr: ttmEpsIdr,
+        adjustedGrowthRatePct: gTerminalPct
       };
     }
 
@@ -1084,28 +1101,22 @@ export interface DynamicEnsembleWeightingResult {
   effectiveModule: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical';
   ocfHealthyThreshold: number;
   ensembleAntiJunkMultiplier: number;
+  modelDispersion: number;
+  isDispersionPenalized: boolean;
 }
 
 /**
- * 4. DYNAMIC ENSEMBLE WEIGHTING MODULE (DynamicEnsembleWeighter)
- * Replaces static 45/35/20 weights with sector-aligned, confidence-triggered, outlier-penalized,
- * and Contextual Anti-Junk (OCF/NI) adjusted weights:
+ * 4. DYNAMIC ENSEMBLE WEIGHTING MODULE (DynamicEnsembleWeighter — P1.3 Refactored)
+ * Pure Intrinsic Valuation Engine (StatArb 100% removed to TacticalOverlay):
+ * - Combines 3 pure fundamental intrinsic methods:
+ *   1. Sector Primary / Normalized Earnings Power (`SECTOR_PRIMARY`)
+ *   2. 2-Stage / Multi-Stage Residual Income Model (`MULTI_STAGE_RIM`)
+ *   3. Historical 5Y EV/EBITDA Band Anchor (`HISTORICAL_EVEBITDA_5Y`)
  * - Sector Alignment:
- *   * Financials: 70% RIM / Justified PBV, 10% Sector/P/CF, 20% RelVal.
- *   * Properties & Pure Cyclicals: 80% PBV Replacement / Cyclical Normalized Book, 0% RIM (disabled), 20% RelVal (per user confirmation).
- *   * Healthcare & Consumer Non-Cyclicals: 55% Quality P/E & Cash Return, 30% RIM, 15% RelVal.
- *   * Capex Aggressors / Others: 45% Sector Blended, 35% RIM, 20% RelVal.
- * - Contextual Anti-Junk (OCF/NI) Penalty Adjustment:
- *   * Rule A (Strict): If `effective_module` === 'Compounder' OR 'Pure_Cyclical', maintain healthy OCF/NI threshold at > 0.8x to 1.0x.
- *     If they fail (<= 0.80x), apply the heavy valuation penalty (`ensembleAntiJunkMultiplier`) to the ensemble.
- *   * Rule B (Tolerant): If `effective_module` === 'Capex_Aggressor', lower healthy OCF/NI threshold to > 0.5x
- *     (zero penalty above 0.5x so heavy construction phases are not flagged as Junk).
- * - Data Confidence Trigger:
- *   * If OCF < 0 (ocfToNetIncomeRatio <= 0), force P/CF / Sector cashflow weight to 0%.
- *   * If RelVal Peer correlation (ρ) < 0.70, force RelVal weight to 0%.
- * - Outlier Penalty:
- *   * Calculate median of the 3 valuation outputs. If one model's output deviates by > 40% from the median,
- *     slash its weight by half (50%) and redistribute proportionally.
+ *   * Financials: 70% RIM / Justified PBV, 10% Sector/P/CF, 20% Hist PBV Band 5Y.
+ *   * Properties & Pure Cyclicals: 80% PBV Replacement / Cyclical Normalized Book, 0% RIM (disabled), 20% Hist EV/EBITDA 5Y.
+ *   * Healthcare & Consumer Non-Cyclicals: 50% Quality P/E & Cash Return, 30% 2-Stage RIM, 20% Hist EV/EBITDA Band 5Y.
+ *   * Capex Aggressors / Others: 45% 2-Stage RI + Earnings Power Blended, 35% Multi-Stage RIM, 20% Hist EV/EBITDA Band 5Y.
  */
 export const DynamicEnsembleWeighter = {
   computeWeights(params: {
@@ -1116,10 +1127,10 @@ export const DynamicEnsembleWeighter = {
     sectorPriceIdr: number;
     rimLabel: string;
     rimPriceIdr: number;
-    relValLabel: string;
+    relValLabel: string; // Kept param name for backward compatibility; represents 3rd Intrinsic Anchor (Hist EV/EBITDA 5Y)
     relValPriceIdr: number;
     ocfToNetIncomeRatio: number;
-    peerCorrelation: number;
+    peerCorrelation?: number;
     hscDiscountMultiplier?: number;
     tickRounder: (rawPrice: number) => number;
   }): DynamicEnsembleWeightingResult {
@@ -1134,7 +1145,6 @@ export const DynamicEnsembleWeighter = {
       relValLabel,
       relValPriceIdr,
       ocfToNetIncomeRatio,
-      peerCorrelation,
       hscDiscountMultiplier = 1.0,
       tickRounder
     } = params;
@@ -1154,47 +1164,47 @@ export const DynamicEnsembleWeighter = {
 
     const confidenceNotes: string[] = [];
 
-    // Step 1: Sector Alignment Base Weights
+    // Step 1: Sector Alignment Base Weights (100% Pure Intrinsic — Zero StatArb Weight)
     let wSector = 0.45;
     let wRim = 0.35;
-    let wRelVal = 0.20;
+    let wEvEbitda5Y = 0.20;
 
     if (sector === 'Financials') {
-      // Financials: RIM / BVPS anchor raised to 70%, P/CF reduced to 10%, RelVal 20%
       wSector = 0.10;
       wRim = 0.70;
-      wRelVal = 0.20;
-      confidenceNotes.push('Sektor Finansial: Bobot RIM/BVPS 70% · Sektor 10% · RelVal 20%');
+      wEvEbitda5Y = 0.20;
+      confidenceNotes.push('Sektor Finansial (Pure Intrinsic): Bobot RIM/BVPS 70% · Sektor 10% · Hist PBV Band 5Y 20%');
     } else if (sector === 'Properties & Real Estate' || route === 'PURE_CYCLICAL') {
-      // Confirmed User Decision: 80% PBV Replacement / Cyclical Normalized Book + 20% RelVal (0% RIM)
       wSector = 0.80;
       wRim = 0.00;
-      wRelVal = 0.20;
-      confidenceNotes.push('Sektor Siklikal/Properti: 80% PBV Replacement · 0% RIM (Dimatikan) · 20% RelVal');
+      wEvEbitda5Y = 0.20;
+      confidenceNotes.push('Sektor Siklikal/Properti (Pure Intrinsic): 80% Norm PBV · 0% RIM · 20% Hist EV/EBITDA 5Y');
     } else if (
       (sector === 'Healthcare' || sector === 'Consumer Non-Cyclicals') &&
       effectiveModule !== 'Capex_Aggressor'
     ) {
-      // Maximize Quality-Adjusted P/E & Cash Return for Steady Compounders
-      wSector = 0.55;
+      wSector = 0.50;
       wRim = 0.30;
-      wRelVal = 0.15;
-      confidenceNotes.push('Sektor Kesehatan/Konsumen: 55% Quality P/E & Cash Return · 30% RIM · 15% RelVal');
+      wEvEbitda5Y = 0.20;
+      confidenceNotes.push('Sektor Kesehatan/Konsumen (Pure Intrinsic): 50% TTM Quality P/E · 30% RIM · 20% Hist EV/EBITDA 5Y');
     } else {
-      confidenceNotes.push('Capex Aggressor / Step-Function: 45% Blended Sektor · 35% RIM · 20% RelVal');
+      wSector = 0.45;
+      wRim = 0.35;
+      wEvEbitda5Y = 0.20;
+      confidenceNotes.push('Capex Aggressor (Pure Intrinsic): 45% 2-Stage RI Blended · 35% RIM · 20% Hist EV/EBITDA Band 5Y');
     }
 
-    // Record Contextual Anti-Junk (OCF/NI) Rule A / Rule B status
+    confidenceNotes.push('P1.3 Guardrail: StatArb dikeluarkan 100% dari Ensemble Fair Value ke Tactical Overlay.');
     confidenceNotes.push(ocfPolicy.policyRuleLabel);
 
     const baseSectorWeight = wSector;
     const baseRimWeight = wRim;
-    const baseRelValWeight = wRelVal;
+    const baseEvEbitdaWeight = wEvEbitda5Y;
 
     // Step 2: Data Confidence Triggers
     let sectorDisabled = false;
     let rimDisabled = wRim === 0;
-    let relValDisabled = false;
+    const evEbitdaDisabled = false;
 
     if (ocfToNetIncomeRatio <= 0 && sector !== 'Properties & Real Estate' && route !== 'PURE_CYCLICAL') {
       wSector = 0;
@@ -1202,30 +1212,48 @@ export const DynamicEnsembleWeighter = {
       confidenceNotes.push('Trigger Data: OCF Negatif (OCF/NI ≤ 0) → Bobot P/CF dikunci ke 0%');
     }
 
-    if (peerCorrelation < 0.70) {
-      wRelVal = 0;
-      relValDisabled = true;
-      confidenceNotes.push(`Trigger Data: Korelasi Peer ρ=${peerCorrelation.toFixed(2)} < 0.70 → Bobot RelVal dikunci ke 0%`);
-    }
-
-    // Ensure at least one leg has positive weight if both triggers fired
-    if (wSector + wRim + wRelVal <= 0) {
+    if (wSector + wRim + wEvEbitda5Y <= 0) {
       wSector = 0.50;
       wRim = 0.50;
       rimDisabled = false;
     }
 
-    // Step 3: Outlier Penalty (> 40% deviation from median of the 3 valuation outputs)
-    const sortedPrices = [sectorPriceIdr, rimPriceIdr, relValPriceIdr].slice().sort((a, b) => a - b);
-    const medianPriceIdr = Math.max(50, sortedPrices[1]);
+    // Step 3: Outlier Penalty & Epistemic Model Dispersion ((maxVal - minVal) / medianVal)
+    const activeCandidatePrices = [
+      wSector > 0 ? sectorPriceIdr : null,
+      wRim > 0 ? rimPriceIdr : null,
+      wEvEbitda5Y > 0 ? relValPriceIdr : null
+    ].filter((v): v is number => typeof v === 'number' && v > 0);
+
+    const sortedPrices = (
+      activeCandidatePrices.length >= 2
+        ? activeCandidatePrices
+        : [sectorPriceIdr, rimPriceIdr, relValPriceIdr]
+    )
+      .slice()
+      .sort((a, b) => a - b);
+
+    const midIdx = Math.floor(sortedPrices.length / 2);
+    const medianPriceIdr = Math.max(
+      50,
+      sortedPrices.length % 2 === 1
+        ? sortedPrices[midIdx]
+        : Math.round((sortedPrices[midIdx - 1] + sortedPrices[midIdx]) / 2)
+    );
+
+    const minModelVal = sortedPrices[0] || medianPriceIdr;
+    const maxModelVal = sortedPrices[sortedPrices.length - 1] || medianPriceIdr;
+    const modelDispersion = Number(
+      ((maxModelVal - minModelVal) / Math.max(1, medianPriceIdr)).toFixed(4)
+    );
 
     const devSector = Math.abs(sectorPriceIdr - medianPriceIdr) / medianPriceIdr;
     const devRim = Math.abs(rimPriceIdr - medianPriceIdr) / medianPriceIdr;
-    const devRelVal = Math.abs(relValPriceIdr - medianPriceIdr) / medianPriceIdr;
+    const devEvEbitda = Math.abs(relValPriceIdr - medianPriceIdr) / medianPriceIdr;
 
     let sectorSlashed = false;
     let rimSlashed = false;
-    let relValSlashed = false;
+    let evEbitdaSlashed = false;
     const outlierNames: string[] = [];
 
     if (wSector > 0 && devSector > 0.40) {
@@ -1238,10 +1266,10 @@ export const DynamicEnsembleWeighter = {
       rimSlashed = true;
       outlierNames.push(`${rimLabel} (deviasi ${(devRim * 100).toFixed(0)}% > 40%)`);
     }
-    if (wRelVal > 0 && devRelVal > 0.40) {
-      wRelVal *= 0.5;
-      relValSlashed = true;
-      outlierNames.push(`${relValLabel} (deviasi ${(devRelVal * 100).toFixed(0)}% > 40%)`);
+    if (wEvEbitda5Y > 0 && devEvEbitda > 0.40) {
+      wEvEbitda5Y *= 0.5;
+      evEbitdaSlashed = true;
+      outlierNames.push(`${relValLabel} (deviasi ${(devEvEbitda * 100).toFixed(0)}% > 40%)`);
     }
 
     const outlierPenalizedLeg = outlierNames.length > 0 ? outlierNames.join(', ') : undefined;
@@ -1249,11 +1277,18 @@ export const DynamicEnsembleWeighter = {
       confidenceNotes.push(`Penalti Outlier (-50% Bobot): ${outlierPenalizedLeg}`);
     }
 
+    const isDispersionPenalized = modelDispersion > 0.40 || Boolean(outlierPenalizedLeg);
+    if (isDispersionPenalized) {
+      confidenceNotes.push(
+        `P2.3 Epistemic Uncertainty: Dispersi Model ${(modelDispersion * 100).toFixed(1)}% (> 40%) → Penalti Konviksi Aktif`
+      );
+    }
+
     // Step 4: Proportional Redistribution so active weights sum strictly to 1.00 (100%)
-    const rawSum = wSector + wRim + wRelVal || 1;
+    const rawSum = wSector + wRim + wEvEbitda5Y || 1;
     const normSector = Number((wSector / rawSum).toFixed(4));
     const normRim = Number((wRim / rawSum).toFixed(4));
-    const normRelVal = Number(Math.max(0, 1 - normSector - normRim).toFixed(4));
+    const normEvEbitda = Number(Math.max(0, 1 - normSector - normRim).toFixed(4));
 
     const legs: readonly [EnsembleValuationLeg, EnsembleValuationLeg, EnsembleValuationLeg] = [
       {
@@ -1275,13 +1310,13 @@ export const DynamicEnsembleWeighter = {
         isDisabledByConfidence: rimDisabled
       },
       {
-        id: 'STATARB_RELVAL',
+        id: 'HISTORICAL_EVEBITDA_5Y',
         label: relValLabel,
         priceIdr: relValPriceIdr,
-        weight: normRelVal,
-        baseWeight: baseRelValWeight,
-        isOutlierSlashed: relValSlashed,
-        isDisabledByConfidence: relValDisabled
+        weight: normEvEbitda,
+        baseWeight: baseEvEbitdaWeight,
+        isOutlierSlashed: evEbitdaSlashed,
+        isDisabledByConfidence: evEbitdaDisabled
       }
     ];
 
@@ -1317,7 +1352,9 @@ export const DynamicEnsembleWeighter = {
       confidenceNotes,
       effectiveModule,
       ocfHealthyThreshold: ocfPolicy.ocfHealthyThreshold,
-      ensembleAntiJunkMultiplier
+      ensembleAntiJunkMultiplier,
+      modelDispersion,
+      isDispersionPenalized
     };
   }
 };
@@ -1325,67 +1362,79 @@ export const DynamicEnsembleWeighter = {
 export interface GrahamJoeliardiBenchmarkResult {
   grahamJoeliardiRawIdr: number;
   grahamJoeliardiBenchmarkIdr: number;
+  normalizedBasisEpsIdr: number;
+  normalizedBasisRoePct: number;
   isMoatHaircutApplied: boolean;
   moatHaircutMultiplier: number; // 0.75 if ROE < 15% or DER > 1x, else 1.00
   moatHaircutReason?: string;
+  isFloorClamped: boolean;
+  floorClampDiagnosticLog?: string;
   formulaAudit: string;
 }
 
 /**
- * 5. GRAHAM-JOELIARDI "MOAT" INTRINSIC VALUE BENCHMARK (Standalone Floor Value)
+ * 5. GRAHAM-JOELIARDI "MOAT" INTRINSIC VALUE BENCHMARK (Standalone Floor Value — P1.2 Refactored)
  * Standalone conservative sanity check (floor value) displayed on the UI,
  * NEVER averaged into the main Quantedge Ensemble target price:
- *   Intrinsic Value = (EPS * (8.5 + (2 * g)) * 4.4) / current_SBN_10Y_Yield
- * - Inputs: Normalized_EPS for Cyclicals, Forward_EPS for Capex Aggressors, or TTM_EPS for Steady Compounders.
- * - Moat Haircut Logic: If ROE < 15% OR DER > 1.0x, applies a 25% "Weak Moat Penalty" (multiply by 0.75).
+ *   Intrinsic Value = (Norm_EPS * (8.5 + (2 * g)) * 4.4) / current_SBN_10Y_Yield
+ * - P1.2 Guardrail 1: Strictly uses 3–5 Year Historical Normalized EPS & ROE (`Math.min(TTM, Avg3Y)`).
+ *   NEVER uses Forward Annualized EPS.
+ * - P1.2 Guardrail 2 (Hard Invariant): `standaloneFloor <= ensembleFairValue`.
+ *   If raw floor > ensembleFairValue, clamps to `Math.min(rawFloor, ensembleFairValue * 0.90)`
+ *   and logs the diagnostic reason.
  */
 export function calculateGrahamJoeliardiBenchmark(params: {
   basisEpsIdr: number;
+  epsAvg3YIdr?: number;
+  epsAvg5YIdr?: number;
   growthRatePct: number;
   sbn10YYieldPct: number;
   roePct: number;
+  roeAvg3YPct?: number;
+  roeAvg5YPct?: number;
   derRatio: number;
+  ensembleFairValueIdr?: number;
   tickRounder: (rawPrice: number) => number;
 }): GrahamJoeliardiBenchmarkResult {
-  const { basisEpsIdr, growthRatePct, sbn10YYieldPct, roePct, derRatio, tickRounder } = params;
+  const {
+    basisEpsIdr,
+    epsAvg3YIdr,
+    epsAvg5YIdr,
+    growthRatePct,
+    sbn10YYieldPct,
+    roePct,
+    roeAvg3YPct,
+    roeAvg5YPct,
+    derRatio,
+    ensembleFairValueIdr,
+    tickRounder
+  } = params;
 
-  const safeEps = Math.max(2, basisEpsIdr);
-  // Bound growth g in Graham formula to conservative [0%, 8.5%] so floor remains disciplined
-  const safeG = Math.max(0, Math.min(8.5, growthRatePct));
-  const safeSbn10Y = Math.max(5.0, Math.min(10.5, sbn10YYieldPct || 6.75));
-
-  // Classic Graham-Joeliardi Formula adapted to Indonesia SBN 10Y Yield
-  const rawFormulaValue = (safeEps * (8.5 + 2 * safeG) * 4.4) / safeSbn10Y;
-  const grahamJoeliardiRawIdr = tickRounder(Math.max(50, rawFormulaValue));
-
-  // Moat Haircut Logic: ROE < 15% OR DER > 1.0x -> 25% Weak Moat Penalty (x0.75)
-  const isLowRoe = roePct < 15.0;
-  const isHighDer = derRatio > 1.0;
-  const isMoatHaircutApplied = isLowRoe || isHighDer;
-  const moatHaircutMultiplier = isMoatHaircutApplied ? 0.75 : 1.0;
-
-  const grahamJoeliardiBenchmarkIdr = tickRounder(
-    Math.max(50, rawFormulaValue * moatHaircutMultiplier)
-  );
-
-  const haircutReasons: string[] = [];
-  if (isLowRoe) haircutReasons.push(`ROE ${roePct.toFixed(1)}% < 15%`);
-  if (isHighDer) haircutReasons.push(`DER ${derRatio.toFixed(2)}x > 1,0x`);
-
-  const moatHaircutReason = isMoatHaircutApplied
-    ? `Weak Moat Penalty -25% (×0,75 karena ${haircutReasons.join(' & ')})`
-    : 'Moat Kuat Terverifikasi (ROE ≥ 15% & DER ≤ 1,0x · Tanpa Potongan Haircut)';
-
-  const formulaAudit = `(EPS Rp ${safeEps.toLocaleString('id-ID')} × (8,5 + 2×${safeG.toFixed(1)}) × 4,4 ÷ SBN10Y ${safeSbn10Y.toFixed(2)}%)${
-    isMoatHaircutApplied ? ' × 0,75 (Weak Moat Haircut)' : ''
-  } = Rp ${grahamJoeliardiBenchmarkIdr.toLocaleString('id-ID')}`;
+  const invariantFloor = calculateInvariantGrahamJoeliardiFloor({
+    epsTTM: basisEpsIdr,
+    epsAvg3Y: epsAvg3YIdr,
+    epsAvg5Y: epsAvg5YIdr,
+    roeTTM: roePct,
+    roeAvg3Y: roeAvg3YPct,
+    roeAvg5Y: roeAvg5YPct,
+    debtToEquity: derRatio,
+    growthRate: growthRatePct,
+    spotRf10Y: sbn10YYieldPct,
+    ensembleFairValue: ensembleFairValueIdr ?? Number.MAX_SAFE_INTEGER,
+    tickRounder
+  });
 
   return {
-    grahamJoeliardiRawIdr,
-    grahamJoeliardiBenchmarkIdr,
-    isMoatHaircutApplied,
-    moatHaircutMultiplier,
-    moatHaircutReason,
-    formulaAudit
+    grahamJoeliardiRawIdr: invariantFloor.rawStandaloneFloor,
+    grahamJoeliardiBenchmarkIdr: invariantFloor.standaloneFloor,
+    normalizedBasisEpsIdr: invariantFloor.normalizedBasisEps,
+    normalizedBasisRoePct: invariantFloor.normalizedBasisRoePct,
+    isMoatHaircutApplied: invariantFloor.isMoatHaircutApplied,
+    moatHaircutMultiplier: invariantFloor.moatHaircutMultiplier,
+    moatHaircutReason: invariantFloor.moatHaircutReason,
+    isFloorClamped: invariantFloor.isFloorClamped,
+    floorClampDiagnosticLog: invariantFloor.floorClampDiagnosticLog,
+    formulaAudit: invariantFloor.formulaAudit
   };
 }
+

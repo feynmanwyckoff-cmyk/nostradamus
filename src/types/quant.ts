@@ -132,10 +132,28 @@ export interface StockMetrics {
   longTermDebtPrevYearIdr?: number;    // Prior year long-term debt (IDR) for Net Debt Paydown calculation
   longTermDebtCurrYearIdr?: number;    // Current year long-term debt (IDR) for Net Debt Paydown calculation
   netPayoutYieldPct?: number;          // Pure (Forward Dividend Yield + Buyback Yield) without Debt Paydown
+  // P0-P2 Data Integrity, TTM & Risk Guardrail Telemetry
+  sharesOutstanding?: number;          // Total shares outstanding (lembar penuh)
+  revenueTTMIdr?: number;              // TTM Revenue (Rupiah penuh)
+  netIncomeTTMIdr?: number;            // TTM Net Income Attributable (Rupiah penuh)
+  operatingProfitTTMIdr?: number;      // TTM Operating Profit / EBIT (Rupiah penuh)
+  operatingProfitGrowthYoYPct?: number;// YoY Operating Profit Growth (%) for Dual-Confirmation Catalyst
+  equityAttributableIdr?: number;      // Total Attributable Equity (Rupiah penuh)
+  capexTTMIdr?: number;                // TTM Capital Expenditure (Rupiah penuh)
+  roicTTMPct?: number;                 // Return on Invested Capital TTM (%)
+  incrementalRoicPct?: number;         // Incremental ROIC on new CapEx (%)
+  epsAvg3YIdr?: number;                // 3-Year Historical Normalized Average EPS (IDR)
+  epsAvg5YIdr?: number;                // 5-Year Historical Normalized Average EPS (IDR)
+  roeAvg3YPct?: number;                // 3-Year Historical Normalized Average ROE (%)
+  roeAvg5YPct?: number;                // 5-Year Historical Normalized Average ROE (%)
+  evToEbitda5YMean?: number;           // 5-Year Historical EV/EBITDA Band Mean (x)
+  atr20Idr?: number;                   // 20-Day Average True Range (IDR)
+  rfLastUpdated?: string;              // ISO Date string when 10Y SBN yield curve was last updated
 }
 
 export type RecommendationDecisionState =
   | 'AVOID_HSC_BLOCK'
+  | 'DATA_AUDIT_REQUIRED'
   | 'STRONG_BUY_DEFENSIVE_ANOMALY'
   | 'STRONG_BUY_CYCLICAL_ZSCORE'
   | 'BUY_ON_STRENGTH_CATALYST'
@@ -160,7 +178,7 @@ export interface ValuationReport {
 }
 
 export interface EnsembleValuationLeg {
-  id: 'SECTOR_PRIMARY' | 'MULTI_STAGE_RIM' | 'STATARB_RELVAL';
+  id: 'SECTOR_PRIMARY' | 'MULTI_STAGE_RIM' | 'HISTORICAL_EVEBITDA_5Y' | 'STATARB_RELVAL';
   label: string;
   priceIdr: number;
   weight: number;
@@ -369,9 +387,221 @@ export interface JoeliardiOosEvaluation {
   valuationSafetyScore: number;   // 0 - 100 (Pillar 3: Multi-Method Ensemble MoS, Sector Matrix & SBN Spot Ke)
   oosQuantRobustnessScore: number; // 0 - 100 (Pillar 4: Quantedge StatArb, OOS Cross-Sectional Factor & 1/Beta)
   totalConvictionScore: number;   // 0 - 100
-  convictionGrade: 'A+ (CORE CONVICTION)' | 'A (SOLID VALUE)' | 'B (WATCHLIST / HOLD)' | 'C (SPECULATIVE)' | 'D (AVOID / HSC)';
+  convictionGrade:
+    | 'A+ (CORE CONVICTION)'
+    | 'A (SOLID VALUE)'
+    | 'B (WATCHLIST / HOLD)'
+    | 'C (SPECULATIVE)'
+    | 'D (AVOID / HSC)'
+    | 'DATA_AUDIT_REQUIRED';
   keyStrengths: string[];
   keyRisks: string[];
+  // P0-P2 Data Integrity, 2-Stage Valuation, Tactical Overlay & Risk Sizing Architecture
+  rawTickerData?: RawTickerData;
+  sanityReport?: SanityReport;
+  valuationResult?: ValuationResult;
+  tacticalOverlay?: TacticalOverlay;
+  riskSizingResult?: RiskSizingResult;
+}
+
+/**
+ * ============================================================================
+ * P0–P2 INSTITUTIONAL QUANT GUARDRAILS & VALUATION ARCHITECTURE INTERFACES
+ * ============================================================================
+ */
+
+export type SanityCheckStatus = 'PASS' | 'WARN' | 'FAIL';
+
+export type SanityFlag =
+  | 'CRITICAL_DATA_MISMATCH'
+  | 'ADTV_UNIT_ANOMALY'
+  | 'STALE_RF_DATA'
+  | 'CATALYST_UNCONFIRMED_NON_OP'
+  | 'LINEAR_ANNUALIZATION_BLOCKED';
+
+export interface RawTickerData {
+  ticker: string;
+  name: string;
+  sector: string;
+  price: number;                  // Spot price in full IDR (Rp)
+  marketCap: number;              // Market Capitalization in full IDR (Rp)
+  sharesOutstanding: number;      // Total Shares Outstanding in full shares (lembar penuh)
+  epsTTM: number;                 // Trailing Twelve Months EPS in full IDR (Rp/lembar)
+  epsAvg3Y?: number;              // 3-Year Historical Normalized Average EPS (Rp/lembar)
+  epsAvg5Y?: number;              // 5-Year Historical Normalized Average EPS (Rp/lembar)
+  forwardAnnualizedEps?: number;  // Optional linear annualized EPS (blocked from primary intrinsic & floor)
+  bvps: number;                   // Book Value Per Share in full IDR (Rp/lembar)
+  netIncomeTTM: number;           // TTM Net Income Attributable to Parent in full IDR (Rp)
+  revenueTTM: number;             // TTM Revenue in full IDR (Rp)
+  operatingProfitTTM: number;     // TTM Operating Profit / EBIT in full IDR (Rp)
+  ebitdaTTM?: number;             // TTM EBITDA in full IDR (Rp)
+  equityAttributable: number;     // Total Equity Attributable to Parent in full IDR (Rp)
+  totalAssets?: number;           // Total Assets in full IDR (Rp)
+  totalDebt?: number;             // Total Interest-Bearing Debt in full IDR (Rp)
+  cashAndEquivalents?: number;    // Cash & Equivalents in full IDR (Rp)
+  capexTTM: number;               // TTM Capital Expenditure in full IDR (Rp)
+  daTTM?: number;                 // TTM Depreciation & Amortization in full IDR (Rp)
+  cwipToAssetsRatio?: number;     // Capital Work in Progress / Total Assets (0.0 - 1.0)
+  ocfTTM?: number;                // TTM Operating Cash Flow in full IDR (Rp)
+  roeTTM: number;                 // TTM Return on Equity in decimal or percentage (e.g. 0.185 or 18.5%)
+  roeAvg3Y?: number;              // 3-Year Historical Average ROE (decimal or %)
+  roeAvg5Y?: number;              // 5-Year Historical Average ROE (decimal or %)
+  roicTTM?: number;               // TTM Return on Invested Capital (decimal or %)
+  incrementalRoic?: number;       // Incremental ROIC on expansion CapEx (decimal or %)
+  debtToEquity: number;           // Debt-to-Equity Ratio (x)
+  // ADTV Unit Normalizer Inputs
+  adtv20dIDR?: number;            // Pre-computed or raw 20D ADTV value
+  adtv20dVolumeRaw?: number;      // Optional raw 20D average volume (in shares or lots)
+  adtvVolumeUnit?: 'SHARES' | 'LOT'; // If 'LOT', normalizer multiplies volume by 100 shares/lot
+  adtvCurrencyScale?: 'FULL_IDR' | 'THOUSAND_IDR' | 'MILLION_IDR' | 'BILLION_IDR';
+  // Dual-Confirmation Catalyst Inputs (YoY Period Growth)
+  netIncomeYoYPct: number;        // YoY Net Income growth (%) or decimal
+  operatingProfitYoYPct: number;  // YoY Operating Profit / EBIT growth (%) or decimal
+  hasActiveBuyback?: boolean;     // Verified OJK/RUPS active share buyback mandate
+  // Risk-Free Rate (SBN 10Y) Freshness Metadata
+  spotRf10Y: number;              // 10Y SBN Spot Yield (decimal e.g. 0.0675 or percentage 6.75)
+  rfLastUpdated: string;          // ISO Date string (YYYY-MM-DD or full ISO timestamp)
+  referenceNowDate?: string;      // Optional reference timestamp for deterministic testing
+  // Valuation & Risk Parameters
+  baseCostOfEquity?: number;      // Dynamic Cost of Equity Ke (decimal e.g. 0.115 or percentage 11.5)
+  baseGrowthRate?: number;        // Sustainable base growth rate g (decimal e.g. 0.055 or percentage 5.5)
+  evToEbitda5YMean?: number;      // 5-Year Historical EV/EBITDA Band Mean (x)
+  beta1Y: number;                 // 1Y Rolling Beta vs IHSG
+  realizedAnnualVol: number;      // Realized Annualized Volatility (decimal e.g. 0.38 or percentage 38.0)
+  atr20: number;                  // 20-Day Average True Range in IDR (Rp)
+  marketRegime?: MarketRegimeStatus;
+}
+
+export interface SanityReport {
+  status: SanityCheckStatus;      // 'PASS' | 'WARN' | 'FAIL'
+  flags: SanityFlag[];
+  reasons: string[];
+  // 1. Cross-Check Shares, EPS, BVPS
+  impliedShares: number;
+  sharesOutstanding: number;
+  sharesMismatchPct: number;      // |impliedShares - sharesOutstanding| / sharesOutstanding
+  impliedNetIncomeFromEps: number;
+  netIncomeMismatchPct: number;   // |(epsTTM * sharesOutstanding) - netIncomeTTM| / |netIncomeTTM|
+  impliedEquityFromBvps: number;
+  equityMismatchPct: number;      // |(bvps * sharesOutstanding) - equityAttributable| / |equityAttributable|
+  isGradeABlocked: boolean;       // True if CRITICAL_DATA_MISMATCH
+  maxAllowedStatus: 'CORE_CONVICTION_ELIGIBLE' | 'DOWNGRADED_STALE_RF' | 'DATA_AUDIT_REQUIRED';
+  // 2. Normalized ADTV 20D
+  normalizedAdtv20dShares: number;
+  normalizedAdtv20dIDR: number;   // Guaranteed full Rupiah & shares basis (Lot * 100 converted)
+  maxDailyAbsorption5PctIDR: number; // 5% of normalizedAdtv20dIDR
+  isAdtvAnomaly: boolean;
+  // 3. TTM Default Basis & Dual-Confirmation Catalyst
+  valuationBasis: 'TTM_DEFAULT';
+  sanitizedEpsTTM: number;
+  sanitizedRoeTTM: number;        // Decimal (e.g., 0.18)
+  isDualCatalystConfirmed: boolean; // True ONLY if NI YoY >= 15% AND Operating Profit YoY >= 10%
+  catalystConfirmationNote: string;
+  // 4. SBN 10Y Freshness Check
+  spotRf10Y: number;              // Decimal (e.g., 0.0675)
+  rfLastUpdated: string;
+  rfAgeDays: number;
+  isRfStale: boolean;             // True if rfAgeDays > 7
+  keSafetyBufferBps: number;      // +50 bps (0.0050) when stale, 0 when fresh
+  convictionBadgeDowngraded: boolean;
+}
+
+export interface TacticalOverlay {
+  pairTicker: string;
+  pairName?: string;
+  correlation?: number;
+  betaRatio?: number;
+  zScore: number;
+  spreadPct: number;              // 30D beta-adjusted spread (%)
+  spread1DPct?: number;
+  impliedPairTargetIDR?: number;
+  action:
+    | 'TACTICAL_ENTRY_FAVORABLE'
+    | 'ROTATE_TO_PAIR_WARNING'
+    | 'HOLD_COINTEGRATED_EQUILIBRIUM'
+    | 'FUNDAMENTAL_DIVERGENCE_WAIT';
+  actionLabel: string;
+  rationale: string;
+}
+
+export interface ValuationResult {
+  ticker: string;
+  appliedModule: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical';
+  valuationBasis: 'TTM_DEFAULT';
+  // Intrinsic Legs (StatArb is 100% excluded from ensembleFairValue)
+  twoStageRIValue: number;        // 2-Stage Residual Income Model (5Y Explicit + Terminal Value)
+  earningsPowerValue: number;     // Normalized TTM / Sector Earnings Power Value
+  evEbitda5YAnchorValue: number;  // Historical 5Y EV/EBITDA Band Anchor (or Normalized Book Anchor)
+  legWeights: {
+    twoStageRI: number;
+    earningsPower: number;
+    evEbitda5YAnchor: number;
+  };
+  ensembleFairValue: number;      // Pure intrinsic weighted fair value (IDR)
+  // Standalone Floor (Graham-Joeliardi) with Hard Invariant: standaloneFloor <= ensembleFairValue
+  rawStandaloneFloor: number;
+  standaloneFloor: number;        // Clamped: Math.min(rawStandaloneFloor, ensembleFairValue * 0.90) if raw > ensemble
+  normalizedBasisEps3Y5Y: number; // min(TTM, Avg3Y_5Y) — strictly forbids Forward Annualized EPS
+  normalizedBasisRoe3Y5Y: number; // min(TTM, Avg3Y_5Y)
+  isFloorClamped: boolean;
+  floorClampDiagnosticLog?: string;
+  // 2-Stage Residual Income Telemetry
+  effectiveCostOfEquity: number;  // Decimal (includes +50 bps buffer if STALE_RF_DATA)
+  roicTTM: number;                // Decimal
+  incrementalRoic: number;        // Decimal
+  isRoicAboveKe: boolean;         // Gatekeeper for Capex Aggressor Stage-1 growth bonus
+  stage1GrowthRate: number;       // g_high = Math.min(baseG + 0.02, 0.12) if ROIC > Ke
+  terminalGrowthRate: number;     // g_terminal <= 0.06 and (Ke - g_terminal) >= 0.04
+  terminalSpread: number;         // (Ke - g_terminal) >= 0.04
+  explicitStage1PvPerShare: number;
+  terminalValuePvPerShare: number;
+  // Model Dispersion & Epistemic Uncertainty
+  modelDispersion: number;        // (maxVal - minVal) / medianVal
+  medianModelValue: number;
+  isOutlierEnsembleActive: boolean;
+  isDispersionPenalized: boolean; // True if modelDispersion > 0.40 or isOutlierEnsembleActive
+  dispersionPenaltyPts: number;   // 10 - 15 points deducted from convictionScore
+  dispersionPenaltyReason?: string;
+  // Separated Tactical Overlay (StatArb)
+  tacticalOverlay: TacticalOverlay;
+}
+
+export interface RiskSizingResult {
+  // 1. Volatility-Targeted Barbell Sizing
+  beta1Y: number;
+  realizedAnnualVol: number;      // Decimal (e.g., 0.38 = 38%)
+  marketRegime: MarketRegimeStatus;
+  inverseBetaCapPct: number;      // 1/Beta Cap (%)
+  inverseVolatilityCapPct: number;// Volatility Scalar Cap (8%–12% if realizedAnnualVol > 35%)
+  regimeCapPct: number;           // Market Regime Cap (8%–12% if regime === 'VOLATIL')
+  finalMaxAllocationPct: number;  // Math.min(inverseBetaCapPct, inverseVolatilityCapPct, regimeCapPct)
+  isVolatilityScalarTriggered: boolean;
+  tranche1AllocationPct: number;  // Initial position size (further capped if dispersion penalty active)
+  tranche2AllocationPct: number;  // Follow-on tranche on confirmation
+  // 2. ATR / Volatility-Calibrated Stop Loss & Tranche Invalidation Mode
+  atr20IDR: number;
+  atrMultipleStopDistanceIDR: number; // 2.5 * ATR_20
+  volMonthlyStopDistanceIDR: number;  // price * 1.5 * (realizedAnnualVol / sqrt(12))
+  rawStopDistanceIDR: number;     // Math.max(2.5 * ATR_20, price * 1.5 * (realizedAnnualVol / sqrt(12)))
+  appliedStopDistanceIDR: number; // Clamped to [12%, 18%] of entry price
+  stopLossPct: number;            // Percentage below entry price (12.0% to 18.0%)
+  stopLossPriceIDR: number;       // Entry price - appliedStopDistanceIDR
+  stopLossMode: 'ATR_VOL_CALIBRATED' | 'DUAL_CORE_CONVICTION_TRANCHE_AND_ATR';
+  trancheExecutionGuide: string;
+  fundamentalInvalidationStopTriggers: string[];
+  // 3. Conviction Penalty & Final Grade Audit
+  rawConvictionScore: number;
+  dispersionPenaltyPts: number;
+  staleRfPenaltyPts: number;
+  adjustedConvictionScore: number;
+  finalConvictionGrade:
+    | 'A+ (CORE CONVICTION)'
+    | 'A (SOLID VALUE)'
+    | 'B (WATCHLIST / HOLD)'
+    | 'C (SPECULATIVE)'
+    | 'D (AVOID / HSC)'
+    | 'DATA_AUDIT_REQUIRED';
+  penaltyReasons: string[];
 }
 
 export interface StructuredAiConvictionSection {
