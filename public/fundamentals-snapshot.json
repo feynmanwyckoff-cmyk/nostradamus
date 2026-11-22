@@ -1,6 +1,6 @@
 {
   "provenanceMode": "AUTOMATED_FETCH",
-  "generatedAt": "2026-11-22T10:35:22.072Z",
+  "generatedAt": "2026-11-22T11:48:38.058Z",
   "macroBenchmarks": {
     "sbn1YPct": 6.95,
     "sbn5YPct": 7.6,
@@ -19,7 +19,7 @@
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
       "decumulationNote": "4Q standalone valid (rasio TTM/FY <= 1.65x).",
-      "fetchedAt": "2026-11-22T10:35:22.072Z",
+      "fetchedAt": "2026-11-22T11:48:38.058Z",
       "raw4QRevenueSum": 5655283981491,
       "latestFullYearRevenue": 5368322143294,
       "revenueTTM": 5655283981491,
@@ -38,12 +38,14 @@
       "adtvAsOfDate": "2026-11-20",
       "reportingCurrency": "IDR",
       "usdIdrRateApplied": null,
-      "ebitdaTTM": 2143038918224
+      "ebitdaTTM": 2143038918224,
+      "totalAssets": 9830980369330,
+      "debtToEquity": 0
     },
     "SILO": {
       "ticker": "SILO",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T10:35:22.072Z",
+      "fetchedAt": "2026-11-22T11:48:38.058Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -66,12 +68,14 @@
       "adtvAsOfDate": "2026-11-20",
       "reportingCurrency": "IDR",
       "usdIdrRateApplied": null,
-      "ebitdaTTM": 2972557000000
+      "ebitdaTTM": 2972557000000,
+      "totalAssets": 21910554000000,
+      "debtToEquity": 0.72
     },
     "ARNA": {
       "ticker": "ARNA",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T10:35:22.072Z",
+      "fetchedAt": "2026-11-22T11:48:38.058Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -94,12 +98,14 @@
       "adtvAsOfDate": "2026-11-20",
       "reportingCurrency": "IDR",
       "usdIdrRateApplied": null,
-      "ebitdaTTM": 625530961955
+      "ebitdaTTM": 625530961955,
+      "totalAssets": 2992235350985,
+      "debtToEquity": 0
     },
     "BBCA": {
       "ticker": "BBCA",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T10:35:22.072Z",
+      "fetchedAt": "2026-11-22T11:48:38.058Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -122,12 +128,14 @@
       "adtvAsOfDate": "2026-11-20",
       "reportingCurrency": "IDR",
       "usdIdrRateApplied": null,
-      "ebitdaTTM": null
+      "ebitdaTTM": null,
+      "totalAssets": 1641511008000000,
+      "debtToEquity": 0
     },
     "BBRI": {
       "ticker": "BBRI",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T10:35:22.072Z",
+      "fetchedAt": "2026-11-22T11:48:38.058Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -150,12 +158,14 @@
       "adtvAsOfDate": "2026-11-20",
       "reportingCurrency": "IDR",
       "usdIdrRateApplied": null,
-      "ebitdaTTM": null
+      "ebitdaTTM": null,
+      "totalAssets": 2337595443000000,
+      "debtToEquity": 0.6
     },
     "HEAL": {
       "ticker": "HEAL",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T10:35:22.072Z",
+      "fetchedAt": "2026-11-22T11:48:38.058Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -178,12 +188,14 @@
       "adtvAsOfDate": "2026-11-20",
       "reportingCurrency": "IDR",
       "usdIdrRateApplied": null,
-      "ebitdaTTM": 1206228000000
+      "ebitdaTTM": 1206228000000,
+      "totalAssets": 12283464000000,
+      "debtToEquity": 0.65
     },
     "ASII": {
       "ticker": "ASII",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T10:35:22.072Z",
+      "fetchedAt": "2026-11-22T11:48:38.058Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -206,12 +218,14 @@
       "adtvAsOfDate": "2026-11-20",
       "reportingCurrency": "IDR",
       "usdIdrRateApplied": null,
-      "ebitdaTTM": 46240000000000
+      "ebitdaTTM": 46240000000000,
+      "totalAssets": 525718000000000,
+      "debtToEquity": 0.49
     },
     "TLKM": {
       "ticker": "TLKM",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T10:35:22.072Z",
+      "fetchedAt": "2026-11-22T11:48:38.058Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -234,12 +248,14 @@
       "adtvAsOfDate": "2026-11-20",
       "reportingCurrency": "IDR",
       "usdIdrRateApplied": null,
-      "ebitdaTTM": 72807000000000
+      "ebitdaTTM": 72807000000000,
+      "totalAssets": 279814000000000,
+      "debtToEquity": 0.65
     },
     "BMRI": {
       "ticker": "BMRI",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T10:35:22.072Z",
+      "fetchedAt": "2026-11-22T11:48:38.058Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -262,7 +278,9 @@
       "adtvAsOfDate": "2026-11-20",
       "reportingCurrency": "IDR",
       "usdIdrRateApplied": null,
-      "ebitdaTTM": null
+      "ebitdaTTM": null,
+      "totalAssets": 2588298318000000,
+      "debtToEquity": 0.79
     },
     "DRMA": {
       "ticker": "DRMA",
@@ -368,6 +386,36 @@
       "capexTTM": 697199000000,
       "daTTM": 190798000000,
       "adtv20dIdr": 5452681350,
+      "adtvAsOfDate": "2026-11-20"
+    },
+    "MYOR": {
+      "ticker": "MYOR",
+      "provenanceMode": "AUTOMATED_FETCH",
+      "fetchedAt": "2026-11-22T11:48:38.058Z",
+      "asOfDate": "2026-09-30",
+      "fiscalPeriod": "TTM (2026-09-30)",
+      "reportingCurrency": "IDR",
+      "usdIdrRateApplied": null,
+      "decumulationMethod": "STANDALONE_4Q_SUM",
+      "decumulationNote": "4Q standalone valid (rasio TTM/FY <= 1.65x).",
+      "raw4QRevenueSum": 39656782010422,
+      "latestFullYearRevenue": 38681562261207,
+      "revenueTTM": 39656782010422,
+      "ebitTTM": 4244658450140,
+      "ebitdaTTM": 4964623786643,
+      "netIncomeTTM": 3442930882178,
+      "netIncomeYoYPct": 20.16,
+      "operatingProfitYoYPct": 12.33,
+      "equityAttributable": 18881631477020,
+      "totalAssets": 29181002840192,
+      "totalDebt": 4752618618187,
+      "debtToEquity": 0.25,
+      "cashAndEquivalents": 4259220141625,
+      "sharesOutstanding": 22026684225,
+      "ocfTTM": 6338466415408,
+      "capexTTM": 833056107854,
+      "daTTM": 162184451453,
+      "adtv20dIdr": 10035599850,
       "adtvAsOfDate": "2026-11-20"
     }
   },
