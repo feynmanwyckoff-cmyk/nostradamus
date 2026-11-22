@@ -94,6 +94,8 @@ export interface FundamentalsSnapshotTickerEntry {
   revenueTTM?: number | null;
   ebitTTM?: number | null;
   netIncomeTTM?: number | null;
+  netIncomeYoYPct?: number | null;
+  operatingProfitYoYPct?: number | null;
   equityAttributable?: number | null;
   totalDebt?: number | null;
   totalAssets?: number | null;
@@ -119,6 +121,7 @@ export interface FundamentalsSnapshotDocument {
     sbnAsOfDate?: string | null;
     provenanceMode?: SnapshotProvenanceMode;
     source?: DataSourceType;
+    sourceLabel?: string;
     note?: string;
   };
   tickers: Record<string, FundamentalsSnapshotTickerEntry>;

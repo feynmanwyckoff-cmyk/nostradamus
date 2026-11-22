@@ -1,13 +1,17 @@
-name: Update IDX Fundamentals & ADTV Snapshot
+name: Update IDX Fundamentals, 20D ADTV & SBN Yield Curve Snapshot
 
 on:
   schedule:
-    # Runs every Sunday at 23:00 UTC (Monday 06:00 WIB before IDX market open)
-    - cron: '0 23 * * 0'
+    # Runs weekdays at 23:00 UTC (06:00 WIB before IDX market open)
+    - cron: '0 23 * * 1-5'
   workflow_dispatch:
     inputs:
-      tickers:
-        description: 'Optional comma-separated IDX tickers to refresh (e.g. MIKA,BBCA,BMRI). Leave empty for full core universe.'
+      target_tickers:
+        description: 'Optional comma-separated IDX tickers (e.g. MIKA,ARNA,SILO,HEAL for fast 15s test). Leave empty for full 956+ JCI catalog (IDX100 priority first).'
+        required: false
+        default: ''
+      batch_limit:
+        description: 'Optional max number of tickers to process in this run (e.g. 100 for top IDX100 liquid issuers). Leave empty for all.'
         required: false
         default: ''
 
@@ -17,7 +21,7 @@ permissions:
 jobs:
   refresh-fundamentals:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -30,9 +34,10 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Fetch Yahoo Finance Fundamentals & 20D Volume ADTV
+      - name: Fetch SBN 1Y/5Y/10Y Curve, Yahoo Fundamentals & 20D Volume ADTV
         env:
-          TARGET_TICKERS: ${{ github.event.inputs.tickers }}
+          TARGET_TICKERS: ${{ github.event.inputs.target_tickers }}
+          BATCH_LIMIT: ${{ github.event.inputs.batch_limit }}
         run: |
           node scripts/fetch-fundamentals-snapshot.mjs
 
@@ -44,6 +49,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "No changes in public/fundamentals-snapshot.json"
           else
-            git commit -m "chore(data): automated IDX fundamentals & 20D ADTV snapshot refresh [skip ci]"
+            git commit -m "chore(data): automated IDX fundamentals, 20D ADTV & SBN curve refresh [skip ci]"
             git push
           fi

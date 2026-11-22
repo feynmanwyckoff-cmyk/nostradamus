@@ -1190,3 +1190,89 @@ export async function syncForkUpstreamAndRebuildPages(
   }
 }
 
+/**
+ * Triggers the `update-fundamentals.yml` GitHub Actions workflow via `workflow_dispatch`
+ * to pull server-side Yahoo Fundamentals, 20D ADTV, and SBN 1Y/5Y/10Y yields into `public/fundamentals-snapshot.json`.
+ */
+export async function triggerGitHubActionsFundamentalsSync(
+  config: GitHubCloudConfig,
+  options?: {
+    targetTickers?: string;
+    batchLimit?: string;
+  }
+): Promise<{
+  ok: boolean;
+  actionsUrl: string;
+  message: string;
+}> {
+  const rawOwner = config.owner.trim() || 'feynmanwyckoff-cmyk';
+  const rawRepo = config.repo.trim() || 'nostradamus';
+  const rawBranch = config.branch.trim() || 'main';
+  const pat = config.patToken.trim();
+  const actionsUrl = `https://github.com/${rawOwner}/${rawRepo}/actions`;
+
+  if (!pat) {
+    return {
+      ok: false,
+      actionsUrl,
+      message:
+        'GitHub PAT belum terbuka di Vault / Cloud Sync. Buka pengaturan Cloud Sync atau Encrypted Vault untuk mengaktifkan 1-Click GitHub Actions Sync.'
+    };
+  }
+
+  const owner = encodeURIComponent(rawOwner);
+  const repo = encodeURIComponent(rawRepo);
+  const dispatchUrl = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/update-fundamentals.yml/dispatches`;
+
+  const inputs: Record<string, string> = {};
+  if (options?.targetTickers !== undefined) {
+    inputs.target_tickers = options.targetTickers;
+  }
+  if (options?.batchLimit !== undefined) {
+    inputs.batch_limit = options.batchLimit;
+  }
+
+  try {
+    const res = await fetch(dispatchUrl, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${pat}`,
+        'Content-Type': 'application/json',
+        'X-GitHub-Api-Version': '2022-11-28'
+      },
+      body: JSON.stringify({
+        ref: rawBranch,
+        inputs
+      })
+    });
+
+    if (res.status === 204 || res.ok) {
+      return {
+        ok: true,
+        actionsUrl,
+        message: options?.targetTickers
+          ? `Workflow update-fundamentals.yml berhasil dipicu di ${rawOwner}/${rawRepo} (target: ${options.targetTickers}). Tunggu ~25 detik lalu klik Clear Cache & Hard Resync.`
+          : `Workflow update-fundamentals.yml berhasil dipicu di ${rawOwner}/${rawRepo} untuk katalog penuh & SBN 1Y/5Y/10Y.`
+      };
+    }
+
+    const errText = await res.text();
+    return {
+      ok: false,
+      actionsUrl,
+      message: `GitHub Actions Dispatch HTTP ${res.status}: ${errText.slice(0, 140)}`
+    };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      actionsUrl,
+      message:
+        err instanceof Error
+          ? err.message
+          : 'Gagal menghubungi endpoint GitHub Actions workflow_dispatch.'
+    };
+  }
+}
+
+

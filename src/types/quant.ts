@@ -163,7 +163,9 @@ export interface StockMetrics {
   roeAvg5YPct?: number;                // 5-Year Historical Normalized Average ROE (%)
   evToEbitda5YMean?: number;           // 5-Year Historical EV/EBITDA Band Mean (x)
   atr20Idr?: number;                   // 20-Day Average True Range (IDR)
-  rfLastUpdated?: string;              // ISO Date string when 10Y SBN yield curve was last updated
+  rfLastUpdated?: string | null;       // ISO Date string when 10Y SBN yield curve was last updated (null if proxy/unfetched)
+  convictionCappedByLineage?: boolean; // True when core financial statement variables come from HARDCODED_SEED
+  isSbnMacroProxy?: boolean;           // True when SBN 10Y curve comes from PROXY_FORMULA
 }
 
 export type RecommendationDecisionState =
@@ -430,7 +432,7 @@ export interface JoeliardiOosEvaluation {
  * ============================================================================
  */
 
-export type SanityCheckStatus = 'PASS' | 'WARN' | 'FAIL';
+export type SanityCheckStatus = 'PASS' | 'WARN' | 'SEED_WARN' | 'FAIL';
 
 export type SanityFlag =
   | 'CRITICAL_DATA_MISMATCH'
@@ -438,6 +440,8 @@ export type SanityFlag =
   | 'BALANCE_SHEET_ANOMALY'
   | 'ADTV_UNIT_ANOMALY'
   | 'STALE_RF_DATA'
+  | 'SBN_PROXY_OR_STALE'
+  | 'SEED_DATA_ACTIVE'
   | 'CATALYST_UNCONFIRMED_NON_OP'
   | 'LINEAR_ANNUALIZATION_BLOCKED';
 
@@ -528,7 +532,7 @@ export interface RawTickerData {
   latestFullYearRevenue?: number; // Prior Full-Year (12M) Revenue for Double-Counting YTD sum trap
   hasAcquisitionOrCorpAction?: boolean; // Explicit M&A / Spin-off / Consolidation flag
   isCyclicalSector?: boolean;     // True if Pure Cyclical commodity/energy issuer
-   quarterlyRawRows?: QuarterlyRawRow[]; // Optional raw quarterly YTD filings for decumulation
+  quarterlyRawRows?: QuarterlyRawRow[]; // Optional raw quarterly YTD filings for decumulation
   operatingProfitTTM: number;     // TTM Operating Profit / EBIT in full IDR (Rp)
   ebitdaTTM?: number;             // TTM EBITDA in full IDR (Rp)
   equityAttributable: number;     // Total Equity Attributable to Parent in full IDR (Rp)
@@ -554,9 +558,12 @@ export interface RawTickerData {
   netIncomeYoYPct: number;        // YoY Net Income growth (%) or decimal
   operatingProfitYoYPct: number;  // YoY Operating Profit / EBIT growth (%) or decimal
   hasActiveBuyback?: boolean;     // Verified OJK/RUPS active share buyback mandate
+  // Provenance & Seed Lineage Flags
+  convictionCappedByLineage?: boolean; // True when core fundamentals originate from HARDCODED_SEED
+  isSbnMacroProxy?: boolean;      // True when SBN curve uses PROXY_FORMULA rather than official spot feed
   // Risk-Free Rate (SBN 10Y) Freshness Metadata
   spotRf10Y: number;              // 10Y SBN Spot Yield (decimal e.g. 0.0675 or percentage 6.75)
-  rfLastUpdated: string;          // ISO Date string (YYYY-MM-DD or full ISO timestamp)
+  rfLastUpdated: string | null;   // ISO Date string (YYYY-MM-DD) or null when SBN is proxy/unfetched
   referenceNowDate?: string;      // Optional reference timestamp for deterministic testing
   // Valuation & Risk Parameters
   baseCostOfEquity?: number;      // Dynamic Cost of Equity Ke (decimal e.g. 0.115 or percentage 11.5)
@@ -569,7 +576,7 @@ export interface RawTickerData {
 }
 
 export interface SanityReport {
-  status: SanityCheckStatus;      // 'PASS' | 'WARN' | 'FAIL'
+  status: SanityCheckStatus;      // 'PASS' | 'WARN' | 'SEED_WARN' | 'FAIL'
   flags: SanityFlag[];
   reasons: string[];
   // 1. Cross-Check Shares, EPS, BVPS & Hotfix 1 YTD Double-Counting / Balance Sheet Guards
@@ -583,8 +590,12 @@ export interface SanityReport {
   revenueTtmToFullYearRatio?: number;
   isYtdCumulativeSuspect?: boolean;
   isBalanceSheetAnomaly?: boolean;
-  isGradeABlocked: boolean;       // True if CRITICAL_DATA_MISMATCH, YTD_CUMULATIVE_SUM_SUSPECT, or BALANCE_SHEET_ANOMALY
-  maxAllowedStatus: 'CORE_CONVICTION_ELIGIBLE' | 'DOWNGRADED_STALE_RF' | 'DATA_AUDIT_REQUIRED';
+  isGradeABlocked: boolean;       // True if CRITICAL_DATA_MISMATCH, YTD_CUMULATIVE_SUM_SUSPECT, BALANCE_SHEET_ANOMALY, or SEED_DATA_ACTIVE
+  maxAllowedStatus:
+    | 'CORE_CONVICTION_ELIGIBLE'
+    | 'DOWNGRADED_STALE_RF'
+    | 'WATCHLIST_SEED_CAPPED'
+    | 'DATA_AUDIT_REQUIRED';
   // 2. Normalized ADTV 20D
   normalizedAdtv20dShares: number;
   normalizedAdtv20dIDR: number;   // Guaranteed full Rupiah & shares basis (Lot * 100 converted)
@@ -594,14 +605,14 @@ export interface SanityReport {
   valuationBasis: 'TTM_DEFAULT';
   sanitizedEpsTTM: number;
   sanitizedRoeTTM: number;        // Decimal (e.g., 0.18)
-  isDualCatalystConfirmed: boolean; // True ONLY if NI YoY >= 15% AND Operating Profit YoY >= 10%
+  isDualCatalystConfirmed: boolean; // True ONLY if NI YoY >= 15% AND Operating Profit YoY >= 10% AND NOT HARDCODED_SEED
   catalystConfirmationNote: string;
   // 4. SBN 10Y Freshness Check
   spotRf10Y: number;              // Decimal (e.g., 0.0675)
-  rfLastUpdated: string;
-  rfAgeDays: number;
-  isRfStale: boolean;             // True if rfAgeDays > 7
-  keSafetyBufferBps: number;      // +50 bps (0.0050) when stale, 0 when fresh
+  rfLastUpdated: string | null;
+  rfAgeDays: number | null;
+  isRfStale: boolean;             // True if rfAgeDays > 7 or SBN is proxy/null
+  keSafetyBufferBps: number;      // +50 bps (0.0050) when stale/proxy, 0 when fresh
   convictionBadgeDowngraded: boolean;
 }
 

@@ -3643,11 +3643,12 @@ export function renderInspectorReportCanvas(
         sub: `5% Cap: ${fmtCompactIdr(sanity.maxDailyAbsorption5PctIDR)}`
       },
       {
-        label: `SBN_10Y [${dl?.sbnMacroStatus.isStaleOrProxy ? 'STALE/PROXY' : 'FRESH'}]`,
-        val: `${spotRf10YPct.toFixed(2)}% (${(dl?.sbnMacroStatus.asOfDate || raw.rfLastUpdated).slice(0, 10)})`,
-        sub: dl?.sbnMacroStatus.isStaleOrProxy
-          ? `${dl.sbnMacroStatus.source === 'PROXY_FORMULA' ? 'PROXY ^TNX' : `STALE ${dl.sbnMacroStatus.ageDays}hr`} ${sanity.keSafetyBufferBps > 0 ? `(+${sanity.keSafetyBufferBps}bps)` : ''}`
-          : `Usia: ${sanity.rfAgeDays}hr (Fresh)`
+        label: `SBN_10Y [${dl?.sbnMacroStatus.isStaleOrProxy || sanity.isRfStale ? 'STALE/PROXY' : 'FRESH'}]`,
+        val: `${spotRf10YPct.toFixed(2)}% (${(dl?.sbnMacroStatus.asOfDate || raw.rfLastUpdated)?.slice(0, 10) || 'PROXY'})`,
+        sub:
+          dl?.sbnMacroStatus.isStaleOrProxy || sanity.isRfStale
+            ? `${dl?.sbnMacroStatus.source === 'PROXY_FORMULA' || sanity.rfAgeDays === null ? 'PROXY ^TNX' : `STALE ${dl?.sbnMacroStatus.ageDays ?? sanity.rfAgeDays}hr`} ${sanity.keSafetyBufferBps > 0 ? `(+${sanity.keSafetyBufferBps}bps)` : ''}`
+            : `Usia: ${sanity.rfAgeDays ?? 0}hr (Fresh)`
       }
     ];
 

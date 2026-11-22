@@ -47,6 +47,10 @@ import {
   formatKseiFootnoteShortLabel
 } from '../data/idxKseiHscRegistry';
 import { formatIdrPriceDisplay } from '../utils/numberFormat';
+import {
+  loadGitHubCloudConfig,
+  triggerGitHubActionsFundamentalsSync
+} from '../utils/githubCloudSync';
 import { MetricTooltip } from './MetricTooltip';
 import { RawDataAuditStrip } from './RawDataAuditStrip';
 import {
@@ -73,7 +77,8 @@ import {
   Trash2,
   Terminal,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Zap
 } from 'lucide-react';
 
 interface EmitenFundamentalInspectorModalProps {
@@ -489,6 +494,7 @@ export function EmitenFundamentalInspectorModal({
   const [showCatalystCalibrator, setShowCatalystCalibrator] = useState<boolean>(false);
   const [showForensicLineageDrawer, setShowForensicLineageDrawer] = useState<boolean>(false);
   const [isFetchingLiveFundamentals, setIsFetchingLiveFundamentals] = useState<boolean>(false);
+  const [isTriggeringGhActionsSync, setIsTriggeringGhActionsSync] = useState<boolean>(false);
   const [splitRatioInput, setSplitRatioInput] = useState<string>('1');
   const [buybackNominalInput, setBuybackNominalInput] = useState<string>('0');
   const [quarterlyGrowthInput, setQuarterlyGrowthInput] = useState<string>('0');
@@ -524,11 +530,17 @@ export function EmitenFundamentalInspectorModal({
             kseiHscScorePenaltyPts: stock.kseiHscScorePenaltyPts
           }
         : stock;
-    const overlay = resolveTickerFundamentalOverlay(base.ticker, {
-      defaultRoe: base.trailingRoePct ?? base.roe,
-      defaultDer: base.debtToEquity,
-      defaultOpMargin: base.operatingMargin
-    });
+    const overlay = resolveTickerFundamentalOverlay(
+      base.ticker,
+      {
+        defaultRoe: base.trailingRoePct ?? base.roe,
+        defaultDer: base.debtToEquity,
+        defaultOpMargin: base.operatingMargin
+      },
+      base.adtv20dIdr,
+      base.adtvSource,
+      base.adtvAsOfDate || base.priceAsOfDate
+    );
     const mergedWithOverlay: StockMetrics = {
       ...base,
       ...(overlay.adtv20dIdr ? { adtv20dIdr: overlay.adtv20dIdr, adtvSource: overlay.adtvSource, adtvAsOfDate: overlay.adtvAsOfDate } : {}),
@@ -536,6 +548,8 @@ export function EmitenFundamentalInspectorModal({
       ...(overlay.revenueTTMIdr ? { revenueTTMIdr: overlay.revenueTTMIdr } : {}),
       ...(overlay.operatingProfitTTMIdr ? { operatingProfitTTMIdr: overlay.operatingProfitTTMIdr } : {}),
       ...(overlay.netIncomeTTMIdr ? { netIncomeTTMIdr: overlay.netIncomeTTMIdr } : {}),
+      ...(overlay.netIncomeYoYPct !== undefined ? { earningsGrowthYoYPct: overlay.netIncomeYoYPct } : {}),
+      ...(overlay.operatingProfitYoYPct !== undefined ? { operatingProfitGrowthYoYPct: overlay.operatingProfitYoYPct } : {}),
       ...(overlay.equityAttributableIdr ? { equityAttributableIdr: overlay.equityAttributableIdr } : {}),
       ...(overlay.totalAssetsIdr ? { totalAssetsIdr: overlay.totalAssetsIdr } : {}),
       ...(overlay.totalDebtIdr !== undefined ? { totalDebtIdr: overlay.totalDebtIdr } : {}),
@@ -921,6 +935,33 @@ export function EmitenFundamentalInspectorModal({
         showConfirmButton: false,
         timer: 2600
       });
+    }
+  };
+
+  const handleTriggerGitHubActionsFundamentalsSync = async () => {
+    if (!activeStock) return;
+    setIsTriggeringGhActionsSync(true);
+    try {
+      const ghConfig = loadGitHubCloudConfig();
+      const priorityBatch = Array.from(
+        new Set([activeStock.ticker, 'MIKA', 'ARNA', 'SILO', 'HEAL', 'BBCA', 'BBRI', 'BMRI', 'TLKM', 'ASII'])
+      ).join(',');
+      const res = await triggerGitHubActionsFundamentalsSync(ghConfig, {
+        targetTickers: priorityBatch
+      });
+      void Swal.fire({
+        toast: true,
+        position: 'top-end',
+        icon: res.ok ? 'success' : 'warning',
+        title: res.ok
+          ? `GitHub Actions Sync Dipicu (${activeStock.ticker} + Prioritas)`
+          : 'GitHub PAT Belum Aktif di Vault',
+        text: res.message,
+        showConfirmButton: false,
+        timer: 4200
+      });
+    } finally {
+      setIsTriggeringGhActionsSync(false);
     }
   };
 
@@ -1894,6 +1935,20 @@ export function EmitenFundamentalInspectorModal({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={handleTriggerGitHubActionsFundamentalsSync}
+                    disabled={isTriggeringGhActionsSync}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[10.5px] font-bold text-indigo-200 bg-indigo-950/90 hover:bg-indigo-900 border border-indigo-400/50 rounded-xs cursor-pointer disabled:opacity-50"
+                    title="Trigger workflow_dispatch update-fundamentals.yml di GitHub Actions (Server-Side Fundamentals + ADTV 20D + SBN 1Y/5Y/10Y)"
+                  >
+                    <Zap
+                      className={`w-3 h-3 text-amber-400 ${
+                        isTriggeringGhActionsSync ? 'animate-pulse' : ''
+                      }`}
+                    />
+                    <span>⚡ Run GitHub Actions Sync</span>
+                  </button>
                   <button
                     type="button"
                     onClick={handleTryLiveYahooFundamentals}

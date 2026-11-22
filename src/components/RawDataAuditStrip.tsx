@@ -123,7 +123,9 @@ export const RawDataAuditStrip: React.FC<RawDataAuditStripProps> = ({
       ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
       : sanityReport.status === 'WARN'
       ? 'bg-amber-500/15 text-amber-300 border-amber-500/40'
-      : 'bg-rose-500/15 text-rose-300 border-rose-500/40';
+      : sanityReport.status === 'SEED_WARN'
+      ? 'bg-rose-500/15 text-rose-300 border-rose-500/50'
+      : 'bg-rose-600/20 text-rose-200 border-rose-500/60';
 
   const dotColor =
     sanityReport.status === 'PASS'
@@ -327,18 +329,23 @@ export const RawDataAuditStrip: React.FC<RawDataAuditStripProps> = ({
           </div>
           <div className="mt-0.5 font-mono text-xs font-bold text-slate-100 tabular-nums">
             {spotRf10YPct.toFixed(2)}% (
-            {(dataLineage?.sbnMacroStatus.asOfDate || rawTickerData.rfLastUpdated).slice(0, 10)})
+            {(dataLineage?.sbnMacroStatus.asOfDate || rawTickerData.rfLastUpdated)?.slice(0, 10) ||
+              'PROXY / N/A'}
+            )
           </div>
           <div
             className={`font-mono text-[9px] tabular-nums ${
-              dataLineage?.sbnMacroStatus.isStaleOrProxy ? 'text-amber-300 font-bold' : 'text-slate-400'
+              dataLineage?.sbnMacroStatus.isStaleOrProxy || sanityReport.isRfStale
+                ? 'text-amber-300 font-bold'
+                : 'text-slate-400'
             }`}
           >
-            {dataLineage?.sbnMacroStatus.isStaleOrProxy
-              ? dataLineage.sbnMacroStatus.source === 'PROXY_FORMULA'
+            {dataLineage?.sbnMacroStatus.isStaleOrProxy || sanityReport.isRfStale
+              ? dataLineage?.sbnMacroStatus.source === 'PROXY_FORMULA' ||
+                sanityReport.rfAgeDays === null
                 ? 'Proksi ^TNX (Override SBN)'
-                : `Stale ${dataLineage.sbnMacroStatus.ageDays} hr`
-              : `Usia: ${sanityReport.rfAgeDays} hr (Fresh)`}
+                : `Stale ${dataLineage?.sbnMacroStatus.ageDays ?? sanityReport.rfAgeDays} hr`
+              : `Usia: ${sanityReport.rfAgeDays ?? 0} hr (Fresh)`}
           </div>
         </div>
       </div>

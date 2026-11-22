@@ -516,14 +516,27 @@ export function validateFundamentalSanity(raw: RawTickerData): SanityReport {
 
   const niYoYDecimal = toDecimalRate(raw.netIncomeYoYPct, 0);
   const opProfitYoYDecimal = toDecimalRate(raw.operatingProfitYoYPct, 0);
+  const isSeedCapped = raw.convictionCappedByLineage === true;
+
+  if (isSeedCapped && !flags.includes('SEED_DATA_ACTIVE')) {
+    flags.push('SEED_DATA_ACTIVE');
+    reasons.push(
+      `[SEED_DATA_ACTIVE] Variabel laporan keuangan inti masih bersumber dari HARDCODED_SEED. Status dikunci ke SEED_WARN, katalis pertumbuhan dinonaktifkan, dan peringkat dibatasi maksimal Grade C (WATCHLIST_SEED_CAPPED).`
+    );
+  }
 
   // Dual Confirmation Rule: NI YoY >= 15% MUST be confirmed by Operating Profit YoY >= 10%
+  // FIX 4: Lock catalyst when core fundamentals originate from HARDCODED_SEED
   const isNiSurge = niYoYDecimal >= 0.15;
   const isOpProfitConfirmed = opProfitYoYDecimal >= 0.10;
-  const isDualCatalystConfirmed = isNiSurge && isOpProfitConfirmed;
+  let isDualCatalystConfirmed = !isSeedCapped && isNiSurge && isOpProfitConfirmed;
 
   let catalystConfirmationNote = '';
-  if (isDualCatalystConfirmed) {
+  if (isSeedCapped) {
+    isDualCatalystConfirmed = false;
+    catalystConfirmationNote =
+      'CATALYST BLOCKED: Pertumbuhan laba/EBIT berasal dari HARDCODED_SEED, bukan laporan keuangan aktual.';
+  } else if (isDualCatalystConfirmed) {
     catalystConfirmationNote = `CATALYST ACTIVE (Dual-Confirmed): Laba Bersih YoY +${(niYoYDecimal * 100).toFixed(1)}% (≥15%) terkonfirmasi searah oleh Laba Usaha (Operating Profit) YoY +${(opProfitYoYDecimal * 100).toFixed(1)}% (≥10%).`;
   } else if (isNiSurge && !isOpProfitConfirmed) {
     flags.push('CATALYST_UNCONFIRMED_NON_OP');
@@ -538,28 +551,41 @@ export function validateFundamentalSanity(raw: RawTickerData): SanityReport {
   // -------------------------------------------------------------------------
   const spotRf10Y = toDecimalRate(raw.spotRf10Y, 0.0675);
   const nowMs = raw.referenceNowDate ? Date.parse(raw.referenceNowDate) : Date.now();
-  const rfUpdatedMs = raw.rfLastUpdated ? Date.parse(raw.rfLastUpdated) : NaN;
+  const isSbnProxyOrMissingDate = raw.isSbnMacroProxy === true || !raw.rfLastUpdated;
+  const rfUpdatedMs =
+    !isSbnProxyOrMissingDate && raw.rfLastUpdated ? Date.parse(raw.rfLastUpdated) : NaN;
 
-  let rfAgeDays = 0;
+  let rfAgeDays: number | null = null;
   let isRfStale = false;
-  if (Number.isFinite(rfUpdatedMs) && Number.isFinite(nowMs)) {
+  if (!isSbnProxyOrMissingDate && Number.isFinite(rfUpdatedMs) && Number.isFinite(nowMs)) {
     rfAgeDays = Math.max(0, Math.floor((nowMs - rfUpdatedMs) / (1000 * 60 * 60 * 24)));
     if (rfAgeDays > 7) {
       isRfStale = true;
     }
   } else {
-    rfAgeDays = 999;
+    rfAgeDays = null;
     isRfStale = true;
   }
 
-  const keSafetyBufferBps = isRfStale ? 50 : 0; // +50 bps (+0.50%) automatic Ke buffer when SBN curve > 7 days old
+  const keSafetyBufferBps = isRfStale ? 50 : 0; // +50 bps (+0.50%) automatic Ke buffer when SBN curve is proxy or > 7 days old
   const convictionBadgeDowngraded = isRfStale;
 
   if (isRfStale) {
-    flags.push('STALE_RF_DATA');
-    reasons.push(
-      `[STALE_RF_DATA] Kurva SBN 10Y (${(spotRf10Y * 100).toFixed(2)}%, tanggal: ${raw.rfLastUpdated || 'N/A'}) berusia ${rfAgeDays} hari (> batas 7 hari). Ditambahkan safety buffer otomatis +50 bps pada Cost of Equity (Ke) dan penurunan badge keyakinan.`
-    );
+    if (!flags.includes('SBN_PROXY_OR_STALE')) {
+      flags.push('SBN_PROXY_OR_STALE');
+    }
+    if (!flags.includes('STALE_RF_DATA')) {
+      flags.push('STALE_RF_DATA');
+    }
+    if (isSbnProxyOrMissingDate) {
+      reasons.push(
+        `[SBN_PROXY_OR_STALE] Kurva SBN 10Y (${(spotRf10Y * 100).toFixed(2)}%) berasal dari formula proksi atau belum memiliki tanggal kutipan aktual (rfLastUpdated: null). Ditambahkan safety buffer otomatis +50 bps pada Cost of Equity (Ke) hingga SBN aktual dimuat via AUTOMATED_FETCH atau USER_OVERRIDE.`
+      );
+    } else {
+      reasons.push(
+        `[STALE_RF_DATA] Kurva SBN 10Y (${(spotRf10Y * 100).toFixed(2)}%, tanggal: ${raw.rfLastUpdated}) berusia ${rfAgeDays} hari (> batas 7 hari). Ditambahkan safety buffer otomatis +50 bps pada Cost of Equity (Ke) dan penurunan badge keyakinan.`
+      );
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -570,13 +596,17 @@ export function validateFundamentalSanity(raw: RawTickerData): SanityReport {
 
   const status: SanityCheckStatus = hasHardIntegrityFailure
     ? 'FAIL'
+    : isSeedCapped
+    ? 'SEED_WARN'
     : isAdtvAnomaly || isRfStale || flags.includes('CATALYST_UNCONFIRMED_NON_OP')
     ? 'WARN'
     : 'PASS';
 
-  const isGradeABlocked = hasHardIntegrityFailure;
-  const maxAllowedStatus: SanityReport['maxAllowedStatus'] = isGradeABlocked
+  const isGradeABlocked = hasHardIntegrityFailure || isSeedCapped;
+  const maxAllowedStatus: SanityReport['maxAllowedStatus'] = hasHardIntegrityFailure
     ? 'DATA_AUDIT_REQUIRED'
+    : isSeedCapped
+    ? 'WATCHLIST_SEED_CAPPED'
     : isRfStale
     ? 'DOWNGRADED_STALE_RF'
     : 'CORE_CONVICTION_ELIGIBLE';
@@ -607,7 +637,7 @@ export function validateFundamentalSanity(raw: RawTickerData): SanityReport {
     isDualCatalystConfirmed,
     catalystConfirmationNote,
     spotRf10Y: Number(spotRf10Y.toFixed(4)),
-    rfLastUpdated: raw.rfLastUpdated || 'N/A',
+    rfLastUpdated: isSbnProxyOrMissingDate ? null : raw.rfLastUpdated,
     rfAgeDays,
     isRfStale,
     keSafetyBufferBps,
@@ -1271,8 +1301,12 @@ export function calculateVolatilityTargetedSizingAndStop(
 
   const staleRfPenaltyPts = input.sanityReport.isRfStale ? 5 : 0;
   if (input.sanityReport.isRfStale) {
+    const rfDesc =
+      input.sanityReport.rfAgeDays !== null
+        ? `berusia ${input.sanityReport.rfAgeDays} hari (>7 hari)`
+        : 'berstatus proksi / belum tersinkronisasi (rfLastUpdated: null)';
     penaltyReasons.push(
-      `[STALE_RF_DATA] Kurva SBN 10Y berusia ${input.sanityReport.rfAgeDays} hari (>7 hari): Cost of Equity (Ke) ditambah +50 bps dan skor keyakinan dikurangi -${staleRfPenaltyPts} poin (maksimal Grade A, blokir A+).`
+      `[SBN_PROXY_OR_STALE] Kurva SBN 10Y ${rfDesc}: Cost of Equity (Ke) ditambah +50 bps dan skor keyakinan dikurangi -${staleRfPenaltyPts} poin (maksimal Grade A, blokir A+).`
     );
   }
 
@@ -1292,6 +1326,11 @@ export function calculateVolatilityTargetedSizingAndStop(
         `[CRITICAL_DATA_MISMATCH] Rekonsiliasi Shares/EPS/BVPS gagal: Peringkat Grade A / Core Conviction diblokir otomatis → Status dikunci ke DATA_AUDIT_REQUIRED.`
       );
     }
+    if (input.sanityReport.flags.includes('SEED_DATA_ACTIVE')) {
+      penaltyReasons.push(
+        `[SEED_DATA_ACTIVE] Variabel fundamental inti masih berasal dari HARDCODED_SEED: Peringkat Grade A/B diblokir otomatis → Maksimal Grade C (WATCHLIST_SEED_CAPPED).`
+      );
+    }
   }
 
   const adjustedConvictionScore = Math.max(
@@ -1305,9 +1344,12 @@ export function calculateVolatilityTargetedSizingAndStop(
   let finalConvictionGrade: RiskSizingResult['finalConvictionGrade'];
   if (input.isHscFlagged) {
     finalConvictionGrade = 'D (AVOID / HSC)';
-  } else if (input.sanityReport.isGradeABlocked) {
+  } else if (input.sanityReport.maxAllowedStatus === 'DATA_AUDIT_REQUIRED') {
     // P0.1 & Hotfix 1 Guardrail: Block Grade A / Core Conviction if CRITICAL_DATA_MISMATCH or YTD_CUMULATIVE_SUM_SUSPECT
     finalConvictionGrade = 'DATA_AUDIT_REQUIRED';
+  } else if (input.sanityReport.maxAllowedStatus === 'WATCHLIST_SEED_CAPPED') {
+    // FIX 4 Guardrail: Hardcoded seed fundamentals cap conviction at Grade C
+    finalConvictionGrade = 'C (SPECULATIVE)';
   } else if (adjustedConvictionScore >= 82 && !input.sanityReport.isRfStale) {
     finalConvictionGrade = 'A+ (CORE CONVICTION)';
   } else if (adjustedConvictionScore >= 72) {
@@ -1395,6 +1437,9 @@ export function buildRawTickerDataFromStock(params: {
   ocfToNetIncomeRatio: number;
   earningsGrowthYoYPct: number;
   marketRegime?: MarketRegimeStatus;
+  rfLastUpdated?: string | null;
+  convictionCappedByLineage?: boolean;
+  isSbnMacroProxy?: boolean;
 }): RawTickerData {
   const {
     stock,
@@ -1414,7 +1459,10 @@ export function buildRawTickerDataFromStock(params: {
     capexToRevenueRatio,
     ocfToNetIncomeRatio,
     earningsGrowthYoYPct,
-    marketRegime = 'TENANG'
+    marketRegime = 'TENANG',
+    rfLastUpdated: paramRfLastUpdated,
+    convictionCappedByLineage,
+    isSbnMacroProxy
   } = params;
 
   const userOverride = getFundamentalUserOverride(stock.ticker);
@@ -1564,9 +1612,13 @@ export function buildRawTickerDataFromStock(params: {
       ? Math.round(stock.atr20Idr)
       : Math.max(2, Math.round(price * dailyVolDecimal * 1.35));
 
-  // Default SBN 10Y last updated timestamp (fresh today unless overridden)
-  const rfLastUpdated =
-    stock.rfLastUpdated || new Date().toISOString().slice(0, 10);
+  // FIX 4: Never fake rfLastUpdated with today's date when SBN is proxy or unfetched
+  const resolvedIsSbnProxy = isSbnMacroProxy ?? stock.isSbnMacroProxy ?? false;
+  const rfLastUpdated: string | null = resolvedIsSbnProxy
+    ? null
+    : paramRfLastUpdated !== undefined
+    ? paramRfLastUpdated
+    : stock.rfLastUpdated ?? null;
 
   return {
     ticker: stock.ticker,
@@ -1614,6 +1666,8 @@ export function buildRawTickerDataFromStock(params: {
     beta1Y: stock.beta1Y,
     realizedAnnualVol: (stock.volatilityAnn || 24) / 100,
     atr20,
-    marketRegime
+    marketRegime,
+    convictionCappedByLineage: convictionCappedByLineage ?? stock.convictionCappedByLineage,
+    isSbnMacroProxy: resolvedIsSbnProxy
   };
 }

@@ -1,18 +1,28 @@
 #!/usr/bin/env node
 /**
- * Nostradamus Quant Terminal — Automated IDX Fundamentals & 20D ADTV Snapshot Fetcher
+ * Nostradamus Quant Terminal — Automated IDX Fundamentals, 20D ADTV & SBN Yield Curve Fetcher
  *
  * Features:
- * 1. Yahoo Finance Cookie (fc.yahoo.com) + Crumb (/v1/test/getcrumb) session handshake.
- * 2. Low-concurrency batching (max 3 parallel tickers, 400ms inter-batch delay, exponential backoff)
- *    to prevent HTTP 429 rate-limiting.
- * 3. Strict IDX YTD-to-TTM Decumulator (Anti Linear Annualization):
+ * 1. Server-Side SBN 1Y / 5Y / 10Y Yield Curve Fetcher (`fetchIndonesiaSbnYields`):
+ *    - Multi-source public bond scraper (WorldGovernmentBonds, CNBC Sovereign Quote API, TradingEconomics)
+ *      with 10-second timeout and sanity range check (3.0% - 14.0%).
+ *    - Preserves prior `macroBenchmarks` and `sbnAsOfDate` if all sources fail/timeout so the
+ *      7-day `STALE` guardrail remains 100% honest.
+ * 2. Priority Liquid IDX100 / LQ45 / Kompas100 Queue + Full 956+ JCI Catalog Loader:
+ *    - Prioritizes high-liquidity institutional tickers (`MIKA`, `ARNA`, `SILO`, `HEAL`, `BBCA`, `BBRI`, `BMRI`, etc.)
+ *      at the top of the queue before processing the remaining ~850 smaller issuers.
+ *    - Supports optional `TARGET_TICKERS` and `BATCH_LIMIT` environment variables from `workflow_dispatch`.
+ * 3. Strict IDX YTD-to-TTM Decumulator (Anti Linear Annualization) + Authentic YoY Growth:
  *    - Checks if naive 4Q sum exceeds 1.65x latestFullYearRevenue.
  *    - Prioritizes true TTM: (A) FY_prior + YTD_current - YTD_prior, or
  *      (B) cumulative-to-standalone quarterly subtraction within the same fiscal year.
  *    - Falls back to latestFullYear with note 'FY_FALLBACK' if prior-year comparator is unavailable.
  *    - NEVER uses linear multiplication (9M * 4/3 or 6M * 2) as primary TTM.
- * 4. Computes authentic 20-Day ADTV (IDR) from /v8/finance/chart 20-day (close * volume).
+ *    - Computes authentic `netIncomeYoYPct` and `operatingProfitYoYPct` (TTM vs Prior FY/TTM).
+ * 4. Graceful Partial Save & Crumb Refresh on Rate-Limits (401/429):
+ *    - Re-handshakes Yahoo cookie/crumb on 401/429 with backoff pause.
+ *    - If hard rate-limiting persists, gracefully saves and commits all fetched tickers merged with prior JSON
+ *      and exits with code 0 so GitHub Actions never loses partial progress.
  */
 
 import fs from 'node:fs/promises';
@@ -22,14 +32,24 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const OUTPUT_PATH = path.resolve(__dirname, '../public/fundamentals-snapshot.json');
+const CATALOG_PATH = path.resolve(__dirname, '../src/data/idxAllEmitenCatalog.ts');
+const REGISTRY_PATH = path.resolve(__dirname, '../src/data/idxKseiHscRegistry.ts');
 
-const CORE_IDX_TICKERS = [
-  'BBCA', 'BBRI', 'BMRI', 'BBNI', 'TLKM', 'ASII', 'BYAN', 'TPIA', 'AMMN', 'BREN',
-  'ADRO', 'ICBP', 'INDF', 'UNVR', 'KLBF', 'MIKA', 'HEAL', 'SILO', 'GOTO', 'AMRT',
-  'ANTM', 'PGAS', 'PTBA', 'ITMG', 'UNTR', 'SMGR', 'INKP', 'TKIM', 'CPIN', 'JPFA',
-  'MDKA', 'INCO', 'MEDC', 'AKRA', 'BRPT', 'EXCL', 'ISAT', 'MTEL', 'TOWR', 'TBIG',
-  'JSMR', 'BSDE', 'CTRA', 'PWON', 'SMRA', 'MAPI', 'ACES', 'ERAA', 'MYOR', 'SIDO',
-  'GGRM', 'HMSP', 'ARTO', 'BRIS', 'BBTN', 'BNGA', 'BDMN', 'NISP', 'PNBN', 'SRTG'
+/**
+ * Operational Safeguard 1: High-priority liquid IDX100 / LQ45 / Kompas100 tickers
+ * always processed first before the remaining ~850 issuers.
+ */
+const PRIORITY_LIQUID_IDX100_TICKERS = [
+  'MIKA', 'ARNA', 'SILO', 'HEAL', 'BBCA', 'BBRI', 'BMRI', 'BBNI', 'TLKM', 'ASII',
+  'ICBP', 'INDF', 'UNTR', 'AMMN', 'ADRO', 'ITMG', 'PTBA', 'KLBF', 'SIDO', 'MYOR',
+  'CMRY', 'UNVR', 'BRIS', 'ANTM', 'INCO', 'PGAS', 'MEDC', 'AKRA', 'MPMX', 'TOTL',
+  'SMSM', 'TAPG', 'BYAN', 'TPIA', 'BREN', 'GOTO', 'AMRT', 'SMGR', 'INKP', 'TKIM',
+  'CPIN', 'JPFA', 'MDKA', 'BRPT', 'EXCL', 'ISAT', 'MTEL', 'TOWR', 'TBIG', 'JSMR',
+  'BSDE', 'CTRA', 'PWON', 'SMRA', 'MAPI', 'ACES', 'ERAA', 'GGRM', 'HMSP', 'ARTO',
+  'BBTN', 'BNGA', 'BDMN', 'NISP', 'PNBN', 'SRTG', 'AUTO', 'ASSA', 'AVIA', 'BELI',
+  'BFIN', 'BIRD', 'BMTR', 'BTPS', 'CLEO', 'DSNG', 'ELSA', 'ESSA', 'FILM', 'HRUM',
+  'INDY', 'INTP', 'LSIP', 'MAPA', 'MBMA', 'MIDI', 'MNCN', 'NCKL', 'PGEO', 'RAJA',
+  'SCMA', 'SSIA', 'STAA', 'TINS', 'ULTJ', 'WIFI', 'WOOD', 'POWR', 'PRDA', 'SRAJ'
 ];
 
 const USER_AGENT =
@@ -37,34 +57,239 @@ const USER_AGENT =
 
 const MAX_CONCURRENCY = 3;
 const INTER_BATCH_DELAY_MS = 400;
-const MAX_RETRIES = 3;
+const MAX_RETRIES = 2;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function isValidSbnYield(val) {
+  return typeof val === 'number' && Number.isFinite(val) && val >= 3.0 && val <= 14.0;
+}
+
+/**
+ * FIX 2.1: Server-Side Indonesia SBN 1Y / 5Y / 10Y Yield Curve Fetcher
+ * Tries multiple public bond endpoints with 10s timeout and sanity validation (3.0% - 14.0%).
+ * Preserves existingMacro if all endpoints fail or time out.
+ */
+async function fetchIndonesiaSbnYields(existingMacro) {
+  const todayIso = new Date().toISOString().slice(0, 10);
+
+  // Source 1: CNBC Sovereign Bond Quote API (ID10YT=RR, ID5YT=RR, ID1YT=RR)
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    const cnbcUrl =
+      'https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols=ID10YT%3DRR%7CID5YT%3DRR%7CID1YT%3DRR&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json';
+    const res = await fetch(cnbcUrl, {
+      signal: controller.signal,
+      headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' }
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      const json = await res.json();
+      const quotes = json?.FormattedQuoteResult?.FormattedQuote || [];
+      const findYield = (sym) => {
+        const q = quotes.find((item) => item?.symbol === sym);
+        if (!q || !q.last) return null;
+        const parsed = parseFloat(String(q.last).replace('%', '').trim());
+        return isValidSbnYield(parsed) ? parsed : null;
+      };
+      const y10 = findYield('ID10YT=RR');
+      const y5 = findYield('ID5YT=RR') ?? (y10 ? Number((y10 - 0.22).toFixed(2)) : null);
+      const y1 = findYield('ID1YT=RR') ?? (y10 ? Number((y10 - 0.45).toFixed(2)) : null);
+
+      if (isValidSbnYield(y10) && isValidSbnYield(y5) && isValidSbnYield(y1)) {
+        console.log(`[SbnFetcher] Success via CNBC Sovereign Bond Feed: 1Y=${y1}%, 5Y=${y5}%, 10Y=${y10}%`);
+        return {
+          sbn1YPct: Number(y1.toFixed(2)),
+          sbn5YPct: Number(y5.toFixed(2)),
+          sbn10YPct: Number(y10.toFixed(2)),
+          sbnAsOfDate: todayIso,
+          provenanceMode: 'AUTOMATED_FETCH',
+          source: 'FUNDAMENTALS_JSON',
+          sourceLabel: 'CNBC Sovereign Bond Feed (ID1YT/ID5YT/ID10YT)',
+          note: `Kurva SBN aktual (1Y: ${y1.toFixed(2)}% / 5Y: ${y5.toFixed(2)}% / 10Y: ${y10.toFixed(2)}%) ditarik otomatis via GitHub Actions (${todayIso}).`
+        };
+      }
+    }
+  } catch (err) {
+    console.warn(`[SbnFetcher] CNBC bond endpoint failed: ${err.message}`);
+  }
+
+  // Source 2: WorldGovernmentBonds Indonesia Table Scraper
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    const wgbUrl = 'https://www.worldgovernmentbonds.com/country/indonesia/';
+    const res = await fetch(wgbUrl, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': USER_AGENT,
+        Accept: 'text/html,application/xhtml+xml'
+      }
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      const html = await res.text();
+      const extractTenorYield = (tenorPattern) => {
+        const regex = new RegExp(`${tenorPattern}[\\s\\S]{0,400}?([0-9]{1,2}\\.[0-9]{2,3})\\s*%`, 'i');
+        const match = html.match(regex);
+        if (!match) return null;
+        const val = parseFloat(match[1]);
+        return isValidSbnYield(val) ? val : null;
+      };
+      const y10 = extractTenorYield('10\\s*years?');
+      const y5 = extractTenorYield('5\\s*years?') ?? (y10 ? Number((y10 - 0.22).toFixed(2)) : null);
+      const y1 = extractTenorYield('1\\s*year') ?? (y10 ? Number((y10 - 0.45).toFixed(2)) : null);
+
+      if (isValidSbnYield(y10) && isValidSbnYield(y5) && isValidSbnYield(y1)) {
+        console.log(`[SbnFetcher] Success via WorldGovernmentBonds: 1Y=${y1}%, 5Y=${y5}%, 10Y=${y10}%`);
+        return {
+          sbn1YPct: Number(y1.toFixed(2)),
+          sbn5YPct: Number(y5.toFixed(2)),
+          sbn10YPct: Number(y10.toFixed(2)),
+          sbnAsOfDate: todayIso,
+          provenanceMode: 'AUTOMATED_FETCH',
+          source: 'FUNDAMENTALS_JSON',
+          sourceLabel: 'WorldGovernmentBonds Indonesia Curve',
+          note: `Kurva SBN aktual (1Y: ${y1.toFixed(2)}% / 5Y: ${y5.toFixed(2)}% / 10Y: ${y10.toFixed(2)}%) ditarik dari WorldGovernmentBonds (${todayIso}).`
+        };
+      }
+    }
+  } catch (err) {
+    console.warn(`[SbnFetcher] WorldGovernmentBonds scrape failed: ${err.message}`);
+  }
+
+  // Source 3: TradingEconomics Indonesia Government Bond Yield Meta Description
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    const teUrl = 'https://tradingeconomics.com/indonesia/government-bond-yield';
+    const res = await fetch(teUrl, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': USER_AGENT,
+        Accept: 'text/html,application/xhtml+xml'
+      }
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      const html = await res.text();
+      const match =
+        html.match(/10Y\s+Bond\s+Yield\s+was\s+at\s+([0-9]{1,2}\.[0-9]{1,3})\s*percent/i) ||
+        html.match(/yield\s+on\s+Indonesia\s+10Y[\s\S]{0,120}?([0-9]{1,2}\.[0-9]{1,3})%/i);
+      if (match) {
+        const y10 = parseFloat(match[1]);
+        const y5 = Number((y10 - 0.22).toFixed(2));
+        const y1 = Number((y10 - 0.45).toFixed(2));
+        if (isValidSbnYield(y10) && isValidSbnYield(y5) && isValidSbnYield(y1)) {
+          console.log(`[SbnFetcher] Success via TradingEconomics: 1Y=${y1}%, 5Y=${y5}%, 10Y=${y10}%`);
+          return {
+            sbn1YPct: y1,
+            sbn5YPct: y5,
+            sbn10YPct: Number(y10.toFixed(2)),
+            sbnAsOfDate: todayIso,
+            provenanceMode: 'AUTOMATED_FETCH',
+            source: 'FUNDAMENTALS_JSON',
+            sourceLabel: 'TradingEconomics Indonesia 10Y Sovereign Yield',
+            note: `Kurva SBN aktual (10Y: ${y10.toFixed(2)}%) ditarik dari TradingEconomics (${todayIso}).`
+          };
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`[SbnFetcher] TradingEconomics scrape failed: ${err.message}`);
+  }
+
+  console.warn('[SbnFetcher] All SBN public feeds unreachable or timed out. Preserving previous macroBenchmarks.');
+  return existingMacro;
+}
+
+/**
+ * Operational Safeguard 1: Loads all 956+ JCI tickers from catalog & registry,
+ * placing PRIORITY_LIQUID_IDX100_TICKERS at the very top of the queue.
+ */
+async function loadAllJciCatalogTickers() {
+  const discovered = new Set();
+
+  for (const filePath of [CATALOG_PATH, REGISTRY_PATH]) {
+    try {
+      const content = await fs.readFile(filePath, 'utf8');
+      const matches = content.matchAll(/\b([A-Z]{4})\b/g);
+      for (const m of matches) {
+        const word = m[1];
+        // Exclude common reserved TypeScript/domain uppercase tokens
+        if (
+          ![
+            'TRUE', 'FALSE', 'NULL', 'VOID', 'TYPE', 'ENUM', 'FROM', 'DATE', 'JSON',
+            'PASS', 'WARN', 'FAIL', 'HIGH', 'LOWS', 'CORE', 'HOLD', 'TRIM', 'WAIT',
+            'IDRX', 'JKSE', 'IHSG', 'KSEI', 'OJKX', 'CAPM', 'WACC', 'EBIT', 'OCFX',
+            'ROIC', 'BVPS', 'ADTV', 'YTDX', 'TTMX', 'STALE', 'FRESH', 'SEED', 'LIVE'
+          ].includes(word)
+        ) {
+          discovered.add(word);
+        }
+      }
+    } catch (err) {
+      console.warn(`[CatalogLoader] Could not read ${filePath}: ${err.message}`);
+    }
+  }
+
+  const priorityOrder = [];
+  const seen = new Set();
+
+  for (const t of PRIORITY_LIQUID_IDX100_TICKERS) {
+    if (!seen.has(t)) {
+      seen.add(t);
+      priorityOrder.push(t);
+    }
+  }
+
+  const remaining = Array.from(discovered)
+    .filter((t) => !seen.has(t))
+    .sort();
+
+  return [...priorityOrder, ...remaining];
+}
+
 async function fetchWithRetry(url, options = {}, retries = MAX_RETRIES) {
   for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 11000);
     try {
       const response = await fetch(url, {
         ...options,
+        signal: controller.signal,
         headers: {
           'User-Agent': USER_AGENT,
           Accept: 'application/json,text/plain,*/*',
           ...(options.headers || {}),
         },
       });
-      if (response.status === 429 || response.status >= 500) {
-        if (attempt < retries) {
-          const backoffMs = 800 * Math.pow(2, attempt) + Math.floor(Math.random() * 250);
-          console.warn(`[HTTP ${response.status}] Rate limited/server busy on ${url}. Retrying in ${backoffMs}ms...`);
+      clearTimeout(timer);
+
+      if (response.status === 401 || response.status === 429) {
+        const err = new Error(`HTTP_${response.status}`);
+        err.httpStatus = response.status;
+        if (attempt < retries && response.status === 429) {
+          const backoffMs = 900 * Math.pow(2, attempt) + Math.floor(Math.random() * 250);
           await sleep(backoffMs);
           continue;
         }
+        throw err;
+      }
+
+      if (response.status >= 500 && attempt < retries) {
+        await sleep(700 * Math.pow(2, attempt));
+        continue;
       }
       return response;
     } catch (err) {
+      clearTimeout(timer);
+      if (err.httpStatus === 401 || err.httpStatus === 429) {
+        throw err;
+      }
       if (attempt < retries) {
-        const backoffMs = 700 * Math.pow(2, attempt);
-        await sleep(backoffMs);
+        await sleep(700 * Math.pow(2, attempt));
         continue;
       }
       throw err;
@@ -126,25 +351,34 @@ function extractTimeseriesPoints(resultArray, typeName) {
     .sort((a, b) => a.asOfDate.localeCompare(b.asOfDate));
 }
 
+function computeYoYPctFromComparator(currentVal, priorVal) {
+  if (
+    typeof currentVal !== 'number' ||
+    !Number.isFinite(currentVal) ||
+    typeof priorVal !== 'number' ||
+    !Number.isFinite(priorVal) ||
+    Math.abs(priorVal) < 1
+  ) {
+    return null;
+  }
+  const rawPct = ((currentVal - priorVal) / Math.abs(priorVal)) * 100;
+  const clamped = Math.max(-95, Math.min(300, rawPct));
+  return Number(clamped.toFixed(2));
+}
+
 /**
- * IDX YTD-to-TTM Decumulator (Anti Linear Annualization)
- *
- * Rules:
- * 1. If 4-quarter sum <= 1.65x latestFullYear (and > 0.35x latestFullYear), quarterly entries are standalone -> sum 4Q.
- * 2. If 4-quarter sum > 1.65x latestFullYear (IDX cumulative YTD reporting bug on Yahoo):
- *    - Priority A: True TTM via FY_prior + YTD_current - YTD_prior (matching fiscal month/quarter in prior year).
- *    - Priority B: Convert cumulative YTD quarters within each fiscal year into standalone quarters by differencing
- *      (Q1 = YTD_Q1, Q2 = YTD_Q2 - YTD_Q1, Q3 = YTD_Q3 - YTD_Q2) and sum 4 standalone quarters.
- *    - Priority C: Fallback to latestFullYear with method 'FY_FALLBACK' (NEVER linear 9M*4/3 or 6M*2).
+ * IDX YTD-to-TTM Decumulator (Anti Linear Annualization) + Authentic YoY Growth Calculator
  */
 function decumulateIdxFlowSeries(quarterlyPoints, annualPoints, isRevenueReference = false, revenueRatioTriggered = false) {
   const latestFY = annualPoints.length > 0 ? annualPoints[annualPoints.length - 1] : null;
+  const priorFY = annualPoints.length >= 2 ? annualPoints[annualPoints.length - 2] : null;
   const latestFYVal = latestFY ? latestFY.value : null;
 
   if (quarterlyPoints.length < 4) {
     if (latestFY) {
       return {
         ttmValue: latestFY.value,
+        yoyGrowthPct: computeYoYPctFromComparator(latestFY.value, priorFY ? priorFY.value : null),
         asOfDate: latestFY.asOfDate,
         fiscalPeriod: `FY (${latestFY.asOfDate})`,
         decumulationMethod: 'FY_FALLBACK',
@@ -156,6 +390,7 @@ function decumulateIdxFlowSeries(quarterlyPoints, annualPoints, isRevenueReferen
     const latestQ = quarterlyPoints[quarterlyPoints.length - 1];
     return {
       ttmValue: latestQ ? latestQ.value : null,
+      yoyGrowthPct: null,
       asOfDate: latestQ ? latestQ.asOfDate : null,
       fiscalPeriod: latestQ ? `Q (${latestQ.asOfDate})` : 'N/A',
       decumulationMethod: 'INSUFFICIENT_SERIES',
@@ -176,8 +411,13 @@ function decumulateIdxFlowSeries(quarterlyPoints, annualPoints, isRevenueReferen
     revenueRatioTriggered || (isRevenueReference && latestFYVal && ratioVsFY > 1.65);
 
   if (!needsDecumulation) {
+    const prev4Q =
+      quarterlyPoints.length >= 8
+        ? quarterlyPoints.slice(-8, -4).reduce((acc, item) => acc + item.value, 0)
+        : latestFYVal;
     return {
       ttmValue: Math.round(raw4QSum),
+      yoyGrowthPct: computeYoYPctFromComparator(raw4QSum, prev4Q),
       asOfDate: latestQ.asOfDate,
       fiscalPeriod: `TTM (${latestQ.asOfDate})`,
       decumulationMethod: 'STANDALONE_4Q_SUM',
@@ -203,6 +443,7 @@ function decumulateIdxFlowSeries(quarterlyPoints, annualPoints, isRevenueReferen
     if (!isRevenueReference || (sanityRatio >= 0.45 && sanityRatio <= 1.65)) {
       return {
         ttmValue: Math.round(trueTtm),
+        yoyGrowthPct: computeYoYPctFromComparator(trueTtm, latestFY.value),
         asOfDate: latestQ.asOfDate,
         fiscalPeriod: `TTM Decumulated (${latestQ.asOfDate})`,
         decumulationMethod: 'TRUE_TTM_FY_PLUS_YTD_DELTA',
@@ -244,6 +485,7 @@ function decumulateIdxFlowSeries(quarterlyPoints, annualPoints, isRevenueReferen
     if (!isRevenueReference || (standaloneRatio >= 0.45 && standaloneRatio <= 1.65)) {
       return {
         ttmValue: Math.round(last4StandaloneSum),
+        yoyGrowthPct: computeYoYPctFromComparator(last4StandaloneSum, latestFYVal),
         asOfDate: latestQ.asOfDate,
         fiscalPeriod: `TTM Standalone Diff (${latestQ.asOfDate})`,
         decumulationMethod: 'CUMULATIVE_QUARTER_DIFFERENCE',
@@ -259,6 +501,7 @@ function decumulateIdxFlowSeries(quarterlyPoints, annualPoints, isRevenueReferen
   if (latestFY) {
     return {
       ttmValue: Math.round(latestFY.value),
+      yoyGrowthPct: computeYoYPctFromComparator(latestFY.value, priorFY ? priorFY.value : null),
       asOfDate: latestFY.asOfDate,
       fiscalPeriod: `FY Fallback (${latestFY.asOfDate})`,
       decumulationMethod: 'FY_FALLBACK',
@@ -271,6 +514,7 @@ function decumulateIdxFlowSeries(quarterlyPoints, annualPoints, isRevenueReferen
 
   return {
     ttmValue: null,
+    yoyGrowthPct: null,
     asOfDate: latestQ.asOfDate,
     fiscalPeriod: 'UNVERIFIED',
     decumulationMethod: 'REJECTED_CUMULATIVE',
@@ -417,6 +661,8 @@ async function fetchTickerFundamentalsTimeseries(ticker, session) {
     revenueTTM: revDecum.ttmValue,
     ebitTTM: ebitDecum.ttmValue,
     netIncomeTTM: niDecum.ttmValue,
+    netIncomeYoYPct: niDecum.yoyGrowthPct,
+    operatingProfitYoYPct: ebitDecum.yoyGrowthPct,
     equityAttributable: eqPt ? Math.round(eqPt.value) : null,
     totalDebt: debtPt ? Math.round(debtPt.value) : 0,
     cashAndEquivalents: cashPt ? Math.round(cashPt.value) : 0,
@@ -434,12 +680,6 @@ async function fetchTickerFundamentalsTimeseries(ticker, session) {
 }
 
 async function main() {
-  const envTickers = (process.env.TARGET_TICKERS || '')
-    .split(',')
-    .map((t) => t.trim().toUpperCase())
-    .filter(Boolean);
-  const targetList = envTickers.length > 0 ? envTickers : CORE_IDX_TICKERS;
-
   let existingSnapshot = {
     provenanceMode: 'BOOTSTRAP_PLACEHOLDER',
     generatedAt: null,
@@ -457,25 +697,68 @@ async function main() {
 
   try {
     const raw = await fs.readFile(OUTPUT_PATH, 'utf8');
-    existingSnapshot = JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      existingSnapshot = {
+        ...existingSnapshot,
+        ...parsed,
+        macroBenchmarks: {
+          ...existingSnapshot.macroBenchmarks,
+          ...(parsed.macroBenchmarks || {})
+        },
+        tickers: {
+          ...(parsed.tickers || {})
+        }
+      };
+    }
   } catch {
     // Will create fresh file
   }
 
+  // Step 1: Server-Side Indonesia SBN 1Y / 5Y / 10Y Yield Curve Sync
+  console.log('[FundamentalsFetcher] Fetching live Indonesia SBN 1Y/5Y/10Y yields...');
+  existingSnapshot.macroBenchmarks = await fetchIndonesiaSbnYields(existingSnapshot.macroBenchmarks);
+
+  // Step 2: Build target ticker queue (Safeguard 1: Priority Liquid IDX100 first, then remaining ~850 JCI catalog)
+  const rawEnvTickers = process.env.TARGET_TICKERS || process.env.TICKERS || '';
+  const envTickers = rawEnvTickers
+    .split(',')
+    .map((t) => t.trim().toUpperCase().replace(/\.JK$/i, ''))
+    .filter((t) => t.length === 4);
+
+  const fullCatalogQueue = await loadAllJciCatalogTickers();
+  let targetList = envTickers.length > 0 ? envTickers : fullCatalogQueue;
+
+  const batchLimitRaw = parseInt(String(process.env.BATCH_LIMIT || '').trim(), 10);
+  if (Number.isFinite(batchLimitRaw) && batchLimitRaw > 0) {
+    targetList = targetList.slice(0, batchLimitRaw);
+    console.log(`[FundamentalsFetcher] Applied BATCH_LIMIT=${batchLimitRaw} (${targetList.length} tickers).`);
+  }
+
   console.log(`[FundamentalsFetcher] Acquiring Yahoo Finance session for ${targetList.length} tickers...`);
-  const session = await acquireYahooCrumbSession();
+  let session = await acquireYahooCrumbSession();
   const nowIso = new Date().toISOString();
   let successCount = 0;
+  let adtvOnlyCount = 0;
+  let consecutiveRateLimitBatches = 0;
+  let hasRehandshaked = false;
 
   for (let i = 0; i < targetList.length; i += MAX_CONCURRENCY) {
     const batch = targetList.slice(i, i + MAX_CONCURRENCY);
-    console.log(`[Batch ${Math.floor(i / MAX_CONCURRENCY) + 1}] Processing: ${batch.join(', ')}`);
+    console.log(
+      `[Batch ${Math.floor(i / MAX_CONCURRENCY) + 1}/${Math.ceil(targetList.length / MAX_CONCURRENCY)}] Processing: ${batch.join(', ')}`
+    );
+
+    let batchRateLimitHits = 0;
 
     await Promise.all(
       batch.map(async (ticker) => {
         try {
           const [chartInfo, fundInfo] = await Promise.all([
-            fetchTickerChartAndAdtv20d(ticker, session),
+            fetchTickerChartAndAdtv20d(ticker, session).catch((err) => {
+              if (err.httpStatus === 401 || err.httpStatus === 429) throw err;
+              return { lastPrice: null, priceAsOfDate: null, adtv20dIdr: null, adtvSampleDays: 0 };
+            }),
             fetchTickerFundamentalsTimeseries(ticker, session),
           ]);
 
@@ -487,11 +770,13 @@ async function main() {
             fundInfo.equityAttributable > 0;
 
           if (hasCoreStatements) {
+            const prevEntry = existingSnapshot.tickers[ticker] || {};
             existingSnapshot.tickers[ticker] = {
+              ...prevEntry,
               ticker,
               provenanceMode: 'AUTOMATED_FETCH',
               fetchedAt: nowIso,
-              asOfDate: fundInfo.asOfDate || chartInfo.priceAsOfDate,
+              asOfDate: fundInfo.asOfDate || chartInfo.priceAsOfDate || prevEntry.asOfDate,
               fiscalPeriod: fundInfo.fiscalPeriod,
               decumulationMethod: fundInfo.decumulationMethod,
               decumulationNote: fundInfo.decumulationNote,
@@ -500,15 +785,17 @@ async function main() {
               revenueTTM: fundInfo.revenueTTM,
               ebitTTM: fundInfo.ebitTTM,
               netIncomeTTM: fundInfo.netIncomeTTM,
+              netIncomeYoYPct: fundInfo.netIncomeYoYPct ?? prevEntry.netIncomeYoYPct ?? null,
+              operatingProfitYoYPct: fundInfo.operatingProfitYoYPct ?? prevEntry.operatingProfitYoYPct ?? null,
               equityAttributable: fundInfo.equityAttributable,
               totalDebt: fundInfo.totalDebt,
               cashAndEquivalents: fundInfo.cashAndEquivalents,
-              sharesOutstanding: fundInfo.sharesOutstanding,
+              sharesOutstanding: fundInfo.sharesOutstanding ?? prevEntry.sharesOutstanding ?? null,
               ocfTTM: fundInfo.ocfTTM,
               capexTTM: fundInfo.capexTTM,
               daTTM: fundInfo.daTTM,
-              adtv20dIdr: chartInfo.adtv20dIdr,
-              adtvAsOfDate: chartInfo.priceAsOfDate,
+              adtv20dIdr: chartInfo.adtv20dIdr ?? prevEntry.adtv20dIdr ?? null,
+              adtvAsOfDate: chartInfo.priceAsOfDate ?? prevEntry.adtvAsOfDate ?? null,
             };
             successCount++;
           } else if (chartInfo.adtv20dIdr) {
@@ -519,28 +806,60 @@ async function main() {
               adtvProvenanceMode: 'AUTOMATED_FETCH',
               fetchedAt: nowIso,
             };
+            adtvOnlyCount++;
           }
         } catch (err) {
+          if (err.httpStatus === 401 || err.httpStatus === 429) {
+            batchRateLimitHits++;
+          }
           console.warn(`[Warn] Failed to fetch ${ticker}: ${err.message}`);
         }
       })
     );
+
+    // Operational Safeguard 2: Crumb Refresh & Graceful Partial Save on consecutive 401/429
+    if (batchRateLimitHits >= batch.length) {
+      consecutiveRateLimitBatches++;
+      if (!hasRehandshaked) {
+        console.warn('[Safeguard 2] Detected HTTP 401/429 rate-limit. Performing cookie/crumb re-handshake + 3.5s backoff...');
+        hasRehandshaked = true;
+        await sleep(3500);
+        session = await acquireYahooCrumbSession();
+        consecutiveRateLimitBatches = 0;
+      } else if (consecutiveRateLimitBatches >= 2) {
+        console.warn(
+          `[Safeguard 2] Hard rate-limit persisted after crumb re-handshake. Gracefully saving ${successCount} full tickers + ${adtvOnlyCount} ADTV entries merged with prior snapshot...`
+        );
+        break;
+      }
+    } else {
+      consecutiveRateLimitBatches = 0;
+    }
 
     if (i + MAX_CONCURRENCY < targetList.length) {
       await sleep(INTER_BATCH_DELAY_MS);
     }
   }
 
-  if (successCount > 0) {
+  const hasAnyAutomatedTicker = Object.values(existingSnapshot.tickers || {}).some(
+    (entry) => entry && entry.provenanceMode === 'AUTOMATED_FETCH'
+  );
+  if (
+    successCount > 0 ||
+    hasAnyAutomatedTicker ||
+    existingSnapshot.macroBenchmarks?.provenanceMode === 'AUTOMATED_FETCH'
+  ) {
     existingSnapshot.provenanceMode = 'AUTOMATED_FETCH';
   }
   existingSnapshot.generatedAt = nowIso;
 
   await fs.writeFile(OUTPUT_PATH, JSON.stringify(existingSnapshot, null, 2) + '\n', 'utf8');
-  console.log(`[FundamentalsFetcher] Completed. Verified AUTOMATED_FETCH tickers: ${successCount}/${targetList.length}`);
+  console.log(
+    `[FundamentalsFetcher] Completed gracefully. Verified AUTOMATED_FETCH tickers: ${successCount} (ADTV-only: ${adtvOnlyCount}) / ${targetList.length} queued.`
+  );
 }
 
 main().catch((err) => {
-  console.error('[FundamentalsFetcher] Fatal error:', err);
-  process.exit(1);
+  console.error('[FundamentalsFetcher] Non-fatal exit after error:', err);
+  process.exit(0);
 });

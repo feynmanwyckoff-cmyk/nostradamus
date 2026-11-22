@@ -2652,10 +2652,51 @@ export function evaluateJoeliardiOosFundamental(
     explicitMarketRegime ??
     (stock.volatilityAnn > 35 || vixVal >= 24 || jkseChange <= -1.5 ? 'VOLATIL' : 'TENANG');
 
+  const isSbnMacroProxy = sbnFreshness.source === 'PROXY_FORMULA';
+  const prelimBaseFundSource: DataSourceType = stock.fundamentalsSource ?? 'HARDCODED_SEED';
+  const prelimRevSource: DataSourceType =
+    userFundOverride?.revenueTTMIdr && userFundOverride.revenueTTMIdr > 0
+      ? 'USER_OVERRIDE'
+      : stock.revenueTTMIdr && stock.revenueTTMIdr > 0
+      ? prelimBaseFundSource
+      : 'HARDCODED_SEED';
+  const prelimNiSource: DataSourceType =
+    userFundOverride?.netIncomeTTMIdr && userFundOverride.netIncomeTTMIdr > 0
+      ? 'USER_OVERRIDE'
+      : stock.netIncomeTTMIdr && stock.netIncomeTTMIdr > 0
+      ? prelimBaseFundSource
+      : 'HARDCODED_SEED';
+  const prelimEqSource: DataSourceType =
+    userFundOverride?.equityAttributableIdr && userFundOverride.equityAttributableIdr > 0
+      ? 'USER_OVERRIDE'
+      : stock.equityAttributableIdr && stock.equityAttributableIdr > 0
+      ? prelimBaseFundSource
+      : 'HARDCODED_SEED';
+  const prelimSharesSource: DataSourceType =
+    userFundOverride?.sharesOutstanding && userFundOverride.sharesOutstanding > 0
+      ? 'USER_OVERRIDE'
+      : prelimBaseFundSource !== 'HARDCODED_SEED' &&
+        stock.sharesOutstanding &&
+        stock.sharesOutstanding > 0
+      ? prelimBaseFundSource
+      : 'HARDCODED_SEED';
+
+  const prelimConvictionCappedByLineage =
+    prelimRevSource === 'HARDCODED_SEED' ||
+    prelimNiSource === 'HARDCODED_SEED' ||
+    prelimEqSource === 'HARDCODED_SEED' ||
+    prelimSharesSource === 'HARDCODED_SEED';
+
+  const resolvedRfLastUpdated: string | null = isSbnMacroProxy
+    ? null
+    : sbnFreshness.asOfDate ?? stock.rfLastUpdated ?? null;
+
   const rawTickerData = buildRawTickerDataFromStock({
     stock: {
       ...stock,
-      rfLastUpdated: sbnFreshness.asOfDate || stock.rfLastUpdated
+      rfLastUpdated: resolvedRfLastUpdated,
+      convictionCappedByLineage: prelimConvictionCappedByLineage,
+      isSbnMacroProxy
     },
     price,
     trailingEpsIdr,
@@ -2673,13 +2714,16 @@ export function evaluateJoeliardiOosFundamental(
     capexToRevenueRatio: prelimRouteInfo.capexToRevenueRatio,
     ocfToNetIncomeRatio,
     earningsGrowthYoYPct: corpIntercept.earningsGrowthYoYPct,
-    marketRegime: inferredMarketRegime
+    marketRegime: inferredMarketRegime,
+    rfLastUpdated: resolvedRfLastUpdated,
+    convictionCappedByLineage: prelimConvictionCappedByLineage,
+    isSbnMacroProxy
   });
 
   const sanityReport = validateFundamentalSanity(rawTickerData);
   const adtv20dIdr = sanityReport.normalizedAdtv20dIDR;
 
-  // P0.4: Add +50 bps safety buffer to Cost of Equity (Ke) if SBN 10Y curve is stale (> 7 days)
+  // P0.4: Add +50 bps safety buffer to Cost of Equity (Ke) if SBN 10Y curve is stale (> 7 days) or proxy
   const dynamicCostOfEquityPct = Number(
     (sbnCurve.dynamicCostOfEquityPct + sanityReport.keSafetyBufferBps / 100).toFixed(2)
   );
@@ -2693,9 +2737,10 @@ export function evaluateJoeliardiOosFundamental(
   );
   const estimatedEpsIdr = Math.max(2, trailingEpsIdr);
 
-  // P0.3: Dual-Confirmation Catalyst Gatekeeper (NI YoY >= 15% AND Operating Profit YoY >= 10%)
+  // P0.3 & FIX 4: Dual-Confirmation Catalyst Gatekeeper (locked to false when core fundamentals are HARDCODED_SEED)
   const isDualConfirmedCatalystActive =
-    sanityReport.isDualCatalystConfirmed || corpIntercept.hasActiveBuyback;
+    !prelimConvictionCappedByLineage &&
+    (sanityReport.isDualCatalystConfirmed || corpIntercept.hasActiveBuyback);
   const effectiveCatalystMultiplier = isDualConfirmedCatalystActive
     ? corpIntercept.catalystValuationMultiplier
     : 1.0;
@@ -3123,14 +3168,15 @@ export function evaluateJoeliardiOosFundamental(
     tickRounder: roundToIdxTick
   });
 
-  // P0.1: Enforce DATA_AUDIT_REQUIRED block if fundamental sanity check fails
-  const decisionTree = sanityReport.isGradeABlocked
-    ? {
-        ...rawDecisionTree,
-        decisionState: 'DATA_AUDIT_REQUIRED' as const,
-        decisionActionLabel: 'DATA AUDIT REQUIRED (BLOKIR GRADE A / MISMATCH DATA PRIMER)'
-      }
-    : rawDecisionTree;
+  // P0.1: Enforce DATA_AUDIT_REQUIRED block ONLY if hard fundamental sanity check fails (not for WATCHLIST_SEED_CAPPED)
+  const decisionTree =
+    sanityReport.maxAllowedStatus === 'DATA_AUDIT_REQUIRED'
+      ? {
+          ...rawDecisionTree,
+          decisionState: 'DATA_AUDIT_REQUIRED' as const,
+          decisionActionLabel: 'DATA AUDIT REQUIRED (BLOKIR GRADE A / MISMATCH DATA PRIMER)'
+        }
+      : rawDecisionTree;
 
   // Undercut / Deep Discount Detection
   const intrinsicAccumCeiling = roundToIdxTick(
@@ -3628,7 +3674,6 @@ export function evaluateJoeliardiOosFundamental(
     ? `[GUARDRAIL PROVENANCE SEED_WARN] ${coreSeedFields.length} metrik laporan keuangan inti (${['Revenue TTM', 'Net Income TTM', 'Equity', 'Shares'].filter((_, idx) => [lineageFields.revenueTTMIdr, lineageFields.netIncomeTTMIdr, lineageFields.equityAttributableIdr, lineageFields.sharesOutstanding][idx].status === 'SEED_WARN').join(', ')}) masih berasal dari estimasi katalog statis (HARDCODED_SEED / BOOTSTRAP_PLACEHOLDER). Conviction Grade dikunci maksimal pada C (SPECULATIVE / Watchlist) hingga data laporan keuangan aktual dimuat via GitHub Actions (fundamentals-snapshot.json) atau dikalibrasi manual (USER_OVERRIDE).`
     : undefined;
 
-  const isSbnMacroProxy = sbnFreshness.source === 'PROXY_FORMULA';
   const isSbnMacroStale = sbnFreshness.status === 'STALE';
 
   const dataLineage: TickerDataLineageReport = {

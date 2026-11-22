@@ -459,27 +459,64 @@ export const IDX_SECTOR_CATALOG: IdxDirectoryEntry[] = (() => {
   return Array.from(map.values());
 })();
 
+export interface LiveChartAdtvEntry {
+  liveAdtv20dIdr: number;
+  liveAdtvAsOfDate: string;
+  liveAdtvSource: 'LIVE_YAHOO_API';
+}
+
 let cachedFundamentalsSnapshotDoc: FundamentalsSnapshotDocument | null = null;
 let inFlightFundamentalsSnapshotPromise: Promise<FundamentalsSnapshotDocument | null> | null = null;
 const liveFundamentalsMemoryCache = new Map<string, FundamentalsSnapshotTickerEntry>();
+const liveChartAdtvMemoryCache = new Map<string, LiveChartAdtvEntry>();
 
 export function getCachedFundamentalsSnapshot(): FundamentalsSnapshotDocument | null {
   return cachedFundamentalsSnapshotDoc;
 }
 
+export function getLiveChartAdtvCacheEntry(ticker: string): LiveChartAdtvEntry | null {
+  if (!ticker) return null;
+  const clean = ticker.trim().toUpperCase().replace(/\.JK$/i, '');
+  return liveChartAdtvMemoryCache.get(clean) || null;
+}
+
+export function setLiveChartAdtvCacheEntry(
+  ticker: string,
+  adtv20dIdr: number,
+  adtvAsOfDate?: string
+): void {
+  if (!ticker || typeof adtv20dIdr !== 'number' || !Number.isFinite(adtv20dIdr) || adtv20dIdr <= 0) {
+    return;
+  }
+  const clean = ticker.trim().toUpperCase().replace(/\.JK$/i, '');
+  const asOf = adtvAsOfDate || new Date().toISOString().slice(0, 10);
+  liveChartAdtvMemoryCache.set(clean, {
+    liveAdtv20dIdr: Math.round(adtv20dIdr),
+    liveAdtvAsOfDate: asOf,
+    liveAdtvSource: 'LIVE_YAHOO_API'
+  });
+}
+
 export function clearFundamentalsMemoryCache(ticker?: string): void {
   if (!ticker) {
     liveFundamentalsMemoryCache.clear();
+    liveChartAdtvMemoryCache.clear();
     cachedFundamentalsSnapshotDoc = null;
     return;
   }
   const clean = ticker.trim().toUpperCase().replace(/\.JK$/i, '');
   liveFundamentalsMemoryCache.delete(clean);
+  liveChartAdtvMemoryCache.delete(clean);
 }
 
 /**
- * Loads `public/fundamentals-snapshot.json` and records a SyncDiagnosticEntry.
- * Strictly respects `provenanceMode: 'AUTOMATED_FETCH' | 'BOOTSTRAP_PLACEHOLDER'`.
+ * FIX 1: Multi-URL GitHub Raw + Local Fallback for `fundamentals-snapshot.json`.
+ * Tries tiered URLs with cache-buster `?t=${Date.now()}` so GitHub Pages never fails with HTTP 404
+ * while waiting for a static deployment rebuild:
+ *   Priority 1: https://raw.githubusercontent.com/feynmanwyckoff-cmyk/nostradamus/main/public/fundamentals-snapshot.json?t=...
+ *   Priority 2: ./fundamentals-snapshot.json?t=...
+ *   Priority 3: ./public/fundamentals-snapshot.json?t=...
+ * Records each URL attempt in `SyncDiagnosticEntry` without throwing red console errors.
  */
 export async function loadFundamentalsSnapshot(
   forceRefresh = false
@@ -492,60 +529,114 @@ export async function loadFundamentalsSnapshot(
   }
 
   inFlightFundamentalsSnapshotPromise = (async () => {
-    const endpoint = `./fundamentals-snapshot.json?t=${Date.now()}`;
+    const cacheBuster = Date.now();
+    const candidateUrls = [
+      `https://raw.githubusercontent.com/feynmanwyckoff-cmyk/nostradamus/main/public/fundamentals-snapshot.json?t=${cacheBuster}`,
+      `./fundamentals-snapshot.json?t=${cacheBuster}`,
+      `./public/fundamentals-snapshot.json?t=${cacheBuster}`
+    ];
+
+    let bestDoc: FundamentalsSnapshotDocument | null = cachedFundamentalsSnapshotDoc;
+
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 5000);
-      const res = await fetch(endpoint, {
-        signal: controller.signal,
-        cache: 'no-store'
-      });
-      clearTimeout(timer);
-      if (res.ok) {
-        const text = await res.text();
-        const parsed = JSON.parse(text) as FundamentalsSnapshotDocument;
-        cachedFundamentalsSnapshotDoc = parsed;
-        recordSyncDiagnostic({
-          ticker: 'GLOBAL',
-          stage: 'FUNDAMENTALS_SNAPSHOT',
-          endpoint: './fundamentals-snapshot.json',
-          payloadBytes: text.length,
-          httpStatus: res.status,
-          status:
-            parsed.provenanceMode === 'AUTOMATED_FETCH' ? 'OK' : 'FALLBACK_USED',
-          errorDetail:
-            parsed.provenanceMode === 'BOOTSTRAP_PLACEHOLDER'
-              ? 'Snapshot berstatus BOOTSTRAP_PLACEHOLDER (menunggu GitHub Actions AUTOMATED_FETCH).'
-              : undefined,
-          fallbackSource:
-            parsed.provenanceMode === 'BOOTSTRAP_PLACEHOLDER'
-              ? 'HARDCODED_SEED'
-              : 'FUNDAMENTALS_JSON'
-        });
-        return parsed;
+      for (const endpoint of candidateUrls) {
+        const cleanEndpointLabel = endpoint.split('?')[0];
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 5500);
+          const res = await fetch(endpoint, {
+            signal: controller.signal,
+            cache: 'no-store'
+          });
+          clearTimeout(timer);
+
+          if (!res.ok) {
+            recordSyncDiagnostic({
+              ticker: 'GLOBAL',
+              stage: 'FUNDAMENTALS_SNAPSHOT',
+              endpoint: cleanEndpointLabel,
+              httpStatus: res.status,
+              status: 'FALLBACK_USED',
+              errorDetail: `HTTP ${res.status} pada ${cleanEndpointLabel}; melanjutkan ke URL fallback berikutnya.`,
+              fallbackSource: 'HARDCODED_SEED'
+            });
+            continue;
+          }
+
+          const text = await res.text();
+          let parsed: FundamentalsSnapshotDocument | null = null;
+          try {
+            parsed = JSON.parse(text) as FundamentalsSnapshotDocument;
+          } catch {
+            recordSyncDiagnostic({
+              ticker: 'GLOBAL',
+              stage: 'FUNDAMENTALS_SNAPSHOT',
+              endpoint: cleanEndpointLabel,
+              payloadBytes: text.length,
+              httpStatus: res.status,
+              status: 'FALLBACK_USED',
+              errorDetail: `Respons bukan JSON valid pada ${cleanEndpointLabel}; mencoba fallback berikutnya.`,
+              fallbackSource: 'HARDCODED_SEED'
+            });
+            continue;
+          }
+
+          if (!parsed || typeof parsed !== 'object' || !parsed.tickers) {
+            recordSyncDiagnostic({
+              ticker: 'GLOBAL',
+              stage: 'FUNDAMENTALS_SNAPSHOT',
+              endpoint: cleanEndpointLabel,
+              payloadBytes: text.length,
+              httpStatus: res.status,
+              status: 'FALLBACK_USED',
+              errorDetail: `Skema JSON tidak memiliki objek tickers pada ${cleanEndpointLabel}.`,
+              fallbackSource: 'HARDCODED_SEED'
+            });
+            continue;
+          }
+
+          bestDoc = parsed;
+          cachedFundamentalsSnapshotDoc = parsed;
+
+          // Seed any pre-computed ADTV from AUTOMATED_FETCH snapshot only as FUNDAMENTALS_JSON (not LIVE_YAHOO_API)
+          const isAutomated = parsed.provenanceMode === 'AUTOMATED_FETCH';
+          recordSyncDiagnostic({
+            ticker: 'GLOBAL',
+            stage: 'FUNDAMENTALS_SNAPSHOT',
+            endpoint: cleanEndpointLabel,
+            payloadBytes: text.length,
+            httpStatus: res.status,
+            status: isAutomated ? 'OK' : 'FALLBACK_USED',
+            errorDetail: isAutomated
+              ? `Berhasil memuat fundamentals-snapshot.json (${Object.keys(parsed.tickers).length} emiten, AUTOMATED_FETCH) dari ${cleanEndpointLabel}.`
+              : `Snapshot dari ${cleanEndpointLabel} masih berstatus BOOTSTRAP_PLACEHOLDER; mencoba URL berikutnya jika ada.`,
+            fallbackSource: isAutomated ? 'FUNDAMENTALS_JSON' : 'HARDCODED_SEED'
+          });
+
+          // If we got an AUTOMATED_FETCH document (with real ticker entries), stop cascading immediately.
+          // If it's BOOTSTRAP_PLACEHOLDER on Priority 1, still check Priority 2/3 in case local build has fresher data.
+          if (isAutomated && Object.keys(parsed.tickers).length > 0) {
+            return parsed;
+          }
+        } catch (err) {
+          recordSyncDiagnostic({
+            ticker: 'GLOBAL',
+            stage: 'FUNDAMENTALS_SNAPSHOT',
+            endpoint: cleanEndpointLabel,
+            status: 'FALLBACK_USED',
+            errorDetail:
+              err instanceof Error
+                ? `${err.message} pada ${cleanEndpointLabel}`
+                : `Gagal memuat ${cleanEndpointLabel}`,
+            fallbackSource: 'HARDCODED_SEED'
+          });
+        }
       }
-      recordSyncDiagnostic({
-        ticker: 'GLOBAL',
-        stage: 'FUNDAMENTALS_SNAPSHOT',
-        endpoint: './fundamentals-snapshot.json',
-        httpStatus: res.status,
-        status: 'FALLBACK_USED',
-        errorDetail: `HTTP ${res.status} saat memuat fundamentals-snapshot.json`,
-        fallbackSource: 'HARDCODED_SEED'
-      });
-    } catch (err) {
-      recordSyncDiagnostic({
-        ticker: 'GLOBAL',
-        stage: 'FUNDAMENTALS_SNAPSHOT',
-        endpoint: './fundamentals-snapshot.json',
-        status: 'FALLBACK_USED',
-        errorDetail: err instanceof Error ? err.message : 'Gagal memuat fundamentals-snapshot.json',
-        fallbackSource: 'HARDCODED_SEED'
-      });
     } finally {
       inFlightFundamentalsSnapshotPromise = null;
     }
-    return cachedFundamentalsSnapshotDoc;
+
+    return bestDoc;
   })();
 
   return inFlightFundamentalsSnapshotPromise;
@@ -557,6 +648,9 @@ export async function loadFundamentalsSnapshot(
  * 2. LIVE_YAHOO_API (from on-demand Yahoo timeseries/quoteSummary sync)
  * 3. FUNDAMENTALS_JSON (ONLY if provenanceMode === 'AUTOMATED_FETCH' in public/fundamentals-snapshot.json)
  * 4. HARDCODED_SEED (if provenanceMode === 'BOOTSTRAP_PLACEHOLDER' or unpopulated) -> triggers SEED_WARN & caps Grade at C
+ *
+ * FIX 3: Strict 20D ADTV Priority Order:
+ * USER_OVERRIDE > LIVE_YAHOO_API (chart 3mo / liveChartAdtvMemoryCache) > FUNDAMENTALS_JSON (AUTOMATED_FETCH) > HARDCODED_SEED
  */
 export function resolveTickerFundamentalOverlay(
   ticker: string,
@@ -574,6 +668,8 @@ export function resolveTickerFundamentalOverlay(
   revenueTTMIdr?: number;
   operatingProfitTTMIdr?: number;
   netIncomeTTMIdr?: number;
+  netIncomeYoYPct?: number;
+  operatingProfitYoYPct?: number;
   equityAttributableIdr?: number;
   totalDebtIdr?: number;
   totalAssetsIdr?: number;
@@ -593,6 +689,7 @@ export function resolveTickerFundamentalOverlay(
   const clean = ticker.trim().toUpperCase().replace(/\.JK$/i, '');
   const userOverride = getFundamentalUserOverride(clean);
   const liveEntry = liveFundamentalsMemoryCache.get(clean);
+  const liveAdtvEntry = liveChartAdtvMemoryCache.get(clean);
   const snapEntry = cachedFundamentalsSnapshotDoc?.tickers?.[clean];
 
   const verifiedSnapEntry =
@@ -639,6 +736,15 @@ export function resolveTickerFundamentalOverlay(
   const netIncomeTTMIdr =
     userOverride?.netIncomeTTM ??
     (typeof baseRecord?.netIncomeTTM === 'number' ? baseRecord.netIncomeTTM : undefined);
+  const netIncomeYoYPct =
+    typeof baseRecord?.netIncomeYoYPct === 'number' && Number.isFinite(baseRecord.netIncomeYoYPct)
+      ? baseRecord.netIncomeYoYPct
+      : undefined;
+  const operatingProfitYoYPct =
+    typeof baseRecord?.operatingProfitYoYPct === 'number' &&
+    Number.isFinite(baseRecord.operatingProfitYoYPct)
+      ? baseRecord.operatingProfitYoYPct
+      : undefined;
   const equityAttributableIdr =
     userOverride?.equityAttributable ??
     (typeof baseRecord?.equityAttributable === 'number' ? baseRecord.equityAttributable : undefined);
@@ -680,7 +786,11 @@ export function resolveTickerFundamentalOverlay(
       ? Number((totalDebtIdr / equityAttributableIdr).toFixed(2))
       : catalogEntry.defaultDer;
 
-  // Resolve 20-Day ADTV provenance priority: USER_OVERRIDE > Chart 20D Volume > Snapshot ADTV > undefined (proxy fallback)
+  // FIX 3: Resolve 20-Day ADTV provenance priority:
+  // 1. USER_OVERRIDE
+  // 2. LIVE_YAHOO_API (liveChartAdtvMemoryCache from chart 3mo, or direct live chartAdtv20dIdr, or liveFundamentalsMemoryCache)
+  // 3. FUNDAMENTALS_JSON (AUTOMATED_FETCH in fundamentals-snapshot.json)
+  // 4. HARDCODED_SEED (undefined here -> falls back to catalog seed with SEED_WARN)
   let adtv20dIdr: number | undefined = undefined;
   let adtvSource: DataSourceType | undefined = undefined;
   let adtvAsOfDate: string | undefined = undefined;
@@ -689,10 +799,26 @@ export function resolveTickerFundamentalOverlay(
     adtv20dIdr = userOverride.adtv20dIdr;
     adtvSource = 'USER_OVERRIDE';
     adtvAsOfDate = userOverride.updatedAt;
-  } else if (typeof chartAdtv20dIdr === 'number' && chartAdtv20dIdr > 0) {
+  } else if (liveAdtvEntry && liveAdtvEntry.liveAdtv20dIdr > 0) {
+    adtv20dIdr = liveAdtvEntry.liveAdtv20dIdr;
+    adtvSource = 'LIVE_YAHOO_API';
+    adtvAsOfDate = liveAdtvEntry.liveAdtvAsOfDate;
+  } else if (
+    typeof chartAdtv20dIdr === 'number' &&
+    chartAdtv20dIdr > 0 &&
+    chartAdtvSource === 'LIVE_YAHOO_API'
+  ) {
     adtv20dIdr = chartAdtv20dIdr;
-    adtvSource = chartAdtvSource || 'LIVE_YAHOO_API';
+    adtvSource = 'LIVE_YAHOO_API';
     adtvAsOfDate = chartAdtvAsOfDate || new Date().toISOString().slice(0, 10);
+  } else if (
+    liveEntry &&
+    typeof liveEntry.adtv20dIdr === 'number' &&
+    liveEntry.adtv20dIdr > 0
+  ) {
+    adtv20dIdr = liveEntry.adtv20dIdr;
+    adtvSource = 'LIVE_YAHOO_API';
+    adtvAsOfDate = liveEntry.adtvAsOfDate || liveEntry.asOfDate || new Date().toISOString().slice(0, 10);
   } else if (
     snapEntry &&
     (snapEntry.provenanceMode === 'AUTOMATED_FETCH' ||
@@ -703,6 +829,10 @@ export function resolveTickerFundamentalOverlay(
     adtv20dIdr = snapEntry.adtv20dIdr;
     adtvSource = 'FUNDAMENTALS_JSON';
     adtvAsOfDate = snapEntry.adtvAsOfDate || snapEntry.asOfDate || undefined;
+  } else if (typeof chartAdtv20dIdr === 'number' && chartAdtv20dIdr > 0) {
+    adtv20dIdr = chartAdtv20dIdr;
+    adtvSource = chartAdtvSource || 'LIVE_YAHOO_API';
+    adtvAsOfDate = chartAdtvAsOfDate || new Date().toISOString().slice(0, 10);
   }
 
   const fundamentalsAsOfDate =
@@ -736,6 +866,8 @@ export function resolveTickerFundamentalOverlay(
     revenueTTMIdr,
     operatingProfitTTMIdr,
     netIncomeTTMIdr,
+    netIncomeYoYPct,
+    operatingProfitYoYPct,
     equityAttributableIdr,
     totalDebtIdr,
     totalAssetsIdr: typeof baseRecord?.totalAssets === 'number' ? baseRecord.totalAssets : undefined,
@@ -765,8 +897,11 @@ export async function tryFetchLiveTickerFundamentalsOnDemand(
   const clean = ticker.trim().toUpperCase().replace(/\.JK$/i, '');
   const yfSym = `${clean}.JK`;
 
-  // 1. Pull Chart v8 3mo to extract real 20D volume * close ADTV
+  // 1. Pull Chart v8 3mo to extract real 20D volume * close ADTV (automatically locked into liveChartAdtvMemoryCache)
   const chartRes = await fetchSingleChartViaBrowserRelay(yfSym, '3mo');
+  if (chartRes?.adtv20dIdr && chartRes.adtv20dIdr > 0) {
+    setLiveChartAdtvCacheEntry(clean, chartRes.adtv20dIdr, chartRes.adtvAsOfDate);
+  }
 
   // 2. Probe quoteSummary via relay; record diagnostic cleanly if 401/403 Crumb required
   const qsUrl = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(
@@ -774,6 +909,8 @@ export async function tryFetchLiveTickerFundamentalsOnDemand(
   )}?modules=financialData,defaultKeyStatistics`;
   const qsData = await fetchYahooJsonViaBrowserRelay(qsUrl, 5500);
   const qsResult = qsData?.quoteSummary?.result?.[0];
+
+  const lockedLiveAdtv = liveChartAdtvMemoryCache.get(clean);
 
   if (qsResult?.financialData) {
     const fd = qsResult.financialData;
@@ -788,6 +925,10 @@ export async function tryFetchLiveTickerFundamentalsOnDemand(
         ? Math.round(bvps * shares)
         : undefined;
 
+    const resolvedAdtv = chartRes?.adtv20dIdr ?? lockedLiveAdtv?.liveAdtv20dIdr ?? null;
+    const resolvedAdtvDate =
+      chartRes?.adtvAsOfDate ?? lockedLiveAdtv?.liveAdtvAsOfDate ?? new Date().toISOString().slice(0, 10);
+
     const liveEntry: FundamentalsSnapshotTickerEntry = {
       ticker: clean,
       provenanceMode: typeof rev === 'number' && rev > 0 ? 'AUTOMATED_FETCH' : 'BOOTSTRAP_PLACEHOLDER',
@@ -800,9 +941,9 @@ export async function tryFetchLiveTickerFundamentalsOnDemand(
       netIncomeTTM: typeof ni === 'number' ? ni : null,
       equityAttributable: typeof eq === 'number' ? eq : null,
       sharesOutstanding: typeof shares === 'number' ? shares : null,
-      adtv20dIdr: chartRes?.adtv20dIdr ?? null,
-      adtvAsOfDate: chartRes?.adtvAsOfDate ?? new Date().toISOString().slice(0, 10),
-      adtvProvenanceMode: chartRes?.adtv20dIdr ? 'AUTOMATED_FETCH' : 'BOOTSTRAP_PLACEHOLDER'
+      adtv20dIdr: resolvedAdtv,
+      adtvAsOfDate: resolvedAdtvDate,
+      adtvProvenanceMode: resolvedAdtv ? 'AUTOMATED_FETCH' : 'BOOTSTRAP_PLACEHOLDER'
     };
     liveFundamentalsMemoryCache.set(clean, liveEntry);
     recordSyncDiagnostic({
@@ -829,14 +970,17 @@ export async function tryFetchLiveTickerFundamentalsOnDemand(
       : 'HARDCODED_SEED'
   });
 
-  if (chartRes?.adtv20dIdr) {
+  const activeLiveAdtv = chartRes?.adtv20dIdr ?? lockedLiveAdtv?.liveAdtv20dIdr;
+  const activeLiveAdtvDate = chartRes?.adtvAsOfDate ?? lockedLiveAdtv?.liveAdtvAsOfDate;
+
+  if (activeLiveAdtv && activeLiveAdtv > 0) {
     const partialEntry: FundamentalsSnapshotTickerEntry = {
       ...(cachedFundamentalsSnapshotDoc?.tickers?.[clean] || {
         ticker: clean,
         provenanceMode: 'BOOTSTRAP_PLACEHOLDER'
       }),
-      adtv20dIdr: chartRes.adtv20dIdr,
-      adtvAsOfDate: chartRes.adtvAsOfDate || new Date().toISOString().slice(0, 10),
+      adtv20dIdr: activeLiveAdtv,
+      adtvAsOfDate: activeLiveAdtvDate || new Date().toISOString().slice(0, 10),
       adtvProvenanceMode: 'AUTOMATED_FETCH'
     };
     liveFundamentalsMemoryCache.set(clean, partialEntry);
@@ -1237,6 +1381,10 @@ async function fetchSingleChartViaBrowserRelay(
       ? new Date(latestTs * 1000).toISOString().slice(0, 10)
       : new Date().toISOString().slice(0, 10);
 
+  if (computedAdtv20dIdr && computedAdtv20dIdr > 0) {
+    setLiveChartAdtvCacheEntry(cleanTicker, computedAdtv20dIdr, priceAsOfDate);
+  }
+
   recordSyncDiagnostic({
     ticker: cleanTicker,
     stage: 'CHART_OHLCV',
@@ -1245,9 +1393,15 @@ async function fetchSingleChartViaBrowserRelay(
     httpStatus: 200,
     status: 'OK',
     errorDetail: computedAdtv20dIdr
-      ? `OHLCV + 20D Volume ADTV berhasil diekstrak (${last20Turnovers.length} hari bursa).`
+      ? `OHLCV + 20D Volume ADTV berhasil diekstrak (${last20Turnovers.length} hari bursa, dikunci di liveChartAdtvMemoryCache).`
       : 'OHLCV berhasil diekstrak (tanpa array volume).'
   });
+
+  const lockedAdtv = getLiveChartAdtvCacheEntry(cleanTicker);
+  const finalAdtv20dIdr = computedAdtv20dIdr ?? lockedAdtv?.liveAdtv20dIdr;
+  const finalAdtvAsOfDate = computedAdtv20dIdr
+    ? priceAsOfDate
+    : lockedAdtv?.liveAdtvAsOfDate ?? priceAsOfDate;
 
   return {
     symbol,
@@ -1257,9 +1411,9 @@ async function fetchSingleChartViaBrowserRelay(
     closes: closes.length >= 2 ? closes : [prevClose, lastPrice],
     timestamp: timestamps.length === closes.length ? timestamps : undefined,
     shortName: meta.longName || meta.shortName,
-    adtv20dIdr: computedAdtv20dIdr,
-    adtvAsOfDate: priceAsOfDate,
-    adtvSource: computedAdtv20dIdr ? 'LIVE_YAHOO_API' : undefined,
+    adtv20dIdr: finalAdtv20dIdr,
+    adtvAsOfDate: finalAdtvAsOfDate,
+    adtvSource: finalAdtv20dIdr ? 'LIVE_YAHOO_API' : undefined,
     priceSource: 'LIVE_YAHOO_API',
     priceAsOfDate,
     marketState: typeof meta.marketState === 'string' ? meta.marketState : undefined
@@ -1495,7 +1649,24 @@ function setCachedLiveQuotes(map: Record<string, SparkSeriesItem>): void {
   const now = Date.now();
   for (const [sym, item] of Object.entries(map)) {
     if (item && item.lastPrice > 0) {
-      liveQuoteMemoryCache.set(sym, { item, fetchedAt: now });
+      if (item.adtv20dIdr && item.adtv20dIdr > 0 && item.adtvSource === 'LIVE_YAHOO_API') {
+        setLiveChartAdtvCacheEntry(
+          sym,
+          item.adtv20dIdr,
+          item.adtvAsOfDate || item.priceAsOfDate || new Date().toISOString().slice(0, 10)
+        );
+      }
+      const lockedAdtv = getLiveChartAdtvCacheEntry(sym);
+      const mergedItem: SparkSeriesItem =
+        lockedAdtv && (!item.adtv20dIdr || item.adtvSource !== 'LIVE_YAHOO_API')
+          ? {
+              ...item,
+              adtv20dIdr: lockedAdtv.liveAdtv20dIdr,
+              adtvAsOfDate: lockedAdtv.liveAdtvAsOfDate,
+              adtvSource: 'LIVE_YAHOO_API'
+            }
+          : item;
+      liveQuoteMemoryCache.set(sym, { item: mergedItem, fetchedAt: now });
     }
   }
 }
@@ -1612,11 +1783,19 @@ export async function fetchYahooChartSeries(
         cachedLocalServerAvailable = true;
         const item = (await srvRes.json()) as SparkSeriesItem;
         if (item && item.lastPrice > 0 && Array.isArray(item.closes)) {
-          setCachedLiveQuotes({ [symbol]: item });
-          if (embeddedSnapshot.data) {
-            embeddedSnapshot.data[symbol] = item;
+          if (item.adtv20dIdr && item.adtv20dIdr > 0) {
+            setLiveChartAdtvCacheEntry(
+              symbol,
+              item.adtv20dIdr,
+              item.adtvAsOfDate || item.priceAsOfDate || new Date().toISOString().slice(0, 10)
+            );
           }
-          return item;
+          setCachedLiveQuotes({ [symbol]: item });
+          const cachedItem = getCachedLiveQuote(symbol, LIVE_QUOTE_CACHE_TTL_MS) || item;
+          if (embeddedSnapshot.data) {
+            embeddedSnapshot.data[symbol] = cachedItem;
+          }
+          return cachedItem;
         }
       } else if (srvRes.status === 404) {
         cachedLocalServerAvailable = false;
@@ -1630,22 +1809,23 @@ export async function fetchYahooChartSeries(
       const relayItem = await fetchSingleChartViaBrowserRelay(symbol, range);
       if (relayItem && relayItem.lastPrice > 0 && Array.isArray(relayItem.closes)) {
         setCachedLiveQuotes({ [symbol]: relayItem });
+        const cachedItem = getCachedLiveQuote(symbol, LIVE_QUOTE_CACHE_TTL_MS) || relayItem;
         if (embeddedSnapshot.data) {
-          embeddedSnapshot.data[symbol] = relayItem;
+          embeddedSnapshot.data[symbol] = cachedItem;
         }
-        return relayItem;
+        return cachedItem;
       }
     } catch {
       // Fall back to snapshot below
     }
   }
 
-  // Fallback: refresh/read from GitHub Cloud API Snapshot
+  // Fallback: refresh/read from GitHub Cloud API Snapshot (NEVER overwrite locked live 20D ADTV from range=3mo)
   const snapshot = await loadStaticMarketSnapshot(!canUseLocalExpressBackend());
   const snapItem = snapshot?.data?.[symbol];
   if (snapItem && snapItem.lastPrice > 0 && Array.isArray(snapItem.closes)) {
     setCachedLiveQuotes({ [symbol]: snapItem });
-    return snapItem;
+    return getCachedLiveQuote(symbol, LIVE_QUOTE_CACHE_TTL_MS) || snapItem;
   }
 
   // Fallback for known IDX catalog tickers (including suspended/FCA tickers) so manual lookup never errors
@@ -1989,14 +2169,28 @@ export async function fetchLiveIdxTicker(rawTicker: string): Promise<StockMetric
   // Always bypass memory cache on single-ticker on-demand inspect and request 1y chart so YTD return is 100% exact
   const [directStockChart, batchMap] = await Promise.all([
     fetchYahooChartSeries(yfSymbol, '1y', true).catch(() => null),
-    fetchYahooSparkBatch([yfSymbol, '^JKSE'], '6mo', undefined, true, true)
+    fetchYahooSparkBatch([yfSymbol, '^JKSE'], '6mo', undefined, true, true),
+    loadFundamentalsSnapshot().catch(() => null)
   ]);
 
-  const stockSeries =
+  let stockSeries =
     directStockChart && directStockChart.lastPrice > 0
       ? directStockChart
       : batchMap[yfSymbol] || (await fetchYahooChartSeries(yfSymbol, '1y', true));
   const ihsgSeries = batchMap['^JKSE'] || (await fetchYahooChartSeries('^JKSE', '6mo', true));
+
+  // FIX 3: If range=1y fell back to snapshot and we don't yet have a locked live 20D ADTV, try range=3mo chart
+  if (!getLiveChartAdtvCacheEntry(cleanTicker) && (!stockSeries.adtv20dIdr || stockSeries.adtvSource !== 'LIVE_YAHOO_API')) {
+    const chart3mo = await fetchYahooChartSeries(yfSymbol, '3mo', true).catch(() => null);
+    if (chart3mo && chart3mo.adtv20dIdr && chart3mo.adtv20dIdr > 0) {
+      stockSeries = {
+        ...stockSeries,
+        adtv20dIdr: chart3mo.adtv20dIdr,
+        adtvAsOfDate: chart3mo.adtvAsOfDate || stockSeries.priceAsOfDate,
+        adtvSource: chart3mo.adtvSource || 'LIVE_YAHOO_API'
+      };
+    }
+  }
 
   const lastPrice = Math.round(stockSeries.lastPrice);
   const isLiquid = evaluateSeriesLiquidity(stockSeries.closes, lastPrice);
@@ -2031,6 +2225,14 @@ export async function fetchLiveIdxTicker(rawTicker: string): Promise<StockMetric
     stockSeries.shortName ||
     `${cleanTicker} Tbk`;
 
+  const overlay = resolveTickerFundamentalOverlay(
+    cleanTicker,
+    catalogMatch,
+    stockSeries.adtv20dIdr,
+    stockSeries.adtvSource,
+    stockSeries.adtvAsOfDate || stockSeries.priceAsOfDate
+  );
+
   return enrichStockMetrics({
     ticker: cleanTicker,
     idxTicker: `IDX:${cleanTicker}`,
@@ -2045,13 +2247,33 @@ export async function fetchLiveIdxTicker(rawTicker: string): Promise<StockMetric
     returnYTD,
     beta1Y,
     volatilityAnn,
-    roe: catalogMatch.defaultRoe,
-    debtToEquity: catalogMatch.defaultDer,
-    operatingMargin: catalogMatch.defaultOpMargin,
+    roe: overlay.roe,
+    debtToEquity: overlay.debtToEquity,
+    operatingMargin: overlay.operatingMargin,
+    revenueTTMIdr: overlay.revenueTTMIdr,
+    operatingProfitTTMIdr: overlay.operatingProfitTTMIdr,
+    netIncomeTTMIdr: overlay.netIncomeTTMIdr,
+    equityAttributableIdr: overlay.equityAttributableIdr,
+    totalDebtIdr: overlay.totalDebtIdr,
+    cashAndEquivalentsIdr: overlay.cashAndEquivalentsIdr,
+    sharesOutstanding: overlay.sharesOutstanding,
+    ocfTTMIdr: overlay.ocfTTMIdr,
+    capexTTMIdr: overlay.capexTTMIdr,
+    daTTMIdr: overlay.daTTMIdr,
+    earningsGrowthYoYPct: overlay.netIncomeYoYPct,
+    operatingProfitGrowthYoYPct: overlay.operatingProfitYoYPct,
+    adtv20dIdr: overlay.adtv20dIdr,
+    adtvSource: overlay.adtvSource,
+    adtvAsOfDate: overlay.adtvAsOfDate,
+    priceSource: stockSeries.priceSource || 'LIVE_YAHOO_API',
+    priceAsOfDate: stockSeries.priceAsOfDate || new Date().toISOString().slice(0, 10),
+    fundamentalsSource: overlay.fundamentalsSource,
+    fundamentalsAsOfDate: overlay.fundamentalsAsOfDate,
+    fundamentalsFiscalPeriod: overlay.fundamentalsFiscalPeriod,
+    fundamentalsNote: overlay.fundamentalsNote,
     isLiveFetched: true,
     isLiquid,
     dividendYieldPct: getEmitenDividendYield(cleanTicker, lastPrice),
-    adtv20dIdr: stockSeries.adtv20dIdr,
     lastSyncedAt: nowStr
   });
 }
@@ -2377,6 +2599,8 @@ export async function refreshLiveGlobalMacroAndIhsg(
           ocfTTMIdr: overlay.ocfTTMIdr,
           capexTTMIdr: overlay.capexTTMIdr,
           daTTMIdr: overlay.daTTMIdr,
+          earningsGrowthYoYPct: overlay.netIncomeYoYPct,
+          operatingProfitGrowthYoYPct: overlay.operatingProfitYoYPct,
           adtv20dIdr: overlay.adtv20dIdr,
           adtvSource: overlay.adtvSource,
           adtvAsOfDate: overlay.adtvAsOfDate,
