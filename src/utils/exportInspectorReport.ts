@@ -11,6 +11,7 @@ import {
   formatKseiFootnoteShortLabel
 } from '../data/idxKseiHscRegistry';
 import { formatIdrPriceDisplay } from './numberFormat';
+import { resolveUiNotificationBadgeMeta } from './dataLineageEngine';
 
 export interface InspectorExportPayload {
   stock: StockMetrics;
@@ -794,9 +795,10 @@ export function renderInspectorReportCanvas(
     joeliardiEval.valuationReport?.ui_notifications ?? joeliardiEval.uiNotifications ?? [];
   sCtx.font = '600 9.5px "Fira Code", monospace';
   const preparedUiNotifications = uiNotificationList.map((msg) => {
-    const wrappedLines = wrapCanvasText(sCtx, msg, LOGICAL_WIDTH - 76 - 142);
+    const badgeMeta = resolveUiNotificationBadgeMeta(msg);
+    const wrappedLines = wrapCanvasText(sCtx, msg, LOGICAL_WIDTH - 76 - 154);
     const boxH = Math.max(34, 14 + wrappedLines.length * 14);
-    return { msg, wrappedLines, boxH };
+    return { msg, badgeMeta, wrappedLines, boxH };
   });
   const uiNotificationsTotalH =
     preparedUiNotifications.length > 0
@@ -1954,32 +1956,44 @@ export function renderInspectorReportCanvas(
 
   curY += 66;
 
-  // Optional UI Notifications Alert Banner (e.g., Capex Override Anomaly Warning)
+  // Optional UI Notifications Alert Banner (Dynamic Context-Aware Warning Badges)
   if (preparedUiNotifications.length > 0) {
     preparedUiNotifications.forEach((notifItem) => {
+      const { badgeMeta } = notifItem;
       drawRoundedRect(ctx, 38, curY, LOGICAL_WIDTH - 76, notifItem.boxH, 4);
-      ctx.fillStyle = 'rgba(245, 158, 11, 0.15)';
+      ctx.fillStyle = badgeMeta.canvasBoxFillRgba;
       ctx.fill();
-      ctx.strokeStyle = 'rgba(245, 158, 11, 0.72)';
+      ctx.strokeStyle = badgeMeta.canvasBoxStrokeRgba;
       ctx.stroke();
 
       // Left Pill Badge
-      drawRoundedRect(ctx, 50, curY + 8, 110, 18, 3);
-      ctx.fillStyle = '#D97706';
+      ctx.font = '800 8.2px "Fira Code", monospace';
+      const pillW = 122;
+      drawRoundedRect(ctx, 50, curY + 8, pillW, 18, 3);
+      ctx.fillStyle = badgeMeta.pillBgHex;
       ctx.fill();
-      ctx.fillStyle = '#FFFFFF';
-      ctx.font = '800 8.5px "Fira Code", monospace';
-      ctx.fillText('CAPEX OVERRIDE', 58, curY + 20);
+      ctx.fillStyle = badgeMeta.pillTextHex;
+      drawTextAutoFit(
+        ctx,
+        badgeMeta.badgeLabel,
+        56,
+        curY + 20,
+        pillW - 12,
+        800,
+        8.2,
+        7.0,
+        '"Fira Code", monospace'
+      );
 
       // Wrapped Warning Lines
-      ctx.fillStyle = '#FDE68A';
+      ctx.fillStyle = badgeMeta.canvasTextHex;
       notifItem.wrappedLines.forEach((ln, lIdx) => {
         drawTextAutoFit(
           ctx,
           ln,
-          170,
+          182,
           curY + 19 + lIdx * 14,
-          LOGICAL_WIDTH - 76 - 142,
+          LOGICAL_WIDTH - 76 - 154,
           600,
           9.5,
           7.8,

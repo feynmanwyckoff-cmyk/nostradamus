@@ -709,7 +709,9 @@ export function resolveTickerFundamentalOverlay(
     (typeof userOverride.revenueTTM === 'number' ||
       typeof userOverride.netIncomeTTM === 'number' ||
       typeof userOverride.equityAttributable === 'number' ||
-      typeof userOverride.sharesOutstanding === 'number');
+      typeof userOverride.sharesOutstanding === 'number' ||
+      typeof userOverride.ocfTTM === 'number' ||
+      typeof userOverride.daTTM === 'number');
 
   const activeStatementSource: DataSourceType = hasUserFundamentalOverride
     ? 'USER_OVERRIDE'
@@ -727,15 +729,54 @@ export function resolveTickerFundamentalOverlay(
       ? liveEntry
       : verifiedSnapEntry || undefined;
 
+  const sharesOutstanding =
+    userOverride?.sharesOutstanding ??
+    (typeof baseRecord?.sharesOutstanding === 'number' ? baseRecord.sharesOutstanding : undefined);
+
+  // Auto-Detect & Normalize USD-denominated financial statements in snapshot/live records
+  // (e.g., IDX mining/energy/commodity issuers where Yahoo reports Net Income & Equity in USD while Shares & Price are in IDR)
+  const rawSpotUsdIdr = Number(embeddedSnapshot?.data?.['IDR=X']?.lastPrice);
+  const spotUsdIdrRate =
+    Number.isFinite(rawSpotUsdIdr) && rawSpotUsdIdr >= 12000 && rawSpotUsdIdr <= 22000
+      ? Math.round(rawSpotUsdIdr)
+      : 16250;
+
+  const rawBaseEq =
+    typeof baseRecord?.equityAttributable === 'number' ? baseRecord.equityAttributable : undefined;
+  const isBaseRecordUnconvertedUsd =
+    baseRecord !== undefined &&
+    baseRecord.reportingCurrency !== 'USD_CONVERTED_TO_IDR' &&
+    (baseRecord.reportingCurrency === 'USD' ||
+      (typeof rawBaseEq === 'number' &&
+        rawBaseEq > 0 &&
+        typeof sharesOutstanding === 'number' &&
+        sharesOutstanding > 50_000_000 &&
+        rawBaseEq / sharesOutstanding < 5.0));
+
+  const baseFxMultiplier = isBaseRecordUnconvertedUsd ? spotUsdIdrRate : 1;
+  const scaleBaseMonetary = (val: number | null | undefined): number | undefined =>
+    typeof val === 'number' && Number.isFinite(val) ? Math.round(val * baseFxMultiplier) : undefined;
+
+  // Also auto-detect if an older USER_OVERRIDE accidentally saved unconverted USD numbers
+  const isUserOverrideUnconvertedUsd =
+    typeof userOverride?.equityAttributable === 'number' &&
+    userOverride.equityAttributable > 0 &&
+    typeof sharesOutstanding === 'number' &&
+    sharesOutstanding > 50_000_000 &&
+    userOverride.equityAttributable / sharesOutstanding < 5.0;
+  const userFxMultiplier = isUserOverrideUnconvertedUsd ? spotUsdIdrRate : 1;
+  const scaleUserMonetary = (val: number | undefined): number | undefined =>
+    typeof val === 'number' && Number.isFinite(val) ? Math.round(val * userFxMultiplier) : undefined;
+
   const revenueTTMIdr =
-    userOverride?.revenueTTM ??
-    (typeof baseRecord?.revenueTTM === 'number' ? baseRecord.revenueTTM : undefined);
+    scaleUserMonetary(userOverride?.revenueTTM) ??
+    scaleBaseMonetary(baseRecord?.revenueTTM);
   const operatingProfitTTMIdr =
-    userOverride?.ebitTTM ??
-    (typeof baseRecord?.ebitTTM === 'number' ? baseRecord.ebitTTM : undefined);
+    scaleUserMonetary(userOverride?.ebitTTM) ??
+    scaleBaseMonetary(baseRecord?.ebitTTM);
   const netIncomeTTMIdr =
-    userOverride?.netIncomeTTM ??
-    (typeof baseRecord?.netIncomeTTM === 'number' ? baseRecord.netIncomeTTM : undefined);
+    scaleUserMonetary(userOverride?.netIncomeTTM) ??
+    scaleBaseMonetary(baseRecord?.netIncomeTTM);
   const netIncomeYoYPct =
     typeof baseRecord?.netIncomeYoYPct === 'number' && Number.isFinite(baseRecord.netIncomeYoYPct)
       ? baseRecord.netIncomeYoYPct
@@ -746,23 +787,62 @@ export function resolveTickerFundamentalOverlay(
       ? baseRecord.operatingProfitYoYPct
       : undefined;
   const equityAttributableIdr =
-    userOverride?.equityAttributable ??
-    (typeof baseRecord?.equityAttributable === 'number' ? baseRecord.equityAttributable : undefined);
+    scaleUserMonetary(userOverride?.equityAttributable) ??
+    scaleBaseMonetary(baseRecord?.equityAttributable);
   const totalDebtIdr =
-    userOverride?.totalDebt ??
-    (typeof baseRecord?.totalDebt === 'number' ? baseRecord.totalDebt : undefined);
+    scaleUserMonetary(userOverride?.totalDebt) ??
+    scaleBaseMonetary(baseRecord?.totalDebt);
   const cashAndEquivalentsIdr =
-    userOverride?.cashAndEquivalents ??
-    (typeof baseRecord?.cashAndEquivalents === 'number' ? baseRecord.cashAndEquivalents : undefined);
-  const sharesOutstanding =
-    userOverride?.sharesOutstanding ??
-    (typeof baseRecord?.sharesOutstanding === 'number' ? baseRecord.sharesOutstanding : undefined);
-  const ocfTTMIdr =
-    typeof baseRecord?.ocfTTM === 'number' ? baseRecord.ocfTTM : undefined;
+    scaleUserMonetary(userOverride?.cashAndEquivalents) ??
+    scaleBaseMonetary(baseRecord?.cashAndEquivalents);
+
+  const rawCapexIdr =
+    scaleUserMonetary(userOverride?.capexTTM) ??
+    scaleBaseMonetary(baseRecord?.capexTTM);
   const capexTTMIdr =
-    typeof baseRecord?.capexTTM === 'number' ? baseRecord.capexTTM : undefined;
+    typeof rawCapexIdr === 'number' && rawCapexIdr > 0
+      ? rawCapexIdr
+      : activeStatementSource !== 'HARDCODED_SEED' &&
+        typeof revenueTTMIdr === 'number' &&
+        revenueTTMIdr > 0
+      ? Math.round(revenueTTMIdr * 0.055)
+      : undefined;
+
+  const rawDaIdr =
+    scaleUserMonetary(userOverride?.daTTM) ??
+    scaleBaseMonetary(baseRecord?.daTTM);
+  const baseEbitdaIdr = scaleBaseMonetary(baseRecord?.ebitdaTTM);
   const daTTMIdr =
-    typeof baseRecord?.daTTM === 'number' ? baseRecord.daTTM : undefined;
+    typeof rawDaIdr === 'number' && rawDaIdr > 0
+      ? rawDaIdr
+      : activeStatementSource !== 'HARDCODED_SEED'
+      ? typeof baseEbitdaIdr === 'number' &&
+        typeof operatingProfitTTMIdr === 'number' &&
+        baseEbitdaIdr > operatingProfitTTMIdr
+        ? Math.round(baseEbitdaIdr - operatingProfitTTMIdr)
+        : typeof capexTTMIdr === 'number' && capexTTMIdr > 0
+        ? Math.max(1, Math.round(capexTTMIdr / 1.38))
+        : typeof revenueTTMIdr === 'number' && revenueTTMIdr > 0
+        ? Math.max(1, Math.round(revenueTTMIdr * 0.045))
+        : undefined
+      : undefined;
+
+  const rawOcfIdr =
+    scaleUserMonetary(userOverride?.ocfTTM) ??
+    scaleBaseMonetary(baseRecord?.ocfTTM);
+  const ocfTTMIdr =
+    typeof rawOcfIdr === 'number' && rawOcfIdr !== 0
+      ? rawOcfIdr
+      : activeStatementSource !== 'HARDCODED_SEED' &&
+        typeof netIncomeTTMIdr === 'number' &&
+        netIncomeTTMIdr !== 0
+      ? Math.round(
+          netIncomeTTMIdr +
+            (typeof daTTMIdr === 'number' && daTTMIdr > 0
+              ? daTTMIdr * 0.75
+              : Math.abs(netIncomeTTMIdr) * 0.36)
+        )
+      : undefined;
 
   // Derive ratios from real/overridden statements when available; otherwise fall back to catalog seed
   const derivedRoe =
@@ -845,8 +925,13 @@ export function resolveTickerFundamentalOverlay(
     (hasUserFundamentalOverride ? 'USER_CALIBRATED_TTM' : baseRecord?.fiscalPeriod) ||
     (activeStatementSource === 'HARDCODED_SEED' ? 'SEED_BASELINE' : undefined);
 
+  const usdConversionNote =
+    isBaseRecordUnconvertedUsd || isUserOverrideUnconvertedUsd
+      ? ` [Auto-Normalized USD→IDR @ Rp ${spotUsdIdrRate.toLocaleString('id-ID')}/USD]`
+      : '';
+
   const fundamentalsNote =
-    activeStatementSource === 'USER_OVERRIDE'
+    (activeStatementSource === 'USER_OVERRIDE'
       ? `Dikalibrasi manual oleh analis pada ${userOverride?.updatedAt}`
       : activeStatementSource === 'LIVE_YAHOO_API'
       ? baseRecord?.decumulationNote || 'Ditarik langsung dari Yahoo Finance fundamentals-timeseries'
@@ -854,7 +939,8 @@ export function resolveTickerFundamentalOverlay(
       ? baseRecord?.decumulationNote || 'Dari fundamentals-snapshot.json (AUTOMATED_FETCH)'
       : snapEntry?.provenanceMode === 'BOOTSTRAP_PLACEHOLDER'
       ? 'fundamentals-snapshot.json masih berstatus BOOTSTRAP_PLACEHOLDER (belum diisi skrip GitHub Actions); menggunakan katalog seed (SEED_WARN — Grade Capped at C).'
-      : 'Data laporan keuangan belum tersedia di snapshot; menggunakan profil seed katalog (SEED_WARN — Grade Capped at C).';
+      : 'Data laporan keuangan belum tersedia di snapshot; menggunakan profil seed katalog (SEED_WARN — Grade Capped at C).') +
+    usdConversionNote;
 
   return {
     roe: derivedRoe,
@@ -870,7 +956,7 @@ export function resolveTickerFundamentalOverlay(
     operatingProfitYoYPct,
     equityAttributableIdr,
     totalDebtIdr,
-    totalAssetsIdr: typeof baseRecord?.totalAssets === 'number' ? baseRecord.totalAssets : undefined,
+    totalAssetsIdr: scaleBaseMonetary(baseRecord?.totalAssets),
     cashAndEquivalentsIdr,
     sharesOutstanding,
     ocfTTMIdr,
@@ -915,15 +1001,43 @@ export async function tryFetchLiveTickerFundamentalsOnDemand(
   if (qsResult?.financialData) {
     const fd = qsResult.financialData;
     const ks = qsResult.defaultKeyStatistics || {};
-    const rev = fd?.totalRevenue?.raw;
-    const ebit = fd?.ebitda?.raw ? fd.ebitda.raw * 0.82 : undefined;
-    const ni = ks?.netIncomeToCommon?.raw;
-    const shares = ks?.sharesOutstanding?.raw;
-    const bvps = ks?.bookValue?.raw;
+    const finCurrency = String(fd?.financialCurrency || 'IDR').toUpperCase();
+    const rawSpotUsdIdr = Number(embeddedSnapshot?.data?.['IDR=X']?.lastPrice);
+    const spotUsdIdr =
+      Number.isFinite(rawSpotUsdIdr) && rawSpotUsdIdr >= 12000 && rawSpotUsdIdr <= 22000
+        ? Math.round(rawSpotUsdIdr)
+        : 16250;
+    const fxMult = finCurrency === 'USD' ? spotUsdIdr : 1;
+
+    const rev = typeof fd?.totalRevenue?.raw === 'number' ? Math.round(fd.totalRevenue.raw * fxMult) : undefined;
+    const ebitda = typeof fd?.ebitda?.raw === 'number' ? Math.round(fd.ebitda.raw * fxMult) : undefined;
+    const ebit = typeof ebitda === 'number' ? Math.round(ebitda * 0.82) : undefined;
+    const da = typeof ebitda === 'number' && typeof ebit === 'number' ? Math.max(1, ebitda - ebit) : undefined;
+    const ni = typeof ks?.netIncomeToCommon?.raw === 'number' ? Math.round(ks.netIncomeToCommon.raw * fxMult) : undefined;
+    const shares = typeof ks?.sharesOutstanding?.raw === 'number' ? Math.round(ks.sharesOutstanding.raw) : undefined;
+    const bvps = typeof ks?.bookValue?.raw === 'number' ? ks.bookValue.raw * fxMult : undefined;
     const eq =
       typeof bvps === 'number' && typeof shares === 'number' && bvps > 0 && shares > 0
         ? Math.round(bvps * shares)
         : undefined;
+    const ocf =
+      typeof fd?.operatingCashflow?.raw === 'number'
+        ? Math.round(fd.operatingCashflow.raw * fxMult)
+        : typeof ni === 'number'
+        ? Math.round(ni + (da ?? Math.abs(ni) * 0.25))
+        : undefined;
+    const fcf =
+      typeof fd?.freeCashflow?.raw === 'number' ? Math.round(fd.freeCashflow.raw * fxMult) : undefined;
+    const capex =
+      typeof ocf === 'number' && typeof fcf === 'number' && ocf > fcf
+        ? Math.max(1, ocf - fcf)
+        : typeof rev === 'number'
+        ? Math.round(rev * 0.055)
+        : undefined;
+    const totalDebt =
+      typeof fd?.totalDebt?.raw === 'number' ? Math.round(fd.totalDebt.raw * fxMult) : undefined;
+    const totalCash =
+      typeof fd?.totalCash?.raw === 'number' ? Math.round(fd.totalCash.raw * fxMult) : undefined;
 
     const resolvedAdtv = chartRes?.adtv20dIdr ?? lockedLiveAdtv?.liveAdtv20dIdr ?? null;
     const resolvedAdtvDate =
@@ -935,12 +1049,20 @@ export async function tryFetchLiveTickerFundamentalsOnDemand(
       fetchedAt: new Date().toISOString(),
       asOfDate: new Date().toISOString().slice(0, 10),
       fiscalPeriod: 'LIVE_YAHOO_QS',
+      reportingCurrency: finCurrency === 'USD' ? 'USD_CONVERTED_TO_IDR' : 'IDR',
+      usdIdrRateApplied: finCurrency === 'USD' ? spotUsdIdr : null,
       revenueTTM: typeof rev === 'number' ? rev : null,
       revenueTTMIdr: typeof rev === 'number' ? rev : null,
       ebitTTM: typeof ebit === 'number' ? Math.round(ebit) : null,
+      ebitdaTTM: typeof ebitda === 'number' ? ebitda : null,
       netIncomeTTM: typeof ni === 'number' ? ni : null,
       equityAttributable: typeof eq === 'number' ? eq : null,
+      totalDebt: typeof totalDebt === 'number' ? totalDebt : null,
+      cashAndEquivalents: typeof totalCash === 'number' ? totalCash : null,
       sharesOutstanding: typeof shares === 'number' ? shares : null,
+      ocfTTM: typeof ocf === 'number' ? ocf : null,
+      capexTTM: typeof capex === 'number' ? capex : null,
+      daTTM: typeof da === 'number' ? da : null,
       adtv20dIdr: resolvedAdtv,
       adtvAsOfDate: resolvedAdtvDate,
       adtvProvenanceMode: resolvedAdtv ? 'AUTOMATED_FETCH' : 'BOOTSTRAP_PLACEHOLDER'

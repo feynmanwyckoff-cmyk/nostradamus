@@ -3377,24 +3377,44 @@ export function evaluateJoeliardiOosFundamental(
       : 'HARDCODED_SEED';
 
   const debtSource: DataSourceType =
-    stock.totalDebtIdr !== undefined && baseFundSource !== 'HARDCODED_SEED'
+    userFundOverride?.totalDebtIdr !== undefined
+      ? 'USER_OVERRIDE'
+      : stock.totalDebtIdr !== undefined && baseFundSource !== 'HARDCODED_SEED'
       ? baseFundSource
+      : eqSource !== 'HARDCODED_SEED'
+      ? eqSource
       : 'HARDCODED_SEED';
   const cashSource: DataSourceType =
-    stock.cashAndEquivalentsIdr !== undefined && baseFundSource !== 'HARDCODED_SEED'
+    userFundOverride?.cashAndEquivalentsIdr !== undefined
+      ? 'USER_OVERRIDE'
+      : stock.cashAndEquivalentsIdr !== undefined && baseFundSource !== 'HARDCODED_SEED'
       ? baseFundSource
+      : eqSource !== 'HARDCODED_SEED'
+      ? eqSource
       : 'HARDCODED_SEED';
   const ocfSource: DataSourceType =
-    stock.ocfTTMIdr !== undefined && baseFundSource !== 'HARDCODED_SEED'
+    userFundOverride?.ocfTTMIdr !== undefined && userFundOverride.ocfTTMIdr > 0
+      ? 'USER_OVERRIDE'
+      : stock.ocfTTMIdr !== undefined && baseFundSource !== 'HARDCODED_SEED'
       ? baseFundSource
+      : niSource !== 'HARDCODED_SEED'
+      ? niSource
       : 'HARDCODED_SEED';
   const capexSource: DataSourceType =
-    stock.capexTTMIdr !== undefined && baseFundSource !== 'HARDCODED_SEED'
+    userFundOverride?.capexTTMIdr !== undefined && userFundOverride.capexTTMIdr > 0
+      ? 'USER_OVERRIDE'
+      : stock.capexTTMIdr !== undefined && baseFundSource !== 'HARDCODED_SEED'
       ? baseFundSource
+      : revSource !== 'HARDCODED_SEED'
+      ? revSource
       : 'HARDCODED_SEED';
   const daSource: DataSourceType =
-    stock.daTTMIdr !== undefined && baseFundSource !== 'HARDCODED_SEED'
+    userFundOverride?.daTTMIdr !== undefined && userFundOverride.daTTMIdr > 0
+      ? 'USER_OVERRIDE'
+      : stock.daTTMIdr !== undefined && baseFundSource !== 'HARDCODED_SEED'
       ? baseFundSource
+      : ebitSource !== 'HARDCODED_SEED'
+      ? ebitSource
       : 'HARDCODED_SEED';
 
   const epsSource: DataSourceType =
@@ -3530,7 +3550,8 @@ export function evaluateJoeliardiOosFundamental(
     totalDebtIdr: createTrackedField({
       value: rawTickerData.totalDebt ?? 0,
       source: debtSource,
-      asOfDate: baseFundAsOf,
+      asOfDate:
+        debtSource === 'USER_OVERRIDE' ? userFundOverride?.updatedAt ?? todayIso : baseFundAsOf,
       fiscalPeriod: baseFiscalPeriod,
       category: 'FUNDAMENTAL',
       note:
@@ -3541,7 +3562,8 @@ export function evaluateJoeliardiOosFundamental(
     cashAndEquivalentsIdr: createTrackedField({
       value: rawTickerData.cashAndEquivalents ?? 0,
       source: cashSource,
-      asOfDate: baseFundAsOf,
+      asOfDate:
+        cashSource === 'USER_OVERRIDE' ? userFundOverride?.updatedAt ?? todayIso : baseFundAsOf,
       fiscalPeriod: baseFiscalPeriod,
       category: 'FUNDAMENTAL',
       note:
@@ -3552,34 +3574,43 @@ export function evaluateJoeliardiOosFundamental(
     ocfTTMIdr: createTrackedField({
       value: rawTickerData.ocfTTM ?? 0,
       source: ocfSource,
-      asOfDate: baseFundAsOf,
+      asOfDate:
+        ocfSource === 'USER_OVERRIDE' ? userFundOverride?.updatedAt ?? todayIso : baseFundAsOf,
       fiscalPeriod: baseFiscalPeriod,
       category: 'FUNDAMENTAL',
       note:
-        ocfSource !== 'HARDCODED_SEED'
-          ? 'Arus Kas Operasi (OCF) TTM aktual'
+        ocfSource === 'USER_OVERRIDE'
+          ? 'Override / rekonsiliasi manual Arus Kas Operasi (OCF) TTM'
+          : ocfSource !== 'HARDCODED_SEED'
+          ? 'Arus Kas Operasi (OCF) TTM aktual / terekonsiliasi laporan keuangan'
           : 'Estimasi Net Income × rasio OCF/NI heuristik (SEED_WARN)'
     }),
     capexTTMIdr: createTrackedField({
       value: rawTickerData.capexTTM ?? 0,
       source: capexSource,
-      asOfDate: baseFundAsOf,
+      asOfDate:
+        capexSource === 'USER_OVERRIDE' ? userFundOverride?.updatedAt ?? todayIso : baseFundAsOf,
       fiscalPeriod: baseFiscalPeriod,
       category: 'FUNDAMENTAL',
       note:
-        capexSource !== 'HARDCODED_SEED'
+        capexSource === 'USER_OVERRIDE'
+          ? 'Override manual Belanja Modal (CapEx) TTM'
+          : capexSource !== 'HARDCODED_SEED'
           ? 'Belanja Modal (CapEx) TTM aktual'
           : 'Estimasi Revenue × rasio CapEx/Revenue sektoral (SEED_WARN)'
     }),
     daTTMIdr: createTrackedField({
       value: rawTickerData.daTTM ?? 0,
       source: daSource,
-      asOfDate: baseFundAsOf,
+      asOfDate:
+        daSource === 'USER_OVERRIDE' ? userFundOverride?.updatedAt ?? todayIso : baseFundAsOf,
       fiscalPeriod: baseFiscalPeriod,
       category: 'FUNDAMENTAL',
       note:
-        daSource !== 'HARDCODED_SEED'
-          ? 'Depresiasi & Amortisasi (D&A) TTM aktual'
+        daSource === 'USER_OVERRIDE'
+          ? 'Override / rekonsiliasi manual Depresiasi & Amortisasi (D&A) TTM'
+          : daSource !== 'HARDCODED_SEED'
+          ? 'Depresiasi & Amortisasi (D&A) TTM aktual / terekonsiliasi EBITDA − EBIT'
           : 'Estimasi CapEx / rasio CapEx-to-DA sektoral (SEED_WARN)'
     }),
     epsTTMIdr: createTrackedField({

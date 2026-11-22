@@ -442,9 +442,10 @@ export const RawDataAuditStrip: React.FC<RawDataAuditStripProps> = ({
               <button
                 type="button"
                 onClick={onAutoSyncSharesMarketCap}
+                title="Rekonsiliasi 1-klik: Menyelaraskan skala mata uang (USD→IDR bila terdeteksi), EPS×Shares, BVPS×Shares, dan Market Cap = Shares × Harga Live"
                 className="px-2.5 py-1 rounded-xs bg-emerald-700 hover:bg-emerald-600 text-white font-mono text-[10px] font-bold cursor-pointer transition-colors"
               >
-                Sinkronkan P0 Otomatis (Market Cap = Shares × Harga Live)
+                Sinkronkan &amp; Rekonsiliasi P0 Otomatis (Skala USD→IDR &amp; Market Cap = Shares × Harga Live)
               </button>
             )}
             {onOpenCalibrator && (

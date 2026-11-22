@@ -1477,7 +1477,11 @@ export function buildRawTickerDataFromStock(params: {
       : Math.max(100_000_000, Math.round(liveMarketCapIdr / Math.max(1, price)));
 
   const calibratedMarketCap =
-    userOverride?.sharesOutstanding && userOverride.sharesOutstanding > 0
+    (userOverride?.sharesOutstanding && userOverride.sharesOutstanding > 0) ||
+    (stock.sharesOutstanding &&
+      stock.sharesOutstanding > 0 &&
+      stock.fundamentalsSource &&
+      stock.fundamentalsSource !== 'HARDCODED_SEED')
       ? Math.round(sharesOutstanding * price)
       : liveMarketCapIdr && liveMarketCapIdr > 0
       ? Math.round(liveMarketCapIdr)
@@ -1485,27 +1489,48 @@ export function buildRawTickerDataFromStock(params: {
       ? Math.round(stock.liveMarketCapIdr)
       : Math.round(sharesOutstanding * price);
 
-  const resolvedNetIncomeTTM =
+  const rawResolvedNetIncome =
     userOverride?.netIncomeTTMIdr && userOverride.netIncomeTTMIdr > 0
       ? Math.round(userOverride.netIncomeTTMIdr)
       : stock.netIncomeTTMIdr && stock.netIncomeTTMIdr > 0
       ? Math.round(stock.netIncomeTTMIdr)
       : undefined;
 
-  const resolvedEquityAttributable =
+  const rawResolvedEquity =
     userOverride?.equityAttributableIdr && userOverride.equityAttributableIdr > 0
       ? Math.round(userOverride.equityAttributableIdr)
       : stock.equityAttributableIdr && stock.equityAttributableIdr > 0
       ? Math.round(stock.equityAttributableIdr)
       : undefined;
 
-  const epsTTM = resolvedNetIncomeTTM
-    ? Math.max(1, Math.round(resolvedNetIncomeTTM / Math.max(1, sharesOutstanding)))
-    : Math.max(1, Math.round(trailingEpsIdr));
+  // Defense-in-depth USD->IDR normalization guard if raw statements are in USD while shares are in full count
+  const isUnconvertedUsdScale =
+    typeof rawResolvedEquity === 'number' &&
+    rawResolvedEquity > 0 &&
+    sharesOutstanding > 50_000_000 &&
+    rawResolvedEquity / sharesOutstanding < 5.0;
+  const fxScale = isUnconvertedUsdScale ? 16250 : 1;
 
-  const bvps = resolvedEquityAttributable
-    ? Math.max(10, Math.round(resolvedEquityAttributable / Math.max(1, sharesOutstanding)))
-    : Math.max(10, Math.round(estimatedBvpsIdr));
+  const resolvedNetIncomeTTM =
+    typeof rawResolvedNetIncome === 'number' ? Math.round(rawResolvedNetIncome * fxScale) : undefined;
+  const resolvedEquityAttributable =
+    typeof rawResolvedEquity === 'number' ? Math.round(rawResolvedEquity * fxScale) : undefined;
+
+  const rawEpsExact = resolvedNetIncomeTTM
+    ? resolvedNetIncomeTTM / Math.max(1, sharesOutstanding)
+    : trailingEpsIdr;
+  const epsTTM =
+    rawEpsExact >= 25
+      ? Math.round(rawEpsExact)
+      : Number(Math.max(0.01, rawEpsExact).toFixed(2));
+
+  const rawBvpsExact = resolvedEquityAttributable
+    ? resolvedEquityAttributable / Math.max(1, sharesOutstanding)
+    : estimatedBvpsIdr;
+  const bvps =
+    rawBvpsExact >= 25
+      ? Math.round(rawBvpsExact)
+      : Number(Math.max(0.1, rawBvpsExact).toFixed(2));
 
   const netIncomeTTM = resolvedNetIncomeTTM ?? Math.round(epsTTM * sharesOutstanding);
   const equityAttributable = resolvedEquityAttributable ?? Math.round(bvps * sharesOutstanding);
@@ -1515,9 +1540,9 @@ export function buildRawTickerDataFromStock(params: {
 
   const revenueTTM =
     userOverride?.revenueTTMIdr && userOverride.revenueTTMIdr > 0
-      ? Math.round(userOverride.revenueTTMIdr)
+      ? Math.round(userOverride.revenueTTMIdr * fxScale)
       : stock.revenueTTMIdr && stock.revenueTTMIdr > 0
-      ? Math.round(stock.revenueTTMIdr)
+      ? Math.round(stock.revenueTTMIdr * fxScale)
       : Math.round(netIncomeTTM / netMarginDecimal);
 
   // Calibrate prior full-year revenue and prior-year BVPS from decumulated growth trajectory
@@ -1533,39 +1558,49 @@ export function buildRawTickerDataFromStock(params: {
 
   const operatingProfitTTM =
     userOverride?.operatingProfitTTMIdr && userOverride.operatingProfitTTMIdr > 0
-      ? Math.round(userOverride.operatingProfitTTMIdr)
+      ? Math.round(userOverride.operatingProfitTTMIdr * fxScale)
       : stock.operatingProfitTTMIdr && stock.operatingProfitTTMIdr > 0
-      ? Math.round(stock.operatingProfitTTMIdr)
+      ? Math.round(stock.operatingProfitTTMIdr * fxScale)
       : Math.round(revenueTTM * opMarginDecimal);
 
   const capexRatio = Math.max(0.03, Math.min(0.42, capexToRevenueRatio || 0.08));
   const capexTTM =
-    stock.capexTTMIdr && stock.capexTTMIdr > 0
-      ? Math.round(stock.capexTTMIdr)
+    userOverride?.capexTTMIdr && userOverride.capexTTMIdr > 0
+      ? Math.round(userOverride.capexTTMIdr * fxScale)
+      : stock.capexTTMIdr && stock.capexTTMIdr > 0
+      ? Math.round(stock.capexTTMIdr * fxScale)
       : Math.round(revenueTTM * capexRatio);
 
   const daTTM =
-    stock.daTTMIdr && stock.daTTMIdr > 0
-      ? Math.round(stock.daTTMIdr)
+    userOverride?.daTTMIdr && userOverride.daTTMIdr > 0
+      ? Math.round(userOverride.daTTMIdr * fxScale)
+      : stock.daTTMIdr && stock.daTTMIdr > 0
+      ? Math.round(stock.daTTMIdr * fxScale)
       : Math.max(1, Math.round(capexTTM / Math.max(0.8, capexToDaRatio || 1.5)));
   const ebitdaTTM = operatingProfitTTM + daTTM;
   const ocfTTM =
-    stock.ocfTTMIdr && stock.ocfTTMIdr > 0
-      ? Math.round(stock.ocfTTMIdr)
+    userOverride?.ocfTTMIdr && userOverride.ocfTTMIdr > 0
+      ? Math.round(userOverride.ocfTTMIdr * fxScale)
+      : stock.ocfTTMIdr && stock.ocfTTMIdr > 0
+      ? Math.round(stock.ocfTTMIdr * fxScale)
       : Math.round(netIncomeTTM * ocfToNetIncomeRatio);
 
   const der = Math.max(0.02, stock.debtToEquity || 0.5);
   const totalDebt =
-    stock.totalDebtIdr && stock.totalDebtIdr >= 0
-      ? Math.round(stock.totalDebtIdr)
+    userOverride?.totalDebtIdr && userOverride.totalDebtIdr >= 0
+      ? Math.round(userOverride.totalDebtIdr * fxScale)
+      : stock.totalDebtIdr && stock.totalDebtIdr >= 0
+      ? Math.round(stock.totalDebtIdr * fxScale)
       : Math.round(equityAttributable * der);
   const totalAssets =
     stock.totalAssetsIdr && stock.totalAssetsIdr > 0
-      ? Math.round(stock.totalAssetsIdr)
+      ? Math.round(stock.totalAssetsIdr * fxScale)
       : Math.round(equityAttributable + totalDebt + equityAttributable * 0.15);
   const cashAndEquivalents =
-    stock.cashAndEquivalentsIdr && stock.cashAndEquivalentsIdr >= 0
-      ? Math.round(stock.cashAndEquivalentsIdr)
+    userOverride?.cashAndEquivalentsIdr && userOverride.cashAndEquivalentsIdr >= 0
+      ? Math.round(userOverride.cashAndEquivalentsIdr * fxScale)
+      : stock.cashAndEquivalentsIdr && stock.cashAndEquivalentsIdr >= 0
+      ? Math.round(stock.cashAndEquivalentsIdr * fxScale)
       : Math.round(equityAttributable * 0.22);
   const investedCapital = Math.max(1, equityAttributable + totalDebt - cashAndEquivalents);
   const nopatTTM = Math.round(operatingProfitTTM * 0.78);

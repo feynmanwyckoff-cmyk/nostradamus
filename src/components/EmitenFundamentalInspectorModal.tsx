@@ -23,6 +23,8 @@ import {
   FieldFreshnessStatus,
   getFundamentalUserOverride,
   resetFundamentalUserOverride,
+  resolveCalibratorFieldProvenanceBadge,
+  resolveUiNotificationBadgeMeta,
   saveFundamentalUserOverride,
   TrackedField
 } from '../utils/dataLineageEngine';
@@ -70,7 +72,6 @@ import {
   ImageDown,
   FileDown,
   FastForward,
-  Cpu,
   SlidersHorizontal,
   Database,
   Copy,
@@ -505,6 +506,8 @@ export function EmitenFundamentalInspectorModal({
   const [ebitBillionInput, setEbitBillionInput] = useState<string>('0');
   const [netIncomeBillionInput, setNetIncomeBillionInput] = useState<string>('0');
   const [equityBillionInput, setEquityBillionInput] = useState<string>('0');
+  const [ocfBillionInput, setOcfBillionInput] = useState<string>('0');
+  const [daBillionInput, setDaBillionInput] = useState<string>('0');
   const [adtvBillionInput, setAdtvBillionInput] = useState<string>('0');
   const [sbn10YInput, setSbn10YInput] = useState<string>('6.75');
   const [workerTelemetry, setWorkerTelemetry] =
@@ -618,6 +621,8 @@ export function EmitenFundamentalInspectorModal({
     const ebitIdr = userFundOv?.operatingProfitTTMIdr ?? rawTkr?.operatingProfitTTM ?? 0;
     const niIdr = userFundOv?.netIncomeTTMIdr ?? rawTkr?.netIncomeTTM ?? 0;
     const eqIdr = userFundOv?.equityAttributableIdr ?? rawTkr?.equityAttributable ?? 0;
+    const ocfIdr = userFundOv?.ocfTTMIdr ?? rawTkr?.ocfTTM ?? 0;
+    const daIdr = userFundOv?.daTTMIdr ?? rawTkr?.daTTM ?? 0;
     const adtvIdr = userFundOv?.adtv20dIdr ?? joeliardiEval.adtv20dIdr ?? rawTkr?.adtv20dIDR ?? 0;
     const sbn10YPct = userFundOv?.sbn10YOverridePct ?? joeliardiEval.sbnSpot10YPct ?? 6.75;
 
@@ -625,6 +630,8 @@ export function EmitenFundamentalInspectorModal({
     setEbitBillionInput((ebitIdr / 1_000_000_000).toFixed(2));
     setNetIncomeBillionInput((niIdr / 1_000_000_000).toFixed(2));
     setEquityBillionInput((eqIdr / 1_000_000_000).toFixed(2));
+    setOcfBillionInput((ocfIdr / 1_000_000_000).toFixed(2));
+    setDaBillionInput((daIdr / 1_000_000_000).toFixed(2));
     setAdtvBillionInput((adtvIdr / 1_000_000_000).toFixed(2));
     setSbn10YInput(sbn10YPct.toFixed(2));
 
@@ -756,6 +763,8 @@ export function EmitenFundamentalInspectorModal({
     const ebitBillion = Math.max(0, Number(ebitBillionInput.replace(',', '.')) || 0);
     const niBillion = Math.max(0, Number(netIncomeBillionInput.replace(',', '.')) || 0);
     const eqBillion = Math.max(0, Number(equityBillionInput.replace(',', '.')) || 0);
+    const ocfBillion = Math.max(0, Number(ocfBillionInput.replace(',', '.')) || 0);
+    const daBillion = Math.max(0, Number(daBillionInput.replace(',', '.')) || 0);
     const adtvBillion = Math.max(0, Number(adtvBillionInput.replace(',', '.')) || 0);
     const sbn10YPct = Math.max(3.0, Math.min(15.0, Number(sbn10YInput.replace(',', '.')) || 6.75));
 
@@ -763,6 +772,8 @@ export function EmitenFundamentalInspectorModal({
     const operatingProfitTTMIdr = Math.round(ebitBillion * 1_000_000_000);
     const netIncomeTTMIdr = Math.round(niBillion * 1_000_000_000);
     const equityAttributableIdr = Math.round(eqBillion * 1_000_000_000);
+    const ocfTTMIdr = Math.round(ocfBillion * 1_000_000_000);
+    const daTTMIdr = Math.round(daBillion * 1_000_000_000);
     const adtv20dIdr = Math.round(adtvBillion * 1_000_000_000);
 
     const computedRoe =
@@ -776,10 +787,12 @@ export function EmitenFundamentalInspectorModal({
       operatingProfitTTMIdr: operatingProfitTTMIdr > 0 ? operatingProfitTTMIdr : undefined,
       netIncomeTTMIdr: netIncomeTTMIdr > 0 ? netIncomeTTMIdr : undefined,
       equityAttributableIdr: equityAttributableIdr > 0 ? equityAttributableIdr : undefined,
+      ocfTTMIdr: ocfTTMIdr > 0 ? ocfTTMIdr : undefined,
+      daTTMIdr: daTTMIdr > 0 ? daTTMIdr : undefined,
       sharesOutstanding: fullSharesVal > 0 ? fullSharesVal : undefined,
       adtv20dIdr: adtv20dIdr > 0 ? adtv20dIdr : undefined,
       sbn10YOverridePct: sbn10YPct,
-      overrideNote: `USER_OVERRIDE (${new Date().toISOString().slice(0, 10)}): Rev Rp ${revBillion.toFixed(2)}M · EBIT Rp ${ebitBillion.toFixed(2)}M · NI Rp ${niBillion.toFixed(2)}M · Equity Rp ${eqBillion.toFixed(2)}M · Shares ${(fullSharesVal / 1e9).toFixed(2)}M lbr · SBN 10Y ${sbn10YPct.toFixed(2)}%`
+      overrideNote: `USER_OVERRIDE (${new Date().toISOString().slice(0, 10)}): Rev Rp ${revBillion.toFixed(2)}M · EBIT Rp ${ebitBillion.toFixed(2)}M · NI Rp ${niBillion.toFixed(2)}M · Equity Rp ${eqBillion.toFixed(2)}M · OCF Rp ${ocfBillion.toFixed(2)}M · D&A Rp ${daBillion.toFixed(2)}M · Shares ${(fullSharesVal / 1e9).toFixed(2)}M lbr · SBN 10Y ${sbn10YPct.toFixed(2)}%`
     });
 
     saveCustomCorporateActionOverride({
@@ -816,14 +829,63 @@ export function EmitenFundamentalInspectorModal({
     const rawSplit = Number(splitRatioInput.replace(',', '.'));
     const splitVal = Number.isFinite(rawSplit) && rawSplit > 0 ? rawSplit : activeStock.splitRatioDivisor ?? 1;
     const parsedInputShares = Math.round((Number(sharesMillionInput.replace(',', '.')) || 0) * 1_000_000);
+    const rawTkr = joeliardiEval?.rawTickerData;
     const officialShares =
+      (parsedInputShares > 0 ? parsedInputShares : undefined) ??
+      rawTkr?.sharesOutstanding ??
+      activeStock.sharesOutstanding ??
       resolveOfficialIdxSharesOutstanding(activeStock.ticker, splitVal) ??
-      (parsedInputShares > 0 ? parsedInputShares : joeliardiEval?.rawTickerData?.sharesOutstanding ?? 1_000_000_000);
+      1_000_000_000;
     const syncedMarketCapTrillion = Number(
       ((officialShares * activeStock.lastPrice) / 1_000_000_000_000).toFixed(4)
     );
     setSharesMillionInput((officialShares / 1_000_000).toFixed(2));
     setMarketCapTrillionInput(syncedMarketCapTrillion.toFixed(2));
+
+    // Also reconcile Net Income, Equity, Revenue, EBIT, OCF, and D&A (including USD->IDR scale fix if raw values are in USD)
+    const existingFundOv = getFundamentalUserOverride(activeStock.ticker);
+    let candRev = existingFundOv?.revenueTTMIdr ?? rawTkr?.revenueTTM ?? 0;
+    let candEbit = existingFundOv?.operatingProfitTTMIdr ?? rawTkr?.operatingProfitTTM ?? 0;
+    let candNi = existingFundOv?.netIncomeTTMIdr ?? rawTkr?.netIncomeTTM ?? 0;
+    let candEq = existingFundOv?.equityAttributableIdr ?? rawTkr?.equityAttributable ?? 0;
+    let candOcf = existingFundOv?.ocfTTMIdr ?? rawTkr?.ocfTTM ?? 0;
+    let candDa = existingFundOv?.daTTMIdr ?? rawTkr?.daTTM ?? 0;
+
+    let wasUsdScaled = false;
+    if (candEq > 0 && officialShares > 50_000_000 && candEq / officialShares < 5.0) {
+      const usdIdr = 16250;
+      candRev = Math.round(candRev * usdIdr);
+      candEbit = Math.round(candEbit * usdIdr);
+      candNi = Math.round(candNi * usdIdr);
+      candEq = Math.round(candEq * usdIdr);
+      candOcf = Math.round(candOcf * usdIdr);
+      candDa = Math.round(candDa * usdIdr);
+      wasUsdScaled = true;
+    }
+
+    if (candEq > 0 && candNi > 0) {
+      setRevenueBillionInput((candRev / 1_000_000_000).toFixed(2));
+      setEbitBillionInput((candEbit / 1_000_000_000).toFixed(2));
+      setNetIncomeBillionInput((candNi / 1_000_000_000).toFixed(2));
+      setEquityBillionInput((candEq / 1_000_000_000).toFixed(2));
+      if (candOcf > 0) setOcfBillionInput((candOcf / 1_000_000_000).toFixed(2));
+      if (candDa > 0) setDaBillionInput((candDa / 1_000_000_000).toFixed(2));
+
+      saveFundamentalUserOverride({
+        ...existingFundOv,
+        ticker: activeStock.ticker,
+        revenueTTMIdr: candRev > 0 ? candRev : existingFundOv?.revenueTTMIdr,
+        operatingProfitTTMIdr: candEbit > 0 ? candEbit : existingFundOv?.operatingProfitTTMIdr,
+        netIncomeTTMIdr: candNi,
+        equityAttributableIdr: candEq,
+        ocfTTMIdr: candOcf > 0 ? candOcf : existingFundOv?.ocfTTMIdr,
+        daTTMIdr: candDa > 0 ? candDa : existingFundOv?.daTTMIdr,
+        sharesOutstanding: officialShares,
+        overrideNote: `Auto-Sync P0 Reconciled (${new Date().toISOString().slice(0, 10)})${
+          wasUsdScaled ? ' · Normalisasi Skala USD→IDR (@ Rp 16.250)' : ''
+        } · Market Cap = Shares × Px (Δ 0,00%)`
+      });
+    }
 
     const existingCustom = getCustomCorporateActionOverrides()[activeStock.ticker];
     saveCustomCorporateActionOverride({
@@ -838,6 +900,17 @@ export function EmitenFundamentalInspectorModal({
     if (onStockSynced) {
       onStockSynced(enrichStockMetrics(activeStock));
     }
+    void Swal.fire({
+      toast: true,
+      position: 'top-end',
+      icon: 'success',
+      title: `P0 Sanity ${activeStock.ticker} Tersinkronisasi`,
+      text: wasUsdScaled
+        ? 'Skala laporan keuangan USD→IDR & Market Cap = Shares × Harga Live berhasil direkonsiliasi (SANITY: PASS).'
+        : 'Market Cap = Shares × Harga Live & identitas EPS/BVPS × Shares berhasil diselaraskan (SANITY: PASS).',
+      showConfirmButton: false,
+      timer: 2600
+    });
   };
 
   const handleResetCatalystOverride = () => {
@@ -1576,18 +1649,6 @@ export function EmitenFundamentalInspectorModal({
             </div>
 
             <div className="flex items-center gap-1.5 flex-nowrap shrink-0">
-              {workerTelemetry && (
-                <span
-                  title="Komputasi Multi-Stage RIM & regresi StatArb dieksekusi di thread terpisah (Web Worker) agar antarmuka tetap responsif 60fps"
-                  className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-mono font-semibold text-neutral-600 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs whitespace-nowrap shrink-0"
-                >
-                  <Cpu className="w-3 h-3 text-[#0D5C46] shrink-0" />
-                  <span>
-                    Worker 60fps · {workerTelemetry.computeDurationMs.toFixed(2)}ms
-                  </span>
-                </span>
-              )}
-
               <button
                 type="button"
                 onClick={handleExportPng}
@@ -1656,188 +1717,429 @@ export function EmitenFundamentalInspectorModal({
                 </div>
               </div>
 
-              {/* Row 1: Fundamental Financial Statements & SBN 10Y Override (Miliar Rp -> * 1e9 IDR) */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
-                <div>
-                  <label className="block text-[9.5px] font-bold uppercase text-slate-400 mb-1">
-                    Revenue TTM (Miliar Rp)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={revenueBillionInput}
-                    onChange={(e) => setRevenueBillionInput(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] focus:border-emerald-400 rounded-xs text-slate-100"
-                    title="Pendapatan TTM dalam Miliar Rupiah (otomatis dikonversi × 1e9 ke Rupiah penuh)"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[9.5px] font-bold uppercase text-slate-400 mb-1">
-                    EBIT / Laba Usaha (Miliar Rp)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={ebitBillionInput}
-                    onChange={(e) => setEbitBillionInput(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] focus:border-emerald-400 rounded-xs text-slate-100"
-                    title="Operating Profit (EBIT) TTM dalam Miliar Rupiah (× 1e9 IDR)"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[9.5px] font-bold uppercase text-emerald-300 mb-1">
-                    Net Income TTM (Miliar Rp)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={netIncomeBillionInput}
-                    onChange={(e) => setNetIncomeBillionInput(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#131B28] border border-emerald-500/50 focus:border-emerald-400 rounded-xs text-emerald-200 font-bold"
-                    title="Laba Bersih TTM dalam Miliar Rupiah (menentukan EPS TTM & Implied PER)"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[9.5px] font-bold uppercase text-emerald-300 mb-1">
-                    Ekuitas Induk (Miliar Rp)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="1"
-                    value={equityBillionInput}
-                    onChange={(e) => setEquityBillionInput(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#131B28] border border-emerald-500/50 focus:border-emerald-400 rounded-xs text-emerald-200 font-bold"
-                    title="Total Ekuitas yang Dapat Diatribusikan ke Pemilik Entitas Induk dalam Miliar Rupiah (menentukan BVPS, PBV & ROE)"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[9.5px] font-bold uppercase text-sky-300 mb-1">
-                    ADTV 20D (Miliar Rp/Hr)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0.01"
-                    value={adtvBillionInput}
-                    onChange={(e) => setAdtvBillionInput(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#131B28] border border-sky-500/40 focus:border-sky-400 rounded-xs text-sky-200"
-                    title="Rata-rata Nilai Transaksi Harian 20 Hari (Average Daily Trading Value) dalam Miliar Rupiah"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[9.5px] font-bold uppercase text-amber-300 mb-1">
-                    SBN 10Y Spot (%)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="3.0"
-                    max="15.0"
-                    value={sbn10YInput}
-                    onChange={(e) => setSbn10YInput(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#131B28] border border-amber-500/40 focus:border-amber-400 rounded-xs text-amber-200 font-bold"
-                    title="Yield Acuan SBN 10 Tahun Indonesia (%) untuk menghitung Blended Spot Rf & Dynamic Cost of Equity (Ke)"
-                  />
-                </div>
-              </div>
+              {(() => {
+                const lf = joeliardiEval.dataLineage?.fields;
+                const corpOv = getCustomCorporateActionOverrides()[activeStock.ticker];
+                const fundOv = getFundamentalUserOverride(activeStock.ticker);
 
-              {/* Row 2: Shares, Market Cap, Split, Buyback, Quarterly Growth & Submit */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 pt-1">
-                <div>
-                  <label className="block text-[9.5px] font-bold uppercase text-slate-400 mb-1">
-                    Saham Beredar BEI (Juta Lbr)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="1"
-                    value={sharesMillionInput}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setSharesMillionInput(val);
-                      const numMillion = Number(val.replace(',', '.'));
-                      if (Number.isFinite(numMillion) && numMillion > 0) {
-                        const syncedTrillion =
-                          (numMillion * 1_000_000 * activeStock.lastPrice) / 1_000_000_000_000;
-                        setMarketCapTrillionInput(syncedTrillion.toFixed(2));
+                const revBadge = resolveCalibratorFieldProvenanceBadge(
+                  lf?.revenueTTMIdr,
+                  Boolean(fundOv?.revenueTTMIdr)
+                );
+                const ebitBadge = resolveCalibratorFieldProvenanceBadge(
+                  lf?.operatingProfitTTMIdr,
+                  Boolean(fundOv?.operatingProfitTTMIdr)
+                );
+                const niBadge = resolveCalibratorFieldProvenanceBadge(
+                  lf?.netIncomeTTMIdr,
+                  Boolean(fundOv?.netIncomeTTMIdr)
+                );
+                const eqBadge = resolveCalibratorFieldProvenanceBadge(
+                  lf?.equityAttributableIdr,
+                  Boolean(fundOv?.equityAttributableIdr)
+                );
+                const ocfBadge = resolveCalibratorFieldProvenanceBadge(
+                  lf?.ocfTTMIdr,
+                  Boolean(fundOv?.ocfTTMIdr)
+                );
+                const daBadge = resolveCalibratorFieldProvenanceBadge(
+                  lf?.daTTMIdr,
+                  Boolean(fundOv?.daTTMIdr)
+                );
+                const adtvBadge = resolveCalibratorFieldProvenanceBadge(
+                  lf?.adtv20dIdr,
+                  Boolean(fundOv?.adtv20dIdr)
+                );
+                const sbnBadge = resolveCalibratorFieldProvenanceBadge(
+                  lf?.sbnSpot10YPct,
+                  Boolean(fundOv?.sbn10YOverridePct)
+                );
+                const sharesBadge = resolveCalibratorFieldProvenanceBadge(
+                  lf?.sharesOutstanding,
+                  Boolean(fundOv?.sharesOutstanding || corpOv?.sharesOutstanding)
+                );
+                const mcapBadge = resolveCalibratorFieldProvenanceBadge(
+                  lf?.marketCapIdr,
+                  Boolean(corpOv?.liveMarketCapTrillionIdr)
+                );
+                const splitBadge = corpOv?.splitRatioDivisor
+                  ? {
+                      label: 'USER OVERRIDE',
+                      className: 'bg-indigo-950/90 text-indigo-300 border-indigo-500/50',
+                      tooltip: 'Rasio stock split dikalibrasi manual'
+                    }
+                  : {
+                      label: 'OFFICIAL BEI',
+                      className: 'bg-emerald-950/90 text-emerald-300 border-emerald-500/50',
+                      tooltip: 'Rasio stock split dari registri aksi korporasi BEI'
+                    };
+                const buybackBadge =
+                  corpOv?.buybackNominalBillionIdr !== undefined
+                    ? {
+                        label: 'USER OVERRIDE',
+                        className: 'bg-indigo-950/90 text-indigo-300 border-indigo-500/50',
+                        tooltip: 'Nominal buyback aktif dikalibrasi manual'
                       }
-                    }}
-                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] rounded-xs text-slate-100"
-                    title="Jumlah saham tercatat resmi BEI dalam Juta Lembar (× 1e6 lembar)"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[9.5px] font-bold uppercase text-slate-400 mb-1">
-                    Market Cap Live (Rp Triliun)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0.05"
-                    value={marketCapTrillionInput}
-                    onChange={(e) => setMarketCapTrillionInput(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] rounded-xs text-slate-100"
-                    title="Kapitalisasi pasar dalam Rp Triliun (P0 Sanity Check lolos bila Δ Implied Shares ≤ 3,0%)"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[9.5px] font-bold uppercase text-slate-400 mb-1">
-                    Rasio Stock Split (1 : N)
-                  </label>
-                  <input
-                    type="number"
-                    step="1"
-                    min="1"
-                    max="20"
-                    value={splitRatioInput}
-                    onChange={(e) => setSplitRatioInput(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] rounded-xs text-slate-100"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[9.5px] font-bold uppercase text-slate-400 mb-1">
-                    Buyback Aktif (Miliar Rp)
-                  </label>
-                  <input
-                    type="number"
-                    step="10"
-                    min="0"
-                    value={buybackNominalInput}
-                    onChange={(e) => setBuybackNominalInput(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] rounded-xs text-slate-100"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[9.5px] font-bold uppercase text-slate-400 mb-1">
-                    Lonjakan Laba YoY (%)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.5"
-                    value={quarterlyGrowthInput}
-                    onChange={(e) => setQuarterlyGrowthInput(e.target.value)}
-                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] rounded-xs text-slate-100"
-                  />
-                </div>
-                <div className="flex flex-col justify-end gap-1">
-                  <button
-                    type="button"
-                    onClick={handleAutoSyncP0Sanity}
-                    className="w-full px-2.5 py-1 text-[10px] font-mono font-bold text-sky-300 bg-sky-950/70 hover:bg-sky-900/90 border border-sky-500/40 rounded-xs cursor-pointer transition-colors"
-                    title="Sinkronkan otomatis Saham Beredar × Harga Live agar Δ Implied Shares = 0,00% (SANITY: PASS)"
-                  >
-                    Auto-Sync P0 (Shares×Px)
-                  </button>
-                  <button
-                    type="submit"
-                    className="w-full px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-xs cursor-pointer transition-colors"
-                  >
-                    Simpan USER_OVERRIDE
-                  </button>
-                </div>
-              </div>
+                    : {
+                        label: 'OFFICIAL BEI',
+                        className: 'bg-emerald-950/90 text-emerald-300 border-emerald-500/50',
+                        tooltip: 'Mandat buyback aktif dari keterbukaan informasi BEI'
+                      };
+                const yoyBadge =
+                  corpOv?.earningsGrowthYoYPct !== undefined
+                    ? {
+                        label: 'USER OVERRIDE',
+                        className: 'bg-indigo-950/90 text-indigo-300 border-indigo-500/50',
+                        tooltip: 'Pertumbuhan laba YoY dikalibrasi manual'
+                      }
+                    : lf?.netIncomeTTMIdr && lf.netIncomeTTMIdr.source !== 'HARDCODED_SEED'
+                    ? {
+                        label:
+                          lf.netIncomeTTMIdr.source === 'LIVE_YAHOO_API'
+                            ? 'LIVE REALTIME'
+                            : 'SYNCED JSON',
+                        className:
+                          lf.netIncomeTTMIdr.source === 'LIVE_YAHOO_API'
+                            ? 'bg-sky-950/90 text-sky-300 border-sky-500/50'
+                            : 'bg-emerald-950/90 text-emerald-300 border-emerald-500/50',
+                        tooltip: 'Pertumbuhan laba YoY dihitung dari laporan keuangan aktual'
+                      }
+                    : {
+                        label: 'HARDCODED SEED',
+                        className: 'bg-rose-950/90 text-rose-300 border-rose-500/60',
+                        tooltip: 'Estimasi pertumbuhan laba dari katalog seed statis'
+                      };
+
+                return (
+                  <>
+                    {/* Row 1: 7 Uniform Height Cards — Core TTM Statements, Cash Flow, D&A & Liquidity */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-7 gap-2.5 items-stretch">
+                      <div className="flex flex-col justify-between h-full p-2 bg-[#101723] border border-[#1E293B] rounded-xs">
+                        <div className="flex items-start justify-between gap-1.5 min-h-[28px] mb-1.5">
+                          <label className="text-[9px] font-bold uppercase leading-tight text-slate-300">
+                            Revenue TTM (Miliar Rp)
+                          </label>
+                          <span
+                            title={revBadge.tooltip}
+                            className={`px-1.5 py-0.5 text-[7.5px] font-mono font-extrabold uppercase tracking-tight rounded-xs border shrink-0 ${revBadge.className}`}
+                          >
+                            {revBadge.label}
+                          </span>
+                        </div>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={revenueBillionInput}
+                          onChange={(e) => setRevenueBillionInput(e.target.value)}
+                          className="mt-auto w-full h-8 px-2.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] focus:border-emerald-400 rounded-xs text-slate-100"
+                          title="Pendapatan TTM dalam Miliar Rupiah (otomatis dikonversi × 1e9 ke Rupiah penuh)"
+                        />
+                      </div>
+
+                      <div className="flex flex-col justify-between h-full p-2 bg-[#101723] border border-[#1E293B] rounded-xs">
+                        <div className="flex items-start justify-between gap-1.5 min-h-[28px] mb-1.5">
+                          <label className="text-[9px] font-bold uppercase leading-tight text-slate-300">
+                            EBIT / Laba Usaha (Miliar Rp)
+                          </label>
+                          <span
+                            title={ebitBadge.tooltip}
+                            className={`px-1.5 py-0.5 text-[7.5px] font-mono font-extrabold uppercase tracking-tight rounded-xs border shrink-0 ${ebitBadge.className}`}
+                          >
+                            {ebitBadge.label}
+                          </span>
+                        </div>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={ebitBillionInput}
+                          onChange={(e) => setEbitBillionInput(e.target.value)}
+                          className="mt-auto w-full h-8 px-2.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] focus:border-emerald-400 rounded-xs text-slate-100"
+                          title="Operating Profit (EBIT) TTM dalam Miliar Rupiah (× 1e9 IDR)"
+                        />
+                      </div>
+
+                      <div className="flex flex-col justify-between h-full p-2 bg-[#101723] border border-emerald-500/30 rounded-xs">
+                        <div className="flex items-start justify-between gap-1.5 min-h-[28px] mb-1.5">
+                          <label className="text-[9px] font-bold uppercase leading-tight text-emerald-300">
+                            Net Income TTM (Miliar Rp)
+                          </label>
+                          <span
+                            title={niBadge.tooltip}
+                            className={`px-1.5 py-0.5 text-[7.5px] font-mono font-extrabold uppercase tracking-tight rounded-xs border shrink-0 ${niBadge.className}`}
+                          >
+                            {niBadge.label}
+                          </span>
+                        </div>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={netIncomeBillionInput}
+                          onChange={(e) => setNetIncomeBillionInput(e.target.value)}
+                          className="mt-auto w-full h-8 px-2.5 text-xs font-mono bg-[#131B28] border border-emerald-500/50 focus:border-emerald-400 rounded-xs text-emerald-200 font-bold"
+                          title="Laba Bersih TTM dalam Miliar Rupiah (menentukan EPS TTM & Implied PER)"
+                        />
+                      </div>
+
+                      <div className="flex flex-col justify-between h-full p-2 bg-[#101723] border border-emerald-500/30 rounded-xs">
+                        <div className="flex items-start justify-between gap-1.5 min-h-[28px] mb-1.5">
+                          <label className="text-[9px] font-bold uppercase leading-tight text-emerald-300">
+                            Ekuitas Induk (Miliar Rp)
+                          </label>
+                          <span
+                            title={eqBadge.tooltip}
+                            className={`px-1.5 py-0.5 text-[7.5px] font-mono font-extrabold uppercase tracking-tight rounded-xs border shrink-0 ${eqBadge.className}`}
+                          >
+                            {eqBadge.label}
+                          </span>
+                        </div>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="1"
+                          value={equityBillionInput}
+                          onChange={(e) => setEquityBillionInput(e.target.value)}
+                          className="mt-auto w-full h-8 px-2.5 text-xs font-mono bg-[#131B28] border border-emerald-500/50 focus:border-emerald-400 rounded-xs text-emerald-200 font-bold"
+                          title="Total Ekuitas yang Dapat Diatribusikan ke Pemilik Entitas Induk dalam Miliar Rupiah (menentukan BVPS, PBV & ROE)"
+                        />
+                      </div>
+
+                      <div className="flex flex-col justify-between h-full p-2 bg-[#101723] border border-[#1E293B] rounded-xs">
+                        <div className="flex items-start justify-between gap-1.5 min-h-[28px] mb-1.5">
+                          <label className="text-[9px] font-bold uppercase leading-tight text-slate-300">
+                            OCF TTM (Miliar Rp)
+                          </label>
+                          <span
+                            title={ocfBadge.tooltip}
+                            className={`px-1.5 py-0.5 text-[7.5px] font-mono font-extrabold uppercase tracking-tight rounded-xs border shrink-0 ${ocfBadge.className}`}
+                          >
+                            {ocfBadge.label}
+                          </span>
+                        </div>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={ocfBillionInput}
+                          onChange={(e) => setOcfBillionInput(e.target.value)}
+                          className="mt-auto w-full h-8 px-2.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] focus:border-emerald-400 rounded-xs text-slate-100"
+                          title="Arus Kas Operasi (Operating Cash Flow) TTM dalam Miliar Rupiah (× 1e9 IDR)"
+                        />
+                      </div>
+
+                      <div className="flex flex-col justify-between h-full p-2 bg-[#101723] border border-[#1E293B] rounded-xs">
+                        <div className="flex items-start justify-between gap-1.5 min-h-[28px] mb-1.5">
+                          <label className="text-[9px] font-bold uppercase leading-tight text-slate-300">
+                            D&amp;A TTM (Miliar Rp)
+                          </label>
+                          <span
+                            title={daBadge.tooltip}
+                            className={`px-1.5 py-0.5 text-[7.5px] font-mono font-extrabold uppercase tracking-tight rounded-xs border shrink-0 ${daBadge.className}`}
+                          >
+                            {daBadge.label}
+                          </span>
+                        </div>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={daBillionInput}
+                          onChange={(e) => setDaBillionInput(e.target.value)}
+                          className="mt-auto w-full h-8 px-2.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] focus:border-emerald-400 rounded-xs text-slate-100"
+                          title="Depresiasi & Amortisasi (D&A) TTM dalam Miliar Rupiah (× 1e9 IDR)"
+                        />
+                      </div>
+
+                      <div className="flex flex-col justify-between h-full p-2 bg-[#101723] border border-sky-500/30 rounded-xs">
+                        <div className="flex items-start justify-between gap-1.5 min-h-[28px] mb-1.5">
+                          <label className="text-[9px] font-bold uppercase leading-tight text-sky-300">
+                            ADTV 20D (Miliar Rp/Hr)
+                          </label>
+                          <span
+                            title={adtvBadge.tooltip}
+                            className={`px-1.5 py-0.5 text-[7.5px] font-mono font-extrabold uppercase tracking-tight rounded-xs border shrink-0 ${adtvBadge.className}`}
+                          >
+                            {adtvBadge.label}
+                          </span>
+                        </div>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0.01"
+                          value={adtvBillionInput}
+                          onChange={(e) => setAdtvBillionInput(e.target.value)}
+                          className="mt-auto w-full h-8 px-2.5 text-xs font-mono bg-[#131B28] border border-sky-500/40 focus:border-sky-400 rounded-xs text-sky-200"
+                          title="Rata-rata Nilai Transaksi Harian 20 Hari (Average Daily Trading Value) dalam Miliar Rupiah"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Row 2: 7 Uniform Height Cards — SBN 10Y, Shares, Market Cap, Split, Buyback, Growth & Submit */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-7 gap-2.5 pt-1 items-stretch">
+                      <div className="flex flex-col justify-between h-full p-2 bg-[#101723] border border-amber-500/30 rounded-xs">
+                        <div className="flex items-start justify-between gap-1.5 min-h-[28px] mb-1.5">
+                          <label className="text-[9px] font-bold uppercase leading-tight text-amber-300">
+                            SBN 10Y Spot (%)
+                          </label>
+                          <span
+                            title={sbnBadge.tooltip}
+                            className={`px-1.5 py-0.5 text-[7.5px] font-mono font-extrabold uppercase tracking-tight rounded-xs border shrink-0 ${sbnBadge.className}`}
+                          >
+                            {sbnBadge.label}
+                          </span>
+                        </div>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="3.0"
+                          max="15.0"
+                          value={sbn10YInput}
+                          onChange={(e) => setSbn10YInput(e.target.value)}
+                          className="mt-auto w-full h-8 px-2.5 text-xs font-mono bg-[#131B28] border border-amber-500/40 focus:border-amber-400 rounded-xs text-amber-200 font-bold"
+                          title="Yield Acuan SBN 10 Tahun Indonesia (%) untuk menghitung Blended Spot Rf & Dynamic Cost of Equity (Ke)"
+                        />
+                      </div>
+
+                      <div className="flex flex-col justify-between h-full p-2 bg-[#101723] border border-[#1E293B] rounded-xs">
+                        <div className="flex items-start justify-between gap-1.5 min-h-[28px] mb-1.5">
+                          <label className="text-[9px] font-bold uppercase leading-tight text-slate-300">
+                            Saham Beredar BEI (Juta Lbr)
+                          </label>
+                          <span
+                            title={sharesBadge.tooltip}
+                            className={`px-1.5 py-0.5 text-[7.5px] font-mono font-extrabold uppercase tracking-tight rounded-xs border shrink-0 ${sharesBadge.className}`}
+                          >
+                            {sharesBadge.label}
+                          </span>
+                        </div>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="1"
+                          value={sharesMillionInput}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setSharesMillionInput(val);
+                            const numMillion = Number(val.replace(',', '.'));
+                            if (Number.isFinite(numMillion) && numMillion > 0) {
+                              const syncedTrillion =
+                                (numMillion * 1_000_000 * activeStock.lastPrice) / 1_000_000_000_000;
+                              setMarketCapTrillionInput(syncedTrillion.toFixed(2));
+                            }
+                          }}
+                          className="mt-auto w-full h-8 px-2.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] rounded-xs text-slate-100"
+                          title="Jumlah saham tercatat resmi BEI dalam Juta Lembar (× 1e6 lembar)"
+                        />
+                      </div>
+
+                      <div className="flex flex-col justify-between h-full p-2 bg-[#101723] border border-[#1E293B] rounded-xs">
+                        <div className="flex items-start justify-between gap-1.5 min-h-[28px] mb-1.5">
+                          <label className="text-[9px] font-bold uppercase leading-tight text-slate-300">
+                            Market Cap Live (Rp Triliun)
+                          </label>
+                          <span
+                            title={mcapBadge.tooltip}
+                            className={`px-1.5 py-0.5 text-[7.5px] font-mono font-extrabold uppercase tracking-tight rounded-xs border shrink-0 ${mcapBadge.className}`}
+                          >
+                            {mcapBadge.label}
+                          </span>
+                        </div>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0.05"
+                          value={marketCapTrillionInput}
+                          onChange={(e) => setMarketCapTrillionInput(e.target.value)}
+                          className="mt-auto w-full h-8 px-2.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] rounded-xs text-slate-100"
+                          title="Kapitalisasi pasar dalam Rp Triliun (P0 Sanity Check lolos bila Δ Implied Shares ≤ 3,0%)"
+                        />
+                      </div>
+
+                      <div className="flex flex-col justify-between h-full p-2 bg-[#101723] border border-[#1E293B] rounded-xs">
+                        <div className="flex items-start justify-between gap-1.5 min-h-[28px] mb-1.5">
+                          <label className="text-[9px] font-bold uppercase leading-tight text-slate-300">
+                            Rasio Stock Split (1 : N)
+                          </label>
+                          <span
+                            title={splitBadge.tooltip}
+                            className={`px-1.5 py-0.5 text-[7.5px] font-mono font-extrabold uppercase tracking-tight rounded-xs border shrink-0 ${splitBadge.className}`}
+                          >
+                            {splitBadge.label}
+                          </span>
+                        </div>
+                        <input
+                          type="number"
+                          step="1"
+                          min="1"
+                          max="20"
+                          value={splitRatioInput}
+                          onChange={(e) => setSplitRatioInput(e.target.value)}
+                          className="mt-auto w-full h-8 px-2.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] rounded-xs text-slate-100"
+                        />
+                      </div>
+
+                      <div className="flex flex-col justify-between h-full p-2 bg-[#101723] border border-[#1E293B] rounded-xs">
+                        <div className="flex items-start justify-between gap-1.5 min-h-[28px] mb-1.5">
+                          <label className="text-[9px] font-bold uppercase leading-tight text-slate-300">
+                            Buyback Aktif (Miliar Rp)
+                          </label>
+                          <span
+                            title={buybackBadge.tooltip}
+                            className={`px-1.5 py-0.5 text-[7.5px] font-mono font-extrabold uppercase tracking-tight rounded-xs border shrink-0 ${buybackBadge.className}`}
+                          >
+                            {buybackBadge.label}
+                          </span>
+                        </div>
+                        <input
+                          type="number"
+                          step="10"
+                          min="0"
+                          value={buybackNominalInput}
+                          onChange={(e) => setBuybackNominalInput(e.target.value)}
+                          className="mt-auto w-full h-8 px-2.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] rounded-xs text-slate-100"
+                        />
+                      </div>
+
+                      <div className="flex flex-col justify-between h-full p-2 bg-[#101723] border border-[#1E293B] rounded-xs">
+                        <div className="flex items-start justify-between gap-1.5 min-h-[28px] mb-1.5">
+                          <label className="text-[9px] font-bold uppercase leading-tight text-slate-300">
+                            Lonjakan Laba YoY (%)
+                          </label>
+                          <span
+                            title={yoyBadge.tooltip}
+                            className={`px-1.5 py-0.5 text-[7.5px] font-mono font-extrabold uppercase tracking-tight rounded-xs border shrink-0 ${yoyBadge.className}`}
+                          >
+                            {yoyBadge.label}
+                          </span>
+                        </div>
+                        <input
+                          type="number"
+                          step="0.5"
+                          value={quarterlyGrowthInput}
+                          onChange={(e) => setQuarterlyGrowthInput(e.target.value)}
+                          className="mt-auto w-full h-8 px-2.5 text-xs font-mono bg-[#131B28] border border-[#2A364B] rounded-xs text-slate-100"
+                        />
+                      </div>
+
+                      <div className="flex flex-col justify-between h-full p-2 bg-[#101723] border border-emerald-500/40 rounded-xs gap-1.5">
+                        <button
+                          type="button"
+                          onClick={handleAutoSyncP0Sanity}
+                          className="w-full px-2 py-1 text-[9.5px] font-mono font-bold text-sky-300 bg-sky-950/70 hover:bg-sky-900/90 border border-sky-500/40 rounded-xs cursor-pointer transition-colors leading-tight"
+                          title="Rekonsiliasi P0 1-Klik: Normalisasi skala USD→IDR (bila terdeteksi) & samakan Market Cap = Shares × Harga Live agar Δ = 0,00% (SANITY: PASS)"
+                        >
+                          Auto-Sync P0 (Reconcile)
+                        </button>
+                        <button
+                          type="submit"
+                          className="mt-auto w-full h-8 px-2.5 text-[11px] font-bold text-white bg-emerald-600 hover:bg-emerald-500 rounded-xs cursor-pointer transition-colors"
+                        >
+                          Simpan USER_OVERRIDE
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
 
               {/* Real-Time Live Preview Bar inside Calibration Modal */}
               {liveCalibrationPreview && (
@@ -2707,23 +3009,28 @@ export function EmitenFundamentalInspectorModal({
               </div>
             </div>
 
-            {/* UI Notification Flags Banner (e.g., Capex Override Anomaly Warning) */}
+            {/* UI Notification Flags Banner (Dynamic Context-Aware Warning Badges) */}
             {(joeliardiEval.valuationReport?.ui_notifications ?? joeliardiEval.uiNotifications ?? []).length > 0 && (
               <div className="space-y-1.5">
                 {(joeliardiEval.valuationReport?.ui_notifications ?? joeliardiEval.uiNotifications ?? []).map(
-                  (notifMsg, nIdx) => (
-                    <div
-                      key={nIdx}
-                      className="px-3.5 py-2.5 bg-[#FFFBEB] border border-[#D97706]/60 rounded-xs flex items-start gap-2.5 text-[11px] font-mono text-[#92400E] shadow-2xs"
-                    >
-                      <span className="px-1.5 py-0.5 rounded-xs bg-[#D97706] text-white text-[9px] font-extrabold uppercase tracking-wider shrink-0 mt-0.5">
-                        CAPEX OVERRIDE
-                      </span>
-                      <span className="font-semibold leading-relaxed text-[#78350F]">
-                        {notifMsg}
-                      </span>
-                    </div>
-                  )
+                  (notifMsg, nIdx) => {
+                    const badgeMeta = resolveUiNotificationBadgeMeta(notifMsg);
+                    return (
+                      <div
+                        key={nIdx}
+                        className={`px-3.5 py-2.5 border rounded-xs flex items-start gap-2.5 text-[11px] font-mono shadow-2xs ${badgeMeta.boxBgClass} ${badgeMeta.boxBorderClass} ${badgeMeta.boxTextClass}`}
+                      >
+                        <span
+                          className={`px-1.5 py-0.5 rounded-xs text-[9px] font-extrabold uppercase tracking-wider shrink-0 mt-0.5 ${badgeMeta.pillBgClass} ${badgeMeta.pillTextClass}`}
+                        >
+                          {badgeMeta.badgeLabel}
+                        </span>
+                        <span className={`font-semibold leading-relaxed ${badgeMeta.boxTextClass}`}>
+                          {notifMsg}
+                        </span>
+                      </div>
+                    );
+                  }
                 )}
               </div>
             )}

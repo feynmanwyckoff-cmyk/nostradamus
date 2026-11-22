@@ -72,6 +72,15 @@ export interface FundamentalUserOverride {
   /** Stored in FULL IDR (converted from Miliar Rp via * 1e9 on save) */
   cashAndEquivalents?: number;
   cashAndEquivalentsIdr?: number;
+  /** Stored in FULL IDR (converted from Miliar Rp via * 1e9 on save) */
+  ocfTTM?: number;
+  ocfTTMIdr?: number;
+  /** Stored in FULL IDR (converted from Miliar Rp via * 1e9 on save) */
+  capexTTM?: number;
+  capexTTMIdr?: number;
+  /** Stored in FULL IDR (converted from Miliar Rp via * 1e9 on save) */
+  daTTM?: number;
+  daTTMIdr?: number;
   /** Stored in FULL shares */
   sharesOutstanding?: number;
   /** Stored in FULL IDR (converted from Miliar Rp via * 1e9 on save) */
@@ -87,12 +96,15 @@ export interface FundamentalsSnapshotTickerEntry {
   fetchedAt?: string;
   asOfDate?: string | null;
   fiscalPeriod?: string;
+  reportingCurrency?: string;
+  usdIdrRateApplied?: number | null;
   decumulationMethod?: string;
   decumulationNote?: string;
   raw4QRevenueSum?: number | null;
   latestFullYearRevenue?: number | null;
   revenueTTM?: number | null;
   ebitTTM?: number | null;
+  ebitdaTTM?: number | null;
   netIncomeTTM?: number | null;
   netIncomeYoYPct?: number | null;
   operatingProfitYoYPct?: number | null;
@@ -238,6 +250,9 @@ function normalizeUserOverrideRecord(raw: FundamentalUserOverride): FundamentalU
   const eq = raw.equityAttributableIdr ?? raw.equityAttributable;
   const debt = raw.totalDebtIdr ?? raw.totalDebt;
   const cash = raw.cashAndEquivalentsIdr ?? raw.cashAndEquivalents;
+  const ocf = raw.ocfTTMIdr ?? raw.ocfTTM;
+  const capex = raw.capexTTMIdr ?? raw.capexTTM;
+  const da = raw.daTTMIdr ?? raw.daTTM;
   const sbn = raw.sbn10YOverridePct ?? raw.sbn10YPct;
   return {
     ...raw,
@@ -253,8 +268,308 @@ function normalizeUserOverrideRecord(raw: FundamentalUserOverride): FundamentalU
     totalDebtIdr: debt,
     cashAndEquivalents: cash,
     cashAndEquivalentsIdr: cash,
+    ocfTTM: ocf,
+    ocfTTMIdr: ocf,
+    capexTTM: capex,
+    capexTTMIdr: capex,
+    daTTM: da,
+    daTTMIdr: da,
     sbn10YPct: sbn,
     sbn10YOverridePct: sbn,
+  };
+}
+
+export interface UiNotificationBadgeMeta {
+  badgeLabel: string;
+  cleanMessage: string;
+  pillBgHex: string;
+  pillTextHex: string;
+  boxBgHex: string;
+  boxBorderHex: string;
+  textHex: string;
+  pillBgClass: string;
+  pillTextClass: string;
+  boxBgClass: string;
+  boxBorderClass: string;
+  boxTextClass: string;
+  canvasBoxFillRgba: string;
+  canvasBoxStrokeRgba: string;
+  canvasTextHex: string;
+}
+
+/**
+ * Dynamically maps each valuation / guardrail notification string to a distinct,
+ * context-accurate badge label and color scheme (used across both React UI and Canvas PNG/PDF exports).
+ */
+export function resolveUiNotificationBadgeMeta(rawMessage: string): UiNotificationBadgeMeta {
+  const msg = String(rawMessage || '').trim();
+  const upper = msg.toUpperCase();
+
+  if (upper.includes('GUARDRAIL PROVENANCE SEED_WARN')) {
+    return {
+      badgeLabel: 'PROVENANCE GUARD',
+      cleanMessage: msg,
+      pillBgHex: '#BE123C',
+      pillTextHex: '#FFFFFF',
+      boxBgHex: '#FFF1F2',
+      boxBorderHex: '#E11D48',
+      textHex: '#881337',
+      pillBgClass: 'bg-[#BE123C]',
+      pillTextClass: 'text-white',
+      boxBgClass: 'bg-[#FFF1F2]',
+      boxBorderClass: 'border-[#E11D48]/60',
+      boxTextClass: 'text-[#881337]',
+      canvasBoxFillRgba: 'rgba(225, 29, 72, 0.16)',
+      canvasBoxStrokeRgba: 'rgba(244, 63, 94, 0.72)',
+      canvasTextHex: '#FECDD3',
+    };
+  }
+
+  if (upper.includes('CAPEX ANOMALY') || upper.includes('CAPEX OVERRIDE')) {
+    return {
+      badgeLabel: 'CAPEX OVERRIDE',
+      cleanMessage: msg,
+      pillBgHex: '#D97706',
+      pillTextHex: '#FFFFFF',
+      boxBgHex: '#FFFBEB',
+      boxBorderHex: '#D97706',
+      textHex: '#78350F',
+      pillBgClass: 'bg-[#D97706]',
+      pillTextClass: 'text-white',
+      boxBgClass: 'bg-[#FFFBEB]',
+      boxBorderClass: 'border-[#D97706]/60',
+      boxTextClass: 'text-[#78350F]',
+      canvasBoxFillRgba: 'rgba(245, 158, 11, 0.15)',
+      canvasBoxStrokeRgba: 'rgba(245, 158, 11, 0.72)',
+      canvasTextHex: '#FDE68A',
+    };
+  }
+
+  if (upper.includes('SEED_DATA_ACTIVE')) {
+    return {
+      badgeLabel: 'SEED DATA WARN',
+      cleanMessage: msg,
+      pillBgHex: '#B45309',
+      pillTextHex: '#FFFFFF',
+      boxBgHex: '#FFFBEB',
+      boxBorderHex: '#D97706',
+      textHex: '#78350F',
+      pillBgClass: 'bg-[#B45309]',
+      pillTextClass: 'text-white',
+      boxBgClass: 'bg-[#FFFBEB]',
+      boxBorderClass: 'border-[#D97706]/60',
+      boxTextClass: 'text-[#78350F]',
+      canvasBoxFillRgba: 'rgba(217, 119, 6, 0.16)',
+      canvasBoxStrokeRgba: 'rgba(245, 158, 11, 0.72)',
+      canvasTextHex: '#FDE68A',
+    };
+  }
+
+  if (upper.includes('FLOOR_INVARIANT_CLAMPED')) {
+    return {
+      badgeLabel: 'FLOOR CLAMPED',
+      cleanMessage: msg,
+      pillBgHex: '#0369A1',
+      pillTextHex: '#FFFFFF',
+      boxBgHex: '#F0F9FF',
+      boxBorderHex: '#0284C7',
+      textHex: '#0C4A6E',
+      pillBgClass: 'bg-[#0369A1]',
+      pillTextClass: 'text-white',
+      boxBgClass: 'bg-[#F0F9FF]',
+      boxBorderClass: 'border-[#0284C7]/60',
+      boxTextClass: 'text-[#0C4A6E]',
+      canvasBoxFillRgba: 'rgba(14, 165, 233, 0.15)',
+      canvasBoxStrokeRgba: 'rgba(56, 189, 248, 0.72)',
+      canvasTextHex: '#BAE6FD',
+    };
+  }
+
+  if (upper.includes('CRITICAL_DATA_MISMATCH')) {
+    return {
+      badgeLabel: 'DATA MISMATCH P0',
+      cleanMessage: msg,
+      pillBgHex: '#E11D48',
+      pillTextHex: '#FFFFFF',
+      boxBgHex: '#FFF1F2',
+      boxBorderHex: '#E11D48',
+      textHex: '#881337',
+      pillBgClass: 'bg-[#E11D48]',
+      pillTextClass: 'text-white',
+      boxBgClass: 'bg-[#FFF1F2]',
+      boxBorderClass: 'border-[#E11D48]/60',
+      boxTextClass: 'text-[#881337]',
+      canvasBoxFillRgba: 'rgba(225, 29, 72, 0.18)',
+      canvasBoxStrokeRgba: 'rgba(244, 63, 94, 0.78)',
+      canvasTextHex: '#FECDD3',
+    };
+  }
+
+  if (upper.includes('YTD_CUMULATIVE_SUM_SUSPECT')) {
+    return {
+      badgeLabel: 'YTD DECUM GUARD',
+      cleanMessage: msg,
+      pillBgHex: '#C2410C',
+      pillTextHex: '#FFFFFF',
+      boxBgHex: '#FFF7ED',
+      boxBorderHex: '#EA580C',
+      textHex: '#7C2D12',
+      pillBgClass: 'bg-[#C2410C]',
+      pillTextClass: 'text-white',
+      boxBgClass: 'bg-[#FFF7ED]',
+      boxBorderClass: 'border-[#EA580C]/60',
+      boxTextClass: 'text-[#7C2D12]',
+      canvasBoxFillRgba: 'rgba(234, 88, 12, 0.16)',
+      canvasBoxStrokeRgba: 'rgba(249, 115, 22, 0.72)',
+      canvasTextHex: '#FED7AA',
+    };
+  }
+
+  if (upper.includes('BALANCE_SHEET_ANOMALY')) {
+    return {
+      badgeLabel: 'NERACA ANOMALY',
+      cleanMessage: msg,
+      pillBgHex: '#BE123C',
+      pillTextHex: '#FFFFFF',
+      boxBgHex: '#FFF1F2',
+      boxBorderHex: '#E11D48',
+      textHex: '#881337',
+      pillBgClass: 'bg-[#BE123C]',
+      pillTextClass: 'text-white',
+      boxBgClass: 'bg-[#FFF1F2]',
+      boxBorderClass: 'border-[#E11D48]/60',
+      boxTextClass: 'text-[#881337]',
+      canvasBoxFillRgba: 'rgba(225, 29, 72, 0.16)',
+      canvasBoxStrokeRgba: 'rgba(244, 63, 94, 0.72)',
+      canvasTextHex: '#FECDD3',
+    };
+  }
+
+  if (upper.includes('ADTV_UNIT_ANOMALY')) {
+    return {
+      badgeLabel: 'ADTV ANOMALY',
+      cleanMessage: msg,
+      pillBgHex: '#B45309',
+      pillTextHex: '#FFFFFF',
+      boxBgHex: '#FFFBEB',
+      boxBorderHex: '#D97706',
+      textHex: '#78350F',
+      pillBgClass: 'bg-[#B45309]',
+      pillTextClass: 'text-white',
+      boxBgClass: 'bg-[#FFFBEB]',
+      boxBorderClass: 'border-[#D97706]/60',
+      boxTextClass: 'text-[#78350F]',
+      canvasBoxFillRgba: 'rgba(245, 158, 11, 0.15)',
+      canvasBoxStrokeRgba: 'rgba(245, 158, 11, 0.72)',
+      canvasTextHex: '#FDE68A',
+    };
+  }
+
+  if (upper.includes('CATALYST_UNCONFIRMED_NON_OP') || upper.includes('CATALYST REJECTED')) {
+    return {
+      badgeLabel: 'CATALYST GUARD',
+      cleanMessage: msg,
+      pillBgHex: '#6D28D9',
+      pillTextHex: '#FFFFFF',
+      boxBgHex: '#F5F3FF',
+      boxBorderHex: '#7C3AED',
+      textHex: '#4C1D95',
+      pillBgClass: 'bg-[#6D28D9]',
+      pillTextClass: 'text-white',
+      boxBgClass: 'bg-[#F5F3FF]',
+      boxBorderClass: 'border-[#7C3AED]/60',
+      boxTextClass: 'text-[#4C1D95]',
+      canvasBoxFillRgba: 'rgba(139, 92, 246, 0.15)',
+      canvasBoxStrokeRgba: 'rgba(167, 139, 250, 0.72)',
+      canvasTextHex: '#DDD6FE',
+    };
+  }
+
+  if (upper.includes('SBN') || upper.includes('RISK-FREE') || upper.includes('PROXY_FORMULA')) {
+    return {
+      badgeLabel: 'MACRO SBN WARN',
+      cleanMessage: msg,
+      pillBgHex: '#B45309',
+      pillTextHex: '#FFFFFF',
+      boxBgHex: '#FFFBEB',
+      boxBorderHex: '#D97706',
+      textHex: '#78350F',
+      pillBgClass: 'bg-[#B45309]',
+      pillTextClass: 'text-white',
+      boxBgClass: 'bg-[#FFFBEB]',
+      boxBorderClass: 'border-[#D97706]/60',
+      boxTextClass: 'text-[#78350F]',
+      canvasBoxFillRgba: 'rgba(245, 158, 11, 0.15)',
+      canvasBoxStrokeRgba: 'rgba(245, 158, 11, 0.72)',
+      canvasTextHex: '#FDE68A',
+    };
+  }
+
+  return {
+    badgeLabel: 'QUANT GUARDRAIL',
+    cleanMessage: msg,
+    pillBgHex: '#D97706',
+    pillTextHex: '#FFFFFF',
+    boxBgHex: '#FFFBEB',
+    boxBorderHex: '#D97706',
+    textHex: '#78350F',
+    pillBgClass: 'bg-[#D97706]',
+    pillTextClass: 'text-white',
+    boxBgClass: 'bg-[#FFFBEB]',
+    boxBorderClass: 'border-[#D97706]/60',
+    boxTextClass: 'text-[#78350F]',
+    canvasBoxFillRgba: 'rgba(245, 158, 11, 0.15)',
+    canvasBoxStrokeRgba: 'rgba(245, 158, 11, 0.72)',
+    canvasTextHex: '#FDE68A',
+  };
+}
+
+export function resolveCalibratorFieldProvenanceBadge(
+  field?: TrackedField<number> | null,
+  hasExplicitUserOverride?: boolean
+): {
+  label: string;
+  isRealtimeOrFresh: boolean;
+  className: string;
+  tooltip: string;
+} {
+  if (hasExplicitUserOverride || field?.source === 'USER_OVERRIDE') {
+    return {
+      label: 'USER OVERRIDE',
+      isRealtimeOrFresh: true,
+      className: 'bg-indigo-950/90 text-indigo-300 border-indigo-500/50',
+      tooltip: field?.note || 'Data telah dikalibrasi manual oleh analis (status FRESH)',
+    };
+  }
+  if (field?.source === 'LIVE_YAHOO_API') {
+    return {
+      label: 'LIVE REALTIME',
+      isRealtimeOrFresh: true,
+      className: 'bg-sky-950/90 text-sky-300 border-sky-500/50',
+      tooltip: field?.note || 'Data real-time langsung dari Yahoo Finance API (status FRESH)',
+    };
+  }
+  if (field?.source === 'FUNDAMENTALS_JSON' || field?.source === 'SNAPSHOT_JSON') {
+    return {
+      label: 'SYNCED JSON',
+      isRealtimeOrFresh: true,
+      className: 'bg-emerald-950/90 text-emerald-300 border-emerald-500/50',
+      tooltip: field?.note || 'Data aktual tersinkronisasi dari snapshot JSON (status FRESH)',
+    };
+  }
+  if (field?.source === 'PROXY_FORMULA') {
+    return {
+      label: 'MACRO PROXY',
+      isRealtimeOrFresh: false,
+      className: 'bg-amber-950/90 text-amber-300 border-amber-500/50',
+      tooltip: field?.note || 'Dihitung menggunakan formula proksi makro (^TNX + spread)',
+    };
+  }
+  return {
+    label: 'HARDCODED SEED',
+    isRealtimeOrFresh: false,
+    className: 'bg-rose-950/90 text-rose-300 border-rose-500/60',
+    tooltip: field?.note || 'Masih berasal dari katalog seed statis (SEED_WARN — perlu sync / override)',
   };
 }
 

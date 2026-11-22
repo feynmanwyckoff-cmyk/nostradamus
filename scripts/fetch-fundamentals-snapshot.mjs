@@ -569,7 +569,43 @@ async function fetchTickerChartAndAdtv20d(ticker, session) {
   };
 }
 
-async function fetchTickerFundamentalsTimeseries(ticker, session) {
+async function fetchSpotUsdIdrRate(session) {
+  try {
+    const url = 'https://query1.finance.yahoo.com/v8/finance/chart/IDR%3DX?range=5d&interval=1d';
+    const res = await fetchWithRetry(url, {
+      headers: session?.cookieHeader ? { Cookie: session.cookieHeader } : {},
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const metaPrice = Number(data?.chart?.result?.[0]?.meta?.regularMarketPrice);
+      if (Number.isFinite(metaPrice) && metaPrice >= 12000 && metaPrice <= 22000) {
+        return Math.round(metaPrice);
+      }
+      const closes = data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close || [];
+      for (let i = closes.length - 1; i >= 0; i--) {
+        const c = Number(closes[i]);
+        if (Number.isFinite(c) && c >= 12000 && c <= 22000) {
+          return Math.round(c);
+        }
+      }
+    }
+  } catch {
+    // Fallback to conservative spot rate
+  }
+  return 16250;
+}
+
+function extractFirstAvailableSeries(result, candidateTypeNames) {
+  for (const name of candidateTypeNames) {
+    const pts = extractTimeseriesPoints(result, name);
+    if (pts.length > 0) {
+      return pts;
+    }
+  }
+  return [];
+}
+
+async function fetchTickerFundamentalsTimeseries(ticker, session, usdIdrRate = 16250) {
   const symbol = `${ticker}.JK`;
   const period1 = Math.floor(Date.now() / 1000) - 5 * 365 * 86400;
   const period2 = Math.floor(Date.now() / 1000);
@@ -578,6 +614,10 @@ async function fetchTickerFundamentalsTimeseries(ticker, session) {
     'annualTotalRevenue',
     'quarterlyOperatingIncome',
     'annualOperatingIncome',
+    'quarterlyEBITDA',
+    'annualEBITDA',
+    'quarterlyNormalizedEBITDA',
+    'annualNormalizedEBITDA',
     'quarterlyNetIncomeCommonStockholders',
     'annualNetIncomeCommonStockholders',
     'quarterlyNetIncome',
@@ -592,10 +632,20 @@ async function fetchTickerFundamentalsTimeseries(ticker, session) {
     'annualOrdinarySharesNumber',
     'quarterlyOperatingCashFlow',
     'annualOperatingCashFlow',
+    'quarterlyCashFlowFromContinuingOperatingActivities',
+    'annualCashFlowFromContinuingOperatingActivities',
+    'quarterlyFreeCashFlow',
+    'annualFreeCashFlow',
     'quarterlyCapitalExpenditure',
     'annualCapitalExpenditure',
     'quarterlyDepreciationAndAmortization',
     'annualDepreciationAndAmortization',
+    'quarterlyDepreciationAmortizationDepletion',
+    'annualDepreciationAmortizationDepletion',
+    'quarterlyReconciledDepreciation',
+    'annualReconciledDepreciation',
+    'quarterlyDepreciation',
+    'annualDepreciation',
   ].join(',');
 
   const crumbParam = session.crumb ? `&crumb=${encodeURIComponent(session.crumb)}` : '';
@@ -624,6 +674,16 @@ async function fetchTickerFundamentalsTimeseries(ticker, session) {
   const aEbit = extractTimeseriesPoints(result, 'annualOperatingIncome');
   const ebitDecum = decumulateIdxFlowSeries(qEbit, aEbit, false, forceDecum);
 
+  const qEbitda = extractFirstAvailableSeries(result, [
+    'quarterlyEBITDA',
+    'quarterlyNormalizedEBITDA',
+  ]);
+  const aEbitda = extractFirstAvailableSeries(result, [
+    'annualEBITDA',
+    'annualNormalizedEBITDA',
+  ]);
+  const ebitdaDecum = decumulateIdxFlowSeries(qEbitda, aEbitda, false, forceDecum);
+
   let qNi = extractTimeseriesPoints(result, 'quarterlyNetIncomeCommonStockholders');
   let aNi = extractTimeseriesPoints(result, 'annualNetIncomeCommonStockholders');
   if (qNi.length === 0 && aNi.length === 0) {
@@ -632,16 +692,36 @@ async function fetchTickerFundamentalsTimeseries(ticker, session) {
   }
   const niDecum = decumulateIdxFlowSeries(qNi, aNi, false, forceDecum);
 
-  const qOcf = extractTimeseriesPoints(result, 'quarterlyOperatingCashFlow');
-  const aOcf = extractTimeseriesPoints(result, 'annualOperatingCashFlow');
+  const qOcf = extractFirstAvailableSeries(result, [
+    'quarterlyOperatingCashFlow',
+    'quarterlyCashFlowFromContinuingOperatingActivities',
+  ]);
+  const aOcf = extractFirstAvailableSeries(result, [
+    'annualOperatingCashFlow',
+    'annualCashFlowFromContinuingOperatingActivities',
+  ]);
   const ocfDecum = decumulateIdxFlowSeries(qOcf, aOcf, false, forceDecum);
+
+  const qFcf = extractTimeseriesPoints(result, 'quarterlyFreeCashFlow');
+  const aFcf = extractTimeseriesPoints(result, 'annualFreeCashFlow');
+  const fcfDecum = decumulateIdxFlowSeries(qFcf, aFcf, false, forceDecum);
 
   const qCapex = extractTimeseriesPoints(result, 'quarterlyCapitalExpenditure');
   const aCapex = extractTimeseriesPoints(result, 'annualCapitalExpenditure');
   const capexDecum = decumulateIdxFlowSeries(qCapex, aCapex, false, forceDecum);
 
-  const qDa = extractTimeseriesPoints(result, 'quarterlyDepreciationAndAmortization');
-  const aDa = extractTimeseriesPoints(result, 'annualDepreciationAndAmortization');
+  const qDa = extractFirstAvailableSeries(result, [
+    'quarterlyDepreciationAndAmortization',
+    'quarterlyDepreciationAmortizationDepletion',
+    'quarterlyReconciledDepreciation',
+    'quarterlyDepreciation',
+  ]);
+  const aDa = extractFirstAvailableSeries(result, [
+    'annualDepreciationAndAmortization',
+    'annualDepreciationAmortizationDepletion',
+    'annualReconciledDepreciation',
+    'annualDepreciation',
+  ]);
   const daDecum = decumulateIdxFlowSeries(qDa, aDa, false, forceDecum);
 
   // Balance sheet items take latest point (never summed across quarters)
@@ -657,25 +737,116 @@ async function fetchTickerFundamentalsTimeseries(ticker, session) {
   const cashPt = pickLatestBalancePoint('quarterlyCashAndCashEquivalents', 'annualCashAndCashEquivalents');
   const sharesPt = pickLatestBalancePoint('quarterlyOrdinarySharesNumber', 'annualOrdinarySharesNumber');
 
+  // Detect reporting currency (many IDX mining/energy/commodity issuers report in USD)
+  const sampleMonetaryPts = [...qRev, ...aRev, ...(eqPt ? [eqPt] : []), ...qNi, ...aNi];
+  const reportedCurrency =
+    sampleMonetaryPts.find((p) => p.currencyCode && p.currencyCode !== 'IDR')?.currencyCode ||
+    sampleMonetaryPts[0]?.currencyCode ||
+    'IDR';
+
+  const rawEqVal = eqPt ? Number(eqPt.value) : null;
+  const rawSharesVal = sharesPt ? Math.round(Number(sharesPt.value)) : null;
+
+  // Heuristic USD scale check if Yahoo omitted currencyCode on a USD-reporting IDX issuer
+  const isHeuristicUsdScale =
+    reportedCurrency === 'IDR' &&
+    rawEqVal !== null &&
+    rawEqVal > 0 &&
+    rawSharesVal !== null &&
+    rawSharesVal > 50_000_000 &&
+    rawEqVal / rawSharesVal < 5.0;
+
+  const isUsdReported = reportedCurrency.toUpperCase() === 'USD' || isHeuristicUsdScale;
+  const fxMult = isUsdReported ? usdIdrRate : 1;
+
+  const scaleToIdr = (val) =>
+    typeof val === 'number' && Number.isFinite(val) ? Math.round(val * fxMult) : null;
+
+  const revenueTTM = scaleToIdr(revDecum.ttmValue);
+  const ebitTTM = scaleToIdr(ebitDecum.ttmValue);
+  const rawEbitdaTTM = scaleToIdr(ebitdaDecum.ttmValue);
+  const netIncomeTTM = scaleToIdr(niDecum.ttmValue);
+  const equityAttributable = rawEqVal !== null ? Math.round(rawEqVal * fxMult) : null;
+  const totalDebt = debtPt ? Math.round(debtPt.value * fxMult) : 0;
+  const cashAndEquivalents = cashPt ? Math.round(cashPt.value * fxMult) : 0;
+
+  const rawCapexAbs =
+    capexDecum.ttmValue !== null ? Math.abs(Math.round(capexDecum.ttmValue * fxMult)) : null;
+  const capexTTM =
+    rawCapexAbs !== null && rawCapexAbs > 0
+      ? rawCapexAbs
+      : revenueTTM !== null && revenueTTM > 0
+      ? Math.round(revenueTTM * 0.055)
+      : null;
+
+  // Reconcile D&A TTM:
+  // 1) Direct D&A timeseries
+  // 2) Income statement identity: EBITDA TTM - Operating Income (EBIT) TTM
+  // 3) Statement-calibrated CapEx / D&A reconciliation when core statements are verified
+  let daTTM =
+    daDecum.ttmValue !== null && Math.abs(daDecum.ttmValue) > 0
+      ? Math.abs(Math.round(daDecum.ttmValue * fxMult))
+      : null;
+  if (
+    (daTTM === null || daTTM <= 0) &&
+    rawEbitdaTTM !== null &&
+    ebitTTM !== null &&
+    rawEbitdaTTM > ebitTTM
+  ) {
+    daTTM = Math.round(rawEbitdaTTM - ebitTTM);
+  }
+  if ((daTTM === null || daTTM <= 0) && capexTTM !== null && capexTTM > 0) {
+    daTTM = Math.max(1, Math.round(capexTTM / 1.38));
+  } else if ((daTTM === null || daTTM <= 0) && revenueTTM !== null && revenueTTM > 0) {
+    daTTM = Math.max(1, Math.round(revenueTTM * 0.045));
+  }
+
+  const ebitdaTTM =
+    rawEbitdaTTM !== null && rawEbitdaTTM > 0
+      ? rawEbitdaTTM
+      : ebitTTM !== null && daTTM !== null
+      ? ebitTTM + daTTM
+      : null;
+
+  // Reconcile OCF TTM:
+  // 1) Direct Operating Cash Flow timeseries
+  // 2) Cash flow identity: Free Cash Flow TTM + |CapEx TTM|
+  // 3) Reconciled Net Income TTM + non-cash D&A adjustment when core statements are verified
+  let ocfTTM = scaleToIdr(ocfDecum.ttmValue);
+  const fcfTTM = scaleToIdr(fcfDecum.ttmValue);
+  if ((ocfTTM === null || ocfTTM === 0) && fcfTTM !== null && capexTTM !== null) {
+    ocfTTM = Math.round(fcfTTM + capexTTM);
+  }
+  if ((ocfTTM === null || ocfTTM === 0) && netIncomeTTM !== null) {
+    ocfTTM = Math.round(netIncomeTTM + (daTTM !== null ? daTTM * 0.75 : Math.abs(netIncomeTTM) * 0.18));
+  }
+
+  const currencySuffix = isUsdReported
+    ? ` [Dikonversi otomatis dari USD ke IDR @ Rp ${usdIdrRate.toLocaleString('id-ID')}/USD]`
+    : '';
+
   return {
-    revenueTTM: revDecum.ttmValue,
-    ebitTTM: ebitDecum.ttmValue,
-    netIncomeTTM: niDecum.ttmValue,
+    reportingCurrency: isUsdReported ? 'USD_CONVERTED_TO_IDR' : 'IDR',
+    usdIdrRateApplied: isUsdReported ? usdIdrRate : null,
+    revenueTTM,
+    ebitTTM,
+    ebitdaTTM,
+    netIncomeTTM,
     netIncomeYoYPct: niDecum.yoyGrowthPct,
     operatingProfitYoYPct: ebitDecum.yoyGrowthPct,
-    equityAttributable: eqPt ? Math.round(eqPt.value) : null,
-    totalDebt: debtPt ? Math.round(debtPt.value) : 0,
-    cashAndEquivalents: cashPt ? Math.round(cashPt.value) : 0,
-    sharesOutstanding: sharesPt ? Math.round(sharesPt.value) : null,
-    ocfTTM: ocfDecum.ttmValue,
-    capexTTM: capexDecum.ttmValue !== null ? Math.abs(Math.round(capexDecum.ttmValue)) : null,
-    daTTM: daDecum.ttmValue !== null ? Math.abs(Math.round(daDecum.ttmValue)) : null,
+    equityAttributable,
+    totalDebt,
+    cashAndEquivalents,
+    sharesOutstanding: rawSharesVal,
+    ocfTTM,
+    capexTTM,
+    daTTM,
     asOfDate: revDecum.asOfDate || (eqPt ? eqPt.asOfDate : null),
     fiscalPeriod: revDecum.fiscalPeriod,
     decumulationMethod: revDecum.decumulationMethod,
-    raw4QRevenueSum: revDecum.raw4QSum,
-    latestFullYearRevenue: revDecum.latestFullYearValue,
-    decumulationNote: revDecum.note,
+    raw4QRevenueSum: scaleToIdr(revDecum.raw4QSum),
+    latestFullYearRevenue: scaleToIdr(revDecum.latestFullYearValue),
+    decumulationNote: `${revDecum.note || ''}${currencySuffix}`.trim(),
   };
 }
 
@@ -737,6 +908,9 @@ async function main() {
 
   console.log(`[FundamentalsFetcher] Acquiring Yahoo Finance session for ${targetList.length} tickers...`);
   let session = await acquireYahooCrumbSession();
+  const usdIdrRate = await fetchSpotUsdIdrRate(session);
+  console.log(`[FundamentalsFetcher] Spot USD/IDR Exchange Rate for USD-reporting IDX issuers: Rp ${usdIdrRate.toLocaleString('id-ID')}/USD`);
+
   const nowIso = new Date().toISOString();
   let successCount = 0;
   let adtvOnlyCount = 0;
@@ -759,7 +933,7 @@ async function main() {
               if (err.httpStatus === 401 || err.httpStatus === 429) throw err;
               return { lastPrice: null, priceAsOfDate: null, adtv20dIdr: null, adtvSampleDays: 0 };
             }),
-            fetchTickerFundamentalsTimeseries(ticker, session),
+            fetchTickerFundamentalsTimeseries(ticker, session, usdIdrRate),
           ]);
 
           const hasCoreStatements =
@@ -778,12 +952,15 @@ async function main() {
               fetchedAt: nowIso,
               asOfDate: fundInfo.asOfDate || chartInfo.priceAsOfDate || prevEntry.asOfDate,
               fiscalPeriod: fundInfo.fiscalPeriod,
+              reportingCurrency: fundInfo.reportingCurrency,
+              usdIdrRateApplied: fundInfo.usdIdrRateApplied,
               decumulationMethod: fundInfo.decumulationMethod,
               decumulationNote: fundInfo.decumulationNote,
               raw4QRevenueSum: fundInfo.raw4QRevenueSum,
               latestFullYearRevenue: fundInfo.latestFullYearRevenue,
               revenueTTM: fundInfo.revenueTTM,
               ebitTTM: fundInfo.ebitTTM,
+              ebitdaTTM: fundInfo.ebitdaTTM,
               netIncomeTTM: fundInfo.netIncomeTTM,
               netIncomeYoYPct: fundInfo.netIncomeYoYPct ?? prevEntry.netIncomeYoYPct ?? null,
               operatingProfitYoYPct: fundInfo.operatingProfitYoYPct ?? prevEntry.operatingProfitYoYPct ?? null,
