@@ -400,6 +400,8 @@ export interface JoeliardiOosEvaluation {
   isUndercutDeepDiscount: boolean;
   valuationVerdict: 'STRONG_UNDERVALUED' | 'FAIR_QUALITY' | 'FULLY_VALUED' | 'OVERVALUED_OR_TRAP';
   valuationLabel: string;
+  recommendedActionText?: string;
+  formattedAccumulationZone?: string;
   businessQualityScore: number;   // 0 - 100 (Pillar 1: GP/A, ROE vs Dynamic Ke, Anti-Junk Accruals)
   balanceSheetHealthScore: number; // 0 - 100 (Pillar 2: DER, OCF Conversion, Dividend Reality)
   valuationSafetyScore: number;   // 0 - 100 (Pillar 3: Multi-Method Ensemble MoS, Sector Matrix & SBN Spot Ke)
@@ -409,9 +411,19 @@ export interface JoeliardiOosEvaluation {
     | 'A+ (CORE CONVICTION)'
     | 'A (SOLID VALUE)'
     | 'B (WATCHLIST / HOLD)'
+    | 'C (SEED CAPPED)'
     | 'C (SPECULATIVE)'
     | 'D (AVOID / HSC)'
     | 'DATA_AUDIT_REQUIRED';
+  compactHeaderGradeBadge?: string; // Strict 1-line compact badge (<= 12 chars): e.g. 'A · 84/100', 'B · 69/100', 'C · SEED CAP'
+  compactHeaderDataBadge?: string;  // 'DATA: FRESH' | 'DATA: OVERRIDE' | 'DATA: PROXY' | 'DATA: SEED WARN'
+  compactHeaderDataStatus?: 'FRESH' | 'OVERRIDE' | 'PROXY' | 'SEED_WARN';
+  isHighConvictionActionEligible?: boolean;
+  trueRoaPct?: number;
+  assetLeverageRatio?: number;
+  totalAssetsIdr?: number;
+  sectorMethodologyProfile?: import('../utils/sectorMethodologyRouter').SectorMethodologyProfile;
+  sectorMethodologyNotice?: string;
   keyStrengths: string[];
   keyRisks: string[];
   // P0-P2 Data Integrity, 2-Stage Valuation, Tactical Overlay & Risk Sizing Architecture
@@ -425,6 +437,8 @@ export interface JoeliardiOosEvaluation {
   isConvictionCappedBySeed?: boolean;
   seedCapWarningReason?: string;
 }
+
+export type UnifiedEvaluationResult = JoeliardiOosEvaluation;
 
 /**
  * ============================================================================
@@ -709,6 +723,7 @@ export interface RiskSizingResult {
     | 'A+ (CORE CONVICTION)'
     | 'A (SOLID VALUE)'
     | 'B (WATCHLIST / HOLD)'
+    | 'C (SEED CAPPED)'
     | 'C (SPECULATIVE)'
     | 'D (AVOID / HSC)'
     | 'DATA_AUDIT_REQUIRED';

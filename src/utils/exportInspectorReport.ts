@@ -749,12 +749,14 @@ export function renderInspectorReportCanvas(
   const sbn10Y = joeliardiEval.sbnSpot10YPct ?? 6.75;
   const sbnBlended = joeliardiEval.sbnBlendedSpotRfPct ?? 6.64;
   const dynKe = joeliardiEval.dynamicCostOfEquityPct ?? 12.64;
-  const justPbv =
-    joeliardiEval.damodaranJustifiedPbv ?? joeliardiEval.joeliardiFairPbv;
+  const justPbv = joeliardiEval.joeliardiFairPbv;
   const sustGrowth = joeliardiEval.sustainableGrowthRatePct ?? 5.5;
   const betaPropensity =
     stock.betaWeightedPropensity ?? 1 / Math.max(0.45, stock.beta1Y);
   const betaCap = joeliardiEval.betaWeightedSizingCapPct ?? 14.0;
+  const secProfile = joeliardiEval.sectorMethodologyProfile;
+  const hasSectorNoticeBanner = Boolean(joeliardiEval.sectorMethodologyNotice);
+  const sectorNoticeBannerTotalH = hasSectorNoticeBanner ? 44 : 0;
 
   // 1. Pre-measure Optional HSC Banner
   const hasHscBanner = Boolean(stock.isHscFlagged || stock.hscSource === 'KSEI_OFFICIAL');
@@ -1248,6 +1250,7 @@ export function renderInspectorReportCanvas(
     124 + // Top Header + initial gap
     hscBannerTotalH +
     catalystBannerTotalH +
+    sectorNoticeBannerTotalH +
     102 + // Row 1: 4 Valuation Cards
     130 + // Row 2: 4 Pillar Score Cards
     multiMethodSectionH + // Multi-Method Ensemble + Standalone Floor + StatArb
@@ -1302,10 +1305,77 @@ export function renderInspectorReportCanvas(
   const headerTextX = 104;
   ctx.fillStyle = '#F59E0B';
   ctx.font = '700 10.5px Montserrat, sans-serif';
-  ctx.fillText('NOSTRADAMUS QUANT TERMINAL', headerTextX, 42);
+  ctx.fillText('NOSTRADAMUS', headerTextX, 42);
 
-  // Inline Header Badges next to Kicker (CATALYST ACTIVE & SPLIT DIVISOR)
-  let kickerBadgeX = headerTextX + ctx.measureText('NOSTRADAMUS QUANT TERMINAL').width + 12;
+  // Strict 1-Line Compact Header Badges next to Kicker (Grade, Data Status, Catalyst, Split)
+  let kickerBadgeX = headerTextX + ctx.measureText('NOSTRADAMUS').width + 10;
+
+  const compactGradeStr =
+    joeliardiEval.compactHeaderGradeBadge ||
+    `${joeliardiEval.convictionGrade} · ${joeliardiEval.totalConvictionScore}/100`;
+  ctx.font = '700 9.0px "Fira Code", monospace';
+  const cgW = ctx.measureText(compactGradeStr).width + 14;
+  drawRoundedRect(ctx, kickerBadgeX, 29, cgW, 18, 3);
+  const isGradeBlockedKicker =
+    stock.isHscFlagged || Boolean(joeliardiEval.sanityReport?.isGradeABlocked);
+  ctx.fillStyle = isGradeBlockedKicker
+    ? 'rgba(225, 29, 72, 0.22)'
+    : joeliardiEval.totalConvictionScore >= 75
+    ? 'rgba(16, 185, 129, 0.22)'
+    : joeliardiEval.totalConvictionScore >= 58
+    ? 'rgba(245, 158, 11, 0.22)'
+    : 'rgba(225, 29, 72, 0.22)';
+  ctx.fill();
+  ctx.strokeStyle = isGradeBlockedKicker
+    ? '#F43F5E'
+    : joeliardiEval.totalConvictionScore >= 75
+    ? '#10B981'
+    : joeliardiEval.totalConvictionScore >= 58
+    ? '#F59E0B'
+    : '#F43F5E';
+  ctx.stroke();
+  ctx.fillStyle = isGradeBlockedKicker
+    ? '#FB7185'
+    : joeliardiEval.totalConvictionScore >= 75
+    ? '#34D399'
+    : joeliardiEval.totalConvictionScore >= 58
+    ? '#FBBF24'
+    : '#FB7185';
+  ctx.fillText(compactGradeStr, kickerBadgeX + 7, 41);
+  kickerBadgeX += cgW + 6;
+
+  const compactDataStr = joeliardiEval.compactHeaderDataBadge || 'DATA: FRESH';
+  const cdW = ctx.measureText(compactDataStr).width + 14;
+  drawRoundedRect(ctx, kickerBadgeX, 29, cdW, 18, 3);
+  ctx.fillStyle =
+    joeliardiEval.compactHeaderDataStatus === 'FRESH'
+      ? 'rgba(16, 185, 129, 0.20)'
+      : joeliardiEval.compactHeaderDataStatus === 'OVERRIDE'
+      ? 'rgba(99, 102, 241, 0.22)'
+      : joeliardiEval.compactHeaderDataStatus === 'SEED_WARN'
+      ? 'rgba(225, 29, 72, 0.22)'
+      : 'rgba(245, 158, 11, 0.22)';
+  ctx.fill();
+  ctx.strokeStyle =
+    joeliardiEval.compactHeaderDataStatus === 'FRESH'
+      ? '#10B981'
+      : joeliardiEval.compactHeaderDataStatus === 'OVERRIDE'
+      ? '#818CF8'
+      : joeliardiEval.compactHeaderDataStatus === 'SEED_WARN'
+      ? '#F43F5E'
+      : '#F59E0B';
+  ctx.stroke();
+  ctx.fillStyle =
+    joeliardiEval.compactHeaderDataStatus === 'FRESH'
+      ? '#34D399'
+      : joeliardiEval.compactHeaderDataStatus === 'OVERRIDE'
+      ? '#A5B4FC'
+      : joeliardiEval.compactHeaderDataStatus === 'SEED_WARN'
+      ? '#FDA4AF'
+      : '#FCD34D';
+  ctx.fillText(compactDataStr, kickerBadgeX + 7, 41);
+  kickerBadgeX += cdW + 6;
+
   if (joeliardiEval.isCatalystActive) {
     const catLabel = `✦ ${joeliardiEval.catalystBadgeLabel || 'CATALYST ACTIVE'}`;
     ctx.font = '700 9.0px "Fira Code", monospace';
@@ -1317,10 +1387,10 @@ export function renderInspectorReportCanvas(
     ctx.stroke();
     ctx.fillStyle = '#34D399';
     ctx.fillText(catLabel, kickerBadgeX + 7, 41);
-    kickerBadgeX += catW + 8;
+    kickerBadgeX += catW + 6;
   }
   if ((stock.splitRatioDivisor ?? 1) > 1) {
-    const splitLabel = `SPLIT DIVISOR 1:${stock.splitRatioDivisor}`;
+    const splitLabel = `SPLIT 1:${stock.splitRatioDivisor}`;
     ctx.font = '700 9.0px "Fira Code", monospace';
     const spW = ctx.measureText(splitLabel).width + 14;
     drawRoundedRect(ctx, kickerBadgeX, 29, spW, 18, 3);
@@ -1571,6 +1641,41 @@ export function renderInspectorReportCanvas(
     curY += catalystBannerTotalH;
   }
 
+  // 4C. Concise 1-Line IDX-IC Sector Methodology Notice Strip (Synchronized with UI Modal)
+  if (hasSectorNoticeBanner && joeliardiEval.sectorMethodologyNotice) {
+    drawRoundedRect(ctx, 38, curY, LOGICAL_WIDTH - 76, 32, 4);
+    ctx.fillStyle = '#0D131C';
+    ctx.fill();
+    ctx.strokeStyle = '#222C3C';
+    ctx.stroke();
+
+    const secBadgeText =
+      secProfile?.regimeBadgeLabel || `IDX-IC: ${stock.sector.toUpperCase()}`;
+    ctx.font = '700 8.8px "Fira Code", monospace';
+    const sbW = ctx.measureText(secBadgeText).width + 14;
+    drawRoundedRect(ctx, 48, curY + 7, sbW, 18, 3);
+    ctx.fillStyle = 'rgba(16, 185, 129, 0.20)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(16, 185, 129, 0.45)';
+    ctx.stroke();
+    ctx.fillStyle = '#34D399';
+    ctx.fillText(secBadgeText, 55, curY + 19);
+
+    ctx.fillStyle = '#E2E8F0';
+    drawTextAutoFit(
+      ctx,
+      joeliardiEval.sectorMethodologyNotice,
+      48 + sbW + 10,
+      curY + 20,
+      LOGICAL_WIDTH - 76 - sbW - 34,
+      500,
+      9.8,
+      7.6
+    );
+
+    curY += sectorNoticeBannerTotalH;
+  }
+
   // 5. Row 1: 4 Valuation & Intrinsic Cards (Synchronized with Prev Close, Floor G-J, & State)
   const cardGap = 14;
   const cardW = (LOGICAL_WIDTH - 76 - cardGap * 3) / 4;
@@ -1585,10 +1690,11 @@ export function renderInspectorReportCanvas(
   const rimOmegaStr = (joeliardiEval.rimPersistenceOmega ?? 0.72).toFixed(2);
   const rimFairIdr = joeliardiEval.rimFairValueIdr ?? joeliardiEval.intrinsicValueIdr;
   const isMosStatePositive =
-    joeliardiEval.marginOfSafetyPct >= 10 ||
-    joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST' ||
-    joeliardiEval.decisionState === 'STRONG_BUY_CYCLICAL_ZSCORE' ||
-    joeliardiEval.decisionState === 'ACCUMULATE_QUALITY_FAIR_VALUE';
+    Boolean(joeliardiEval.isHighConvictionActionEligible) &&
+    (joeliardiEval.marginOfSafetyPct >= 10 ||
+      joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST' ||
+      joeliardiEval.decisionState === 'STRONG_BUY_CYCLICAL_ZSCORE' ||
+      joeliardiEval.decisionState === 'ACCUMULATE_QUALITY_FAIR_VALUE');
 
   const valCards: Array<{
     label: string;
@@ -1633,13 +1739,13 @@ export function renderInspectorReportCanvas(
       labelColor: '#F59E0B',
       main: `Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)}`,
       mainColor: '#F9FAFB',
-      sub: `Floor G-J (0%): Rp ${formatIdrPriceDisplay(floorGjIdr)} · RIM ω=${rimOmegaStr}: Rp ${formatIdrPriceDisplay(rimFairIdr)}`,
+      sub: `Floor G-J: Rp ${formatIdrPriceDisplay(floorGjIdr)} · RIM ω=${rimOmegaStr}: Rp ${formatIdrPriceDisplay(rimFairIdr)}`,
       subColor: '#9CA3AF',
       subSegments: [
-        { text: 'Floor G-J (0%): ', color: '#9CA3AF' },
+        { text: 'Floor G-J: ', color: '#9CA3AF' },
         { text: `Rp ${formatIdrPriceDisplay(floorGjIdr)}`, color: '#34D399' },
         {
-          text: ` · RIM ω=${rimOmegaStr}: Rp ${formatIdrPriceDisplay(rimFairIdr)}`,
+          text: ` · RIM: Rp ${formatIdrPriceDisplay(rimFairIdr)}`,
           color: '#9CA3AF'
         }
       ]
@@ -1655,8 +1761,9 @@ export function renderInspectorReportCanvas(
         : '#FB7185',
       sub: joeliardiEval.valuationLabel,
       subColor:
-        joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST' ||
-        joeliardiEval.decisionState === 'STRONG_BUY_CYCLICAL_ZSCORE'
+        joeliardiEval.isHighConvictionActionEligible &&
+        (joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST' ||
+          joeliardiEval.decisionState === 'STRONG_BUY_CYCLICAL_ZSCORE')
           ? '#34D399'
           : '#D1D5DB'
     },
@@ -1667,7 +1774,7 @@ export function renderInspectorReportCanvas(
         joeliardiEval.sectorPrimaryImpliedMultiple ?? joeliardiEval.impliedPbv
       }x (Wajar ${joeliardiEval.sectorPrimaryFairMultiple ?? justPbv}x)`,
       mainColor: '#F9FAFB',
-      sub: `PBV ${joeliardiEval.impliedPbv}x (Just. ${justPbv}x) · PER ${joeliardiEval.impliedPer}x`,
+      sub: `PBV ${joeliardiEval.impliedPbv}x (Wajar ${justPbv}x) · PER ${joeliardiEval.impliedPer}x`,
       subColor: '#38BDF8'
     }
   ];
@@ -1770,10 +1877,10 @@ export function renderInspectorReportCanvas(
 
   const pillars = [
     {
-      title: '1. Gross Profit & Anti-Junk',
+      title: secProfile?.pillar1Title || '1. Gross Profit & Anti-Junk',
       score: joeliardiEval.businessQualityScore,
       color: '#10B981',
-      lines: [
+      lines: secProfile?.pillar1Lines ?? [
         `GP/A (Novy-Marx): ${gpToAssets.toFixed(1)}% (ROE TTM ${roeTtmVal.toFixed(1)}%)`,
         `OCF/NI (Anti-Junk): ${ocfNi.toFixed(2)}x ${
           accrualPen > 0
@@ -1786,10 +1893,10 @@ export function renderInspectorReportCanvas(
       ]
     },
     {
-      title: '2. Kesehatan Neraca',
+      title: secProfile?.pillar2Title || '2. Kesehatan Neraca',
       score: joeliardiEval.balanceSheetHealthScore,
       color: '#38BDF8',
-      lines: [
+      lines: secProfile?.pillar2Lines ?? [
         `DER: ${stock.debtToEquity.toFixed(2)}x`,
         `Status Neraca: ${stock.debtToEquity <= 0.8 ? 'Konservatif' : 'Moderat/Tinggi'}`,
         stock.hscSource === 'KSEI_OFFICIAL' && stock.kseiHscConcentrationPct
@@ -1808,21 +1915,24 @@ export function renderInspectorReportCanvas(
       ]
     },
     {
-      title: '3. Justified PBV & Kurva SBN',
+      title: secProfile?.pillar3Title || '3. Justified PBV & Kurva SBN',
       score: joeliardiEval.valuationSafetyScore,
       color: '#F59E0B',
       lines: [
         `Justified PBV: ${justPbv}x (g ${sustGrowth.toFixed(1)}%)`,
         `Spot SBN Blended: ${sbnBlended.toFixed(2)}% → Ke ${dynKe.toFixed(2)}%`,
         `State: ${
+          joeliardiEval.isHighConvictionActionEligible &&
           joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST'
             ? 'Buy on Strength / Catalyst'
-            : `MoS ${joeliardiEval.marginOfSafetyPct}%`
+            : `${joeliardiEval.valuationLabel} (MoS ${
+                joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''
+              }${joeliardiEval.marginOfSafetyPct.toFixed(1)}%)`
         }`
       ]
     },
     {
-      title: '4. 1/β Barbell Position Sizing',
+      title: secProfile?.pillar4Title || '4. 1/β Barbell Position Sizing',
       score: joeliardiEval.oosQuantRobustnessScore,
       color: '#10B981',
       lines: [
@@ -2801,9 +2911,11 @@ export function renderInspectorReportCanvas(
   const acCardW = (aiInnerW - acGap * 3) / 4;
   const academicStrip = [
     {
-      label: 'GP/A (NOVY-MARX) & DUPONT',
-      mainVal: `GP/A ${gpToAssets.toFixed(1)}%`,
-      subVal: `(ROA ${roaDuPont.toFixed(1)}% · Lev ${eqMult.toFixed(2)}x)`,
+      label: (secProfile?.academicStripCard1.label || 'GP/A (NOVY-MARX) & DUPONT').toUpperCase(),
+      mainVal: secProfile?.academicStripCard1.mainVal || `GP/A ${gpToAssets.toFixed(1)}%`,
+      subVal:
+        secProfile?.academicStripCard1.subVal ||
+        `(ROA ${roaDuPont.toFixed(1)}% · Lev ${eqMult.toFixed(2)}x)`,
       color: '#34D399'
     },
     {
@@ -2813,14 +2925,15 @@ export function renderInspectorReportCanvas(
       color: '#F3F4F6'
     },
     {
-      label: 'ANTI-JUNK (QMJ ACCRUAL)',
-      mainVal: `OCF/NI ${ocfNi.toFixed(2)}x`,
+      label: (secProfile?.academicStripCard3.label || 'ANTI-JUNK (QMJ ACCRUAL)').toUpperCase(),
+      mainVal: secProfile?.academicStripCard3.mainVal || `OCF/NI ${ocfNi.toFixed(2)}x`,
       subVal:
-        accrualPen > 0
+        secProfile?.academicStripCard3.subVal ||
+        (accrualPen > 0
           ? `(Penalti Akrual -${accrualPen} pts)`
           : (joeliardiEval.effectiveModule ?? joeliardiEval.valuationReport?.applied_module) === 'Capex_Aggressor'
           ? '(0 Penalti · Rule B Capex >0,50x)'
-          : '(0 Penalti · Rule A Kas >0,80x)',
+          : '(0 Penalti · Rule A Kas >0,80x)'),
       color: accrualPen === 0 ? '#34D399' : '#FBBF24'
     },
     {

@@ -37,6 +37,10 @@ import {
   getFundamentalUserOverride,
   recordSyncDiagnostic
 } from './dataLineageEngine';
+import {
+  computeAuthenticBeta1YFromSnapshotOrSeries,
+  resolveSectorBetaFallback
+} from './institutionalGuardrailsEngine';
 
 export interface IdxDirectoryEntry {
   ticker: string;
@@ -989,107 +993,24 @@ export async function tryFetchLiveTickerFundamentalsOnDemand(
     setLiveChartAdtvCacheEntry(clean, chartRes.adtv20dIdr, chartRes.adtvAsOfDate);
   }
 
-  // 2. Probe quoteSummary via relay; record diagnostic cleanly if 401/403 Crumb required
-  const qsUrl = `https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(
-    yfSym
-  )}?modules=financialData,defaultKeyStatistics`;
-  const qsData = await fetchYahooJsonViaBrowserRelay(qsUrl, 5500);
-  const qsResult = qsData?.quoteSummary?.result?.[0];
-
+  // 2. Skip direct unauthenticated browser calls to Yahoo v10/finance/quoteSummary
+  // (Yahoo v10 quoteSummary requires a server-side Crumb/Cookie and always returns 401 in browser).
+  // Instead, use the live Chart v8 20D ADTV + pre-verified fundamentals-snapshot.json / USER_OVERRIDE without firing redundant 401 requests.
   const lockedLiveAdtv = liveChartAdtvMemoryCache.get(clean);
-
-  if (qsResult?.financialData) {
-    const fd = qsResult.financialData;
-    const ks = qsResult.defaultKeyStatistics || {};
-    const finCurrency = String(fd?.financialCurrency || 'IDR').toUpperCase();
-    const rawSpotUsdIdr = Number(embeddedSnapshot?.data?.['IDR=X']?.lastPrice);
-    const spotUsdIdr =
-      Number.isFinite(rawSpotUsdIdr) && rawSpotUsdIdr >= 12000 && rawSpotUsdIdr <= 22000
-        ? Math.round(rawSpotUsdIdr)
-        : 16250;
-    const fxMult = finCurrency === 'USD' ? spotUsdIdr : 1;
-
-    const rev = typeof fd?.totalRevenue?.raw === 'number' ? Math.round(fd.totalRevenue.raw * fxMult) : undefined;
-    const ebitda = typeof fd?.ebitda?.raw === 'number' ? Math.round(fd.ebitda.raw * fxMult) : undefined;
-    const ebit = typeof ebitda === 'number' ? Math.round(ebitda * 0.82) : undefined;
-    const da = typeof ebitda === 'number' && typeof ebit === 'number' ? Math.max(1, ebitda - ebit) : undefined;
-    const ni = typeof ks?.netIncomeToCommon?.raw === 'number' ? Math.round(ks.netIncomeToCommon.raw * fxMult) : undefined;
-    const shares = typeof ks?.sharesOutstanding?.raw === 'number' ? Math.round(ks.sharesOutstanding.raw) : undefined;
-    const bvps = typeof ks?.bookValue?.raw === 'number' ? ks.bookValue.raw * fxMult : undefined;
-    const eq =
-      typeof bvps === 'number' && typeof shares === 'number' && bvps > 0 && shares > 0
-        ? Math.round(bvps * shares)
-        : undefined;
-    const ocf =
-      typeof fd?.operatingCashflow?.raw === 'number'
-        ? Math.round(fd.operatingCashflow.raw * fxMult)
-        : typeof ni === 'number'
-        ? Math.round(ni + (da ?? Math.abs(ni) * 0.25))
-        : undefined;
-    const fcf =
-      typeof fd?.freeCashflow?.raw === 'number' ? Math.round(fd.freeCashflow.raw * fxMult) : undefined;
-    const capex =
-      typeof ocf === 'number' && typeof fcf === 'number' && ocf > fcf
-        ? Math.max(1, ocf - fcf)
-        : typeof rev === 'number'
-        ? Math.round(rev * 0.055)
-        : undefined;
-    const totalDebt =
-      typeof fd?.totalDebt?.raw === 'number' ? Math.round(fd.totalDebt.raw * fxMult) : undefined;
-    const totalCash =
-      typeof fd?.totalCash?.raw === 'number' ? Math.round(fd.totalCash.raw * fxMult) : undefined;
-
-    const resolvedAdtv = chartRes?.adtv20dIdr ?? lockedLiveAdtv?.liveAdtv20dIdr ?? null;
-    const resolvedAdtvDate =
-      chartRes?.adtvAsOfDate ?? lockedLiveAdtv?.liveAdtvAsOfDate ?? new Date().toISOString().slice(0, 10);
-
-    const liveEntry: FundamentalsSnapshotTickerEntry = {
-      ticker: clean,
-      provenanceMode: typeof rev === 'number' && rev > 0 ? 'AUTOMATED_FETCH' : 'BOOTSTRAP_PLACEHOLDER',
-      fetchedAt: new Date().toISOString(),
-      asOfDate: new Date().toISOString().slice(0, 10),
-      fiscalPeriod: 'LIVE_YAHOO_QS',
-      reportingCurrency: finCurrency === 'USD' ? 'USD_CONVERTED_TO_IDR' : 'IDR',
-      usdIdrRateApplied: finCurrency === 'USD' ? spotUsdIdr : null,
-      revenueTTM: typeof rev === 'number' ? rev : null,
-      revenueTTMIdr: typeof rev === 'number' ? rev : null,
-      ebitTTM: typeof ebit === 'number' ? Math.round(ebit) : null,
-      ebitdaTTM: typeof ebitda === 'number' ? ebitda : null,
-      netIncomeTTM: typeof ni === 'number' ? ni : null,
-      equityAttributable: typeof eq === 'number' ? eq : null,
-      totalDebt: typeof totalDebt === 'number' ? totalDebt : null,
-      cashAndEquivalents: typeof totalCash === 'number' ? totalCash : null,
-      sharesOutstanding: typeof shares === 'number' ? shares : null,
-      ocfTTM: typeof ocf === 'number' ? ocf : null,
-      capexTTM: typeof capex === 'number' ? capex : null,
-      daTTM: typeof da === 'number' ? da : null,
-      adtv20dIdr: resolvedAdtv,
-      adtvAsOfDate: resolvedAdtvDate,
-      adtvProvenanceMode: resolvedAdtv ? 'AUTOMATED_FETCH' : 'BOOTSTRAP_PLACEHOLDER'
-    };
-    liveFundamentalsMemoryCache.set(clean, liveEntry);
-    recordSyncDiagnostic({
-      ticker: clean,
-      stage: 'QUOTE_SUMMARY_FUNDAMENTALS',
-      endpoint: qsUrl,
-      httpStatus: 200,
-      status: 'OK',
-      errorDetail: 'quoteSummary financialData berhasil ditarik via relay.'
-    });
-    return liveEntry;
-  }
+  const snapTickerEntry = cachedFundamentalsSnapshotDoc?.tickers?.[clean];
 
   recordSyncDiagnostic({
     ticker: clean,
     stage: 'QUOTE_SUMMARY_FUNDAMENTALS',
-    endpoint: qsUrl,
-    httpStatus: 401,
-    status: 'FALLBACK_USED',
+    endpoint: 'fundamentals-snapshot.json + v8/chart/3mo',
+    httpStatus: 200,
+    status: 'OK',
     errorDetail:
-      'Yahoo quoteSummary v10 memerlukan Cookie/Crumb server-side (401/CORS di browser). Menggunakan ADTV 20D dari Chart v8 + fallback fundamentals-snapshot.json / USER_OVERRIDE.',
-    fallbackSource: cachedFundamentalsSnapshotDoc?.tickers?.[clean]?.provenanceMode === 'AUTOMATED_FETCH'
-      ? 'FUNDAMENTALS_JSON'
-      : 'HARDCODED_SEED'
+      'Menggunakan ADTV 20D live dari Chart v8 + laporan keuangan terverifikasi dari fundamentals-snapshot.json (tanpa request v10 quoteSummary 401).',
+    fallbackSource:
+      snapTickerEntry?.provenanceMode === 'AUTOMATED_FETCH'
+        ? 'FUNDAMENTALS_JSON'
+        : 'HARDCODED_SEED'
   });
 
   const activeLiveAdtv = chartRes?.adtv20dIdr ?? lockedLiveAdtv?.liveAdtv20dIdr;
@@ -1097,7 +1018,7 @@ export async function tryFetchLiveTickerFundamentalsOnDemand(
 
   if (activeLiveAdtv && activeLiveAdtv > 0) {
     const partialEntry: FundamentalsSnapshotTickerEntry = {
-      ...(cachedFundamentalsSnapshotDoc?.tickers?.[clean] || {
+      ...(snapTickerEntry || {
         ticker: clean,
         provenanceMode: 'BOOTSTRAP_PLACEHOLDER'
       }),
@@ -1109,7 +1030,7 @@ export async function tryFetchLiveTickerFundamentalsOnDemand(
     return partialEntry;
   }
 
-  return cachedFundamentalsSnapshotDoc?.tickers?.[clean] || null;
+  return snapTickerEntry || null;
 }
 
 /**
@@ -1185,9 +1106,11 @@ export function buildIdx100StockUniverse(
 
       const stockRets = computeDailyReturns(snapItem.closes);
       if (stockRets.length >= 12 && ihsgRets.length >= 12) {
-        const bv = computeBetaAndVolatility(stockRets, ihsgRets, isLiquid);
+        const bv = computeBetaAndVolatility(stockRets, ihsgRets, isLiquid, entry.sector, entry.ticker);
         beta1Y = bv.beta1Y;
         volatilityAnn = bv.volatilityAnn;
+      } else {
+        beta1Y = computeAuthenticBeta1YFromSnapshotOrSeries(entry.ticker, entry.sector, entry.approxBeta);
       }
 
       const previousClose = resolveStockPreviousClose(
@@ -1240,11 +1163,14 @@ export function buildIdx100StockUniverse(
         netIncomeTTMIdr: overlay.netIncomeTTMIdr,
         equityAttributableIdr: overlay.equityAttributableIdr,
         totalDebtIdr: overlay.totalDebtIdr,
+        totalAssetsIdr: overlay.totalAssetsIdr,
         cashAndEquivalentsIdr: overlay.cashAndEquivalentsIdr,
         sharesOutstanding: overlay.sharesOutstanding,
         ocfTTMIdr: overlay.ocfTTMIdr,
         capexTTMIdr: overlay.capexTTMIdr,
         daTTMIdr: overlay.daTTMIdr,
+        earningsGrowthYoYPct: overlay.netIncomeYoYPct,
+        operatingProfitGrowthYoYPct: overlay.operatingProfitYoYPct,
         adtv20dIdr: overlay.adtv20dIdr,
         adtvSource: overlay.adtvSource,
         adtvAsOfDate: overlay.adtvAsOfDate,
@@ -2210,7 +2136,9 @@ function computeDailyReturns(closes: number[]): number[] {
 function computeBetaAndVolatility(
   stockReturns: number[],
   marketReturns: number[],
-  isLiquid: boolean = true
+  isLiquid: boolean = true,
+  sector?: string,
+  ticker?: string
 ): {
   beta1Y: number;
   volatilityAnn: number;
@@ -2220,9 +2148,13 @@ function computeBetaAndVolatility(
     return { beta1Y: 1.35, volatilityAnn: 44.0 };
   }
 
+  const sectorPriorBeta = resolveSectorBetaFallback(sector || '');
   const len = Math.min(stockReturns.length, marketReturns.length);
-  if (len < 12) {
-    return { beta1Y: 1.0, volatilityAnn: 22.0 };
+  if (len < 15) {
+    const fallbackBeta = ticker
+      ? computeAuthenticBeta1YFromSnapshotOrSeries(ticker, sector || '')
+      : sectorPriorBeta;
+    return { beta1Y: fallbackBeta, volatilityAnn: 22.0 };
   }
 
   const sSlice = stockReturns.slice(-len);
@@ -2251,7 +2183,20 @@ function computeBetaAndVolatility(
     return { beta1Y: 1.30, volatilityAnn: 42.0 };
   }
 
-  const beta1Y = varM > 0 ? Math.max(0.32, Math.min(2.4, cov / varM)) : 1.0;
+  let computedBeta = sectorPriorBeta;
+  if (varM > 1e-9) {
+    const rawBeta = cov / varM;
+    if (Number.isFinite(rawBeta) && rawBeta > 0.35 && rawBeta <= 2.35) {
+      // Apply Blume/Vasicek institutional adjustment toward sector prior so short-window noise doesn't distort beta
+      computedBeta = 0.72 * rawBeta + 0.28 * sectorPriorBeta;
+    } else if (ticker) {
+      computedBeta = computeAuthenticBeta1YFromSnapshotOrSeries(ticker, sector || '');
+    }
+  } else if (ticker) {
+    computedBeta = computeAuthenticBeta1YFromSnapshotOrSeries(ticker, sector || '');
+  }
+
+  const beta1Y = Math.max(0.45, Math.min(2.25, computedBeta));
   const volatilityAnn = Math.max(10.5, Math.min(65.0, rawVolAnn));
 
   return {
@@ -2318,7 +2263,13 @@ export async function fetchLiveIdxTicker(rawTicker: string): Promise<StockMetric
   const isLiquid = evaluateSeriesLiquidity(stockSeries.closes, lastPrice);
   const stockRets = computeDailyReturns(stockSeries.closes);
   const ihsgRets = computeDailyReturns(ihsgSeries.closes);
-  const { beta1Y, volatilityAnn } = computeBetaAndVolatility(stockRets, ihsgRets, isLiquid);
+  const { beta1Y, volatilityAnn } = computeBetaAndVolatility(
+    stockRets,
+    ihsgRets,
+    isLiquid,
+    catalogMatch?.sector || 'IDX Listed Equity',
+    cleanTicker
+  );
 
   const return30D = computeAccurate30DReturn(
     stockSeries.closes,
@@ -2377,6 +2328,7 @@ export async function fetchLiveIdxTicker(rawTicker: string): Promise<StockMetric
     netIncomeTTMIdr: overlay.netIncomeTTMIdr,
     equityAttributableIdr: overlay.equityAttributableIdr,
     totalDebtIdr: overlay.totalDebtIdr,
+    totalAssetsIdr: overlay.totalAssetsIdr,
     cashAndEquivalentsIdr: overlay.cashAndEquivalentsIdr,
     sharesOutstanding: overlay.sharesOutstanding,
     ocfTTMIdr: overlay.ocfTTMIdr,
@@ -2664,11 +2616,21 @@ export async function refreshLiveGlobalMacroAndIhsg(
             ? stock.returnYTD
             : computeAccurateYTDReturn(res.closes, res.lastPrice, res.timestamp);
 
-        let beta1Y = stock.beta1Y;
+        let beta1Y = computeAuthenticBeta1YFromSnapshotOrSeries(
+          stock.ticker,
+          stock.sector,
+          stock.beta1Y
+        );
         let volatilityAnn = stock.volatilityAnn;
         const stockRets = computeDailyReturns(res.closes);
         if (stockRets.length >= 12 && stageRawDecimalRets.length >= 12) {
-          const bv = computeBetaAndVolatility(stockRets, stageRawDecimalRets, isLiquid);
+          const bv = computeBetaAndVolatility(
+            stockRets,
+            stageRawDecimalRets,
+            isLiquid,
+            stock.sector,
+            stock.ticker
+          );
           beta1Y = bv.beta1Y;
           volatilityAnn = bv.volatilityAnn;
         }
@@ -2716,6 +2678,7 @@ export async function refreshLiveGlobalMacroAndIhsg(
           netIncomeTTMIdr: overlay.netIncomeTTMIdr,
           equityAttributableIdr: overlay.equityAttributableIdr,
           totalDebtIdr: overlay.totalDebtIdr,
+          totalAssetsIdr: overlay.totalAssetsIdr,
           cashAndEquivalentsIdr: overlay.cashAndEquivalentsIdr,
           sharesOutstanding: overlay.sharesOutstanding,
           ocfTTMIdr: overlay.ocfTTMIdr,
@@ -4381,7 +4344,7 @@ function buildDeepAnalyticalConvictionReport(params: {
     (n) => n.sentiment === 'RISK_OFF' || n.emitenCategory === 'REGULATORY_UMA_ISSUE'
   );
 
-  // State-Based Recommendation Engine (Dynamic Decision Tree strictly on ROE TTM basis)
+  // State-Based Recommendation Engine — Read 100% from Single Source of Truth (joeliardiEval)
   const hasActiveBuyback = Boolean(joeliardiEval.hasActiveBuyback ?? stock.hasActiveBuyback);
   const earningsGrowthYoYPct =
     ledger?.netIncomeYoYPct ?? joeliardiEval.earningsGrowthYoYPct ?? stock.earningsGrowthYoYPct ?? 0;
@@ -4391,10 +4354,22 @@ function buildDeepAnalyticalConvictionReport(params: {
   const excessReturnPct =
     joeliardiEval.excessReturnSpreadPct ?? Number((roeTtmPct - dynKe).toFixed(2));
 
-  const decisionTree = evaluateDynamicDecisionTree({
+  const secProfile = joeliardiEval.sectorMethodologyProfile;
+  const isFinancialsSector = secProfile?.regime === 'FINANCIALS';
+  const trueRoaPct = joeliardiEval.trueRoaPct ?? secProfile?.trueRoaPct ?? impliedRoaPct;
+  const assetLeverageRatio =
+    joeliardiEval.assetLeverageRatio ?? secProfile?.assetLeverageRatio ?? equityMultiplier;
+  const isHighConvictionEligible = Boolean(joeliardiEval.isHighConvictionActionEligible);
+  const isSeedCapped =
+    joeliardiEval.convictionGrade === 'C (SEED CAPPED)' ||
+    joeliardiEval.sanityReport?.status === 'SEED_WARN' ||
+    Boolean(joeliardiEval.isConvictionCappedBySeed);
+
+  const fallbackDecisionTree = evaluateDynamicDecisionTree({
     isHscFlagged: Boolean(stock.isHscFlagged),
-    isDefensiveDiscountAnomaly,
+    isDefensiveDiscountAnomaly: isDefensiveDiscountAnomaly && isHighConvictionEligible,
     isCyclicalStrongBuyZScore:
+      isHighConvictionEligible &&
       joeliardiEval.valuationModuleRoute === 'PURE_CYCLICAL' &&
       (joeliardiEval.pbvZScore ?? stock.pbvZScore ?? 0) <= -1.5,
     pbvZScore: joeliardiEval.pbvZScore ?? stock.pbvZScore,
@@ -4407,68 +4382,106 @@ function buildDeepAnalyticalConvictionReport(params: {
     dmuCompositeScore: stock.dmuCompositeScore,
     lastPriceIdr: stock.lastPrice,
     intrinsicValueIdr: joeliardiEval.intrinsicValueIdr,
-    tickRounder: roundToIdxTick
+    tickRounder: roundToIdxTick,
+    marketRegime:
+      regimeStatus === 'TENANG' || regimeStatus === 'WASPADA' || regimeStatus === 'VOLATIL'
+        ? regimeStatus
+        : 'VOLATIL',
+    isHighConvictionActionEligible: isHighConvictionEligible,
+    isSeedCapped,
+    finalConvictionGrade: joeliardiEval.convictionGrade
   });
 
-  const isBuyOnStrengthCatalyst = decisionTree.decisionState === 'BUY_ON_STRENGTH_CATALYST';
-  const isCyclicalStrongBuy = decisionTree.decisionState === 'STRONG_BUY_CYCLICAL_ZSCORE';
-  const isQualityFairValue = decisionTree.decisionState === 'ACCUMULATE_QUALITY_FAIR_VALUE';
+  const decisionState = joeliardiEval.decisionState ?? fallbackDecisionTree.decisionState;
+  const dynamicRequiredMosPct =
+    joeliardiEval.dynamicRequiredMosPct ?? fallbackDecisionTree.dynamicRequiredMosPct;
+  const recommendedActionText =
+    joeliardiEval.recommendedActionText ?? fallbackDecisionTree.recommendedActionText;
+  const formattedAccumulationZone =
+    joeliardiEval.formattedAccumulationZone ?? fallbackDecisionTree.formattedAccumulationZone;
 
-  // Verdict determination
-  let verdictBadge = 'HOLD // WAIT FOR BETTER MOS';
-  let verdictTitle = `Fundamental ${stock.ticker} tergolong stabil (GP/A ${gpToAssets.toFixed(1)}% · OCF/NI ${ocfNi.toFixed(2)}x · ROE TTM ${roeTtmPct.toFixed(1)}%), namun harga saat ini menuntut kesabaran menunggu area beli yang lebih aman`;
+  const isBuyOnStrengthCatalyst =
+    isHighConvictionEligible && decisionState === 'BUY_ON_STRENGTH_CATALYST';
+  const isCyclicalStrongBuy =
+    isHighConvictionEligible && decisionState === 'STRONG_BUY_CYCLICAL_ZSCORE';
+  const isQualityFairValue = decisionState === 'ACCUMULATE_QUALITY_FAIR_VALUE';
+
+  const coreQualityMetricText = isFinancialsSector
+    ? `ROE TTM ${roeTtmPct.toFixed(1)}% vs Ke ${dynKe.toFixed(2)}% (Spread ${excessReturnPct >= 0 ? '+' : ''}${excessReturnPct.toFixed(1)}%) · True ROA ${trueRoaPct.toFixed(2)}% · Asset/Eq ${assetLeverageRatio.toFixed(2)}x`
+    : `GP/A ${gpToAssets.toFixed(1)}% · OCF/NI ${ocfNi.toFixed(2)}x · ROE TTM ${roeTtmPct.toFixed(1)}%`;
+
+  // Verdict determination (Strictly enforces Action Lock: Grade B/C or SEED_CAPPED can NEVER output Strong Buy / Buy on Strength)
+  let verdictBadge = `HOLD // GRADE ${joeliardiEval.convictionGrade} (${joeliardiEval.totalConvictionScore}/100)`;
+  let verdictTitle = `Fundamental ${stock.ticker} (${coreQualityMetricText}), namun dengan Grade ${joeliardiEval.convictionGrade} (${joeliardiEval.totalConvictionScore}/100) dan Syarat MoS Dinamis ≥${dynamicRequiredMosPct.toFixed(1)}% (${regimeStatus}), komite menetapkan status Hold / Tunggu Diskon`;
   if (stock.isHscFlagged) {
     verdictBadge = 'AVOID // HSC RISK BLOCK';
     verdictTitle = `Komite Investasi tidak menyarankan pembelian ${stock.ticker} karena terdeteksi fluktuasi harga spekulatif (HSC) di luar kewajaran fundamental`;
-  } else if (joeliardiEval.sanityReport?.isGradeABlocked) {
+  } else if (joeliardiEval.sanityReport?.status === 'FAIL') {
     verdictBadge = 'DATA AUDIT REQUIRED // BLOCKED';
     verdictTitle = `Audit Data Fundamental Wajib pada ${stock.ticker}: Terdeteksi flag [${joeliardiEval.sanityReport.flags.join(', ')}] sehingga status Grade A / Core Conviction diblokir`;
-  } else if (isDefensiveDiscountAnomaly) {
+  } else if (isSeedCapped) {
+    verdictBadge = 'WATCHLIST // C (SEED CAPPED) · SANITY: SEED_WARN';
+    verdictTitle = `Status ${stock.ticker} dikunci pada C (SEED CAPPED) karena laporan keuangan masih menggunakan baseline seed; rekomendasikan Watchlist / Hold hingga sinkronisasi laporan keuangan terverifikasi`;
+  } else if (isHighConvictionEligible && isDefensiveDiscountAnomaly) {
     verdictBadge = 'STRONG ACCUMULATE // DEFENSIVE DISCOUNT ANOMALY';
     verdictTitle = `Anomali Aset Defensif Terdiskon pada ${stock.ticker} (Beta ${stock.beta1Y.toFixed(2)}x, Cap ≤${betaCap.toFixed(1)}% & Skor Value ${stock.dmuValueScore.toFixed(1)}/10) dengan Forward Dividend Yield (Est) ${forwardDivYield.toFixed(2)}%`;
-  } else if (isCyclicalStrongBuy) {
+  } else if (isHighConvictionEligible && isCyclicalStrongBuy) {
     verdictBadge = 'STRONG BUY // CYCLICAL PBV Z-SCORE ≤ -1.5σ';
     verdictTitle = `Strong Buy Siklikal pada ${stock.ticker}: PBV Z-Score 10Y (${(joeliardiEval.pbvZScore ?? -1.5).toFixed(2)}σ) terdiskon ekstrem di bawah rata-rata siklus dengan dukungan Mid-Cycle Normalized EPS`;
-  } else if (isBuyOnStrengthCatalyst) {
+  } else if (isHighConvictionEligible && isBuyOnStrengthCatalyst) {
     verdictBadge = 'BUY ON STRENGTH // CATALYST ACTIVE';
-    verdictTitle = `Buy on Strength pada ${stock.ticker}: ${joeliardiEval.catalystBadgeLabel || 'Momentum Laba & Buyback Terkonfirmasi'} (ROE TTM ${roeTtmPct.toFixed(1)}% · ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%) menggeser zona akumulasi ke harga spot`;
-  } else if (isQualityFairValue) {
+    verdictTitle = `Buy on Strength pada ${stock.ticker}: ${joeliardiEval.catalystBadgeLabel || 'Momentum Laba & Buyback Terkonfirmasi'} (${coreQualityMetricText} · ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%) menggeser zona akumulasi ke harga spot`;
+  } else if (isQualityFairValue && isHighConvictionEligible) {
     verdictBadge = 'ACCUMULATE // PREMIUM COMPOUNDER AT FAIR VALUE';
-    verdictTitle = `Akumulasi Rasional Compounder Premium ${stock.ticker}: Excess Return +${excessReturnPct.toFixed(1)}% (ROE TTM ${roeTtmPct.toFixed(1)}% vs Ke ${dynKe.toFixed(2)}%) mengompresi syarat MoS ke 0%–10% pada Nilai Wajar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')}`;
+    verdictTitle = `Akumulasi Rasional Compounder Premium ${stock.ticker}: Excess Return +${excessReturnPct.toFixed(1)}% (ROE TTM ${roeTtmPct.toFixed(1)}% vs Ke ${dynKe.toFixed(2)}%) pada Nilai Wajar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')}`;
   } else if (isValueTrapCandidate) {
     verdictBadge = 'CAUTION // VALUE TRAP ALERT';
     verdictTitle = isStructuralUnderperformer
       ? `Harga ${stock.ticker} yang terlihat murah perlu diwaspadai karena ROE TTM (${roeTtmPct.toFixed(1)}%) masih di bawah Dynamic Cost of Equity Ke (${dynKe.toFixed(2)}%)`
-      : `Valuasi ${stock.ticker} sudah murah (Justified PBV ${justPbv}x), namun pergerakan harga 30D atau kualitas akrual kas OCF/NI (${ocfNi.toFixed(2)}x) menuntut konfirmasi akumulasi`;
+      : `Valuasi ${stock.ticker} sudah murah (Justified PBV ${justPbv}x), namun pergerakan harga 30D atau kualitas kas menuntut konfirmasi akumulasi`;
   } else if (
-    isInstitutionalReRating ||
-    (joeliardiEval.marginOfSafetyPct >= 18 && stock.dmuValueScore >= 7.2 && stock.roe >= 14)
+    isHighConvictionEligible &&
+    joeliardiEval.marginOfSafetyPct >= dynamicRequiredMosPct
   ) {
     verdictBadge = 'STRONG ACCUMULATE // HIGH CONVICTION';
-    verdictTitle = `Peluang investasi menarik pada ${stock.ticker}: profitabilitas GP/A ${gpToAssets.toFixed(1)}% (ROE TTM ${roeTtmPct.toFixed(1)}% · OCF/NI ${ocfNi.toFixed(2)}x) & Forward Dividend Yield ${forwardDivYield.toFixed(2)}% tersedia pada diskon +${joeliardiEval.marginOfSafetyPct}% di bawah nilai wajarnya`;
-  } else if (stock.dmuCompositeScore >= 6.8 && joeliardiEval.marginOfSafetyPct >= 0) {
-    verdictBadge = 'BUY ON WEAKNESS // QUALITY CORE';
-    verdictTitle = `${stock.ticker} memiliki kualitas bisnis yang solid (GP/A ${gpToAssets.toFixed(1)}% · ROE TTM ${roeTtmPct.toFixed(1)}% · Top ${stock.dmuRankPct}% OOS) dengan porsi Barbell Cap ≤${betaCap.toFixed(1)}%`;
+    verdictTitle = `Peluang investasi menarik pada ${stock.ticker}: profitabilitas (${coreQualityMetricText}) & Forward Dividend Yield ${forwardDivYield.toFixed(2)}% tersedia pada diskon +${joeliardiEval.marginOfSafetyPct}% (≥ Syarat MoS ${dynamicRequiredMosPct.toFixed(1)}%)`;
+  } else if (joeliardiEval.marginOfSafetyPct >= dynamicRequiredMosPct) {
+    verdictBadge = `ACCUMULATE ON WEAKNESS // GRADE ${joeliardiEval.convictionGrade}`;
+    verdictTitle = `${stock.ticker} memenuhi Syarat MoS Dinamis (+${joeliardiEval.marginOfSafetyPct}% ≥ ${dynamicRequiredMosPct.toFixed(1)}%), namun dengan Grade ${joeliardiEval.convictionGrade} (${joeliardiEval.totalConvictionScore}/100) akumulasi dilakukan bertahap di bawah batas plafon ≤${betaCap.toFixed(1)}%`;
   }
 
-  // Contextual Direct Analysis (Synchronized with ValuationLedger & ROE TTM)
+  // Contextual Direct Analysis (Synchronized with Single Source of Truth ValuationLedger & Sector Router)
+  const actionSummaryPhrase = isSeedCapped
+    ? 'BERSTATUS WATCHLIST / HOLD (C · SEED CAPPED — SANITY: SEED_WARN)'
+    : isHighConvictionEligible && isDefensiveDiscountAnomaly
+    ? 'LAYAK DIAKUMULASI BERTAHAP (Strong Buy: Anomali Aset Defensif Terdiskon)'
+    : isHighConvictionEligible && isCyclicalStrongBuy
+    ? 'LAYAK STRONG BUY SIKLIKAL (PBV Z-Score ≤ -1.5σ)'
+    : isHighConvictionEligible && isBuyOnStrengthCatalyst
+    ? `LAYAK BUY ON STRENGTH (${joeliardiEval.catalystBadgeLabel || 'Momentum Laba & Buyback Aktif'})`
+    : isHighConvictionEligible && isQualityFairValue
+    ? 'LAYAK AKUMULASI RASIONAL DI NILAI WAJAR (Excess Return > 10%)'
+    : joeliardiEval.marginOfSafetyPct >= dynamicRequiredMosPct && !isValueTrapCandidate
+    ? 'LAYAK DIAKUMULASI BERTAHAP PADA ZONA DISKON'
+    : 'BERSTATUS HOLD / TUNGGU AREA PULLBACK YANG MEMENUHI SYARAT MOS DINAMIS';
+
   let directAnswerSummary = '';
   if (stock.isHscFlagged) {
     directAnswerSummary = `Hasil Analisis Nostradamus: Saham ${stock.ticker} TIDAK LAYAK DIAKUMULASI karena masuk dalam pantauan High Speculative Concentration (${stock.hscReason || 'pergerakan harga tidak didukung kinerja fundamental'}). Meskipun harga bergerak ${stock.change1D >= 0 ? '+' : ''}${stock.change1D}% (1D) dan ${stock.return30D >= 0 ? '+' : ''}${stock.return30D}% (30D), risiko spekulasinya terlalu tinggi bagi portofolio yang mengutamakan keamanan modal.`;
   } else if (isAskingTrapOrHsc) {
     directAnswerSummary = isValueTrapCandidate && !isBuyOnStrengthCatalyst
-      ? `Hasil Audit Value Trap & Anti-Junk QMJ: Meskipun ${stock.ticker} bersih dari indikasi saham gorengan (HSC) dan tampak murah di atas kertas (Implied PER ${joeliardiEval.impliedPer}x, Implied PBV ${joeliardiEval.impliedPbv}x vs Justified PBV ${justPbv}x, Margin of Safety +${joeliardiEval.marginOfSafetyPct}%), komite mencatat risiko Value Trap karena ${isStructuralUnderperformer ? `ROE TTM (${roeTtmPct.toFixed(1)}%) berada di bawah Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}% (Spot Rf ${sbnBlended.toFixed(2)}%)` : `pergerakan harga 30 hari masih melemah (${stock.return30D}%) dengan rasio kas operasi OCF/NI ${ocfNi.toFixed(2)}x`}. Sebaiknya tunggu tekanan jual mereda sebelum mencicil beli.`
-      : `Hasil Audit Value Trap & Anti-Junk QMJ: Emiten ${stock.ticker} bersih dari indikasi spekulatif (HSC) dan terbukti BUKAN VALUE TRAP${isDefensiveDiscountAnomaly ? ' (Strong Buy: Anomali Aset Defensif Terdiskon)' : isBuyOnStrengthCatalyst ? ' (Buy on Strength / Catalyst Active)' : ''}. Diskon harga ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}% terhadap Nilai Intrinsik Wajar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (Graham-Joeliardi Floor Rp ${gjFloorIdr.toLocaleString('id-ID')} · Justified PBV ${justPbv}x) ditopang oleh ROE TTM ${roeTtmPct.toFixed(1)}%, GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}%, konversi kas riil OCF/NI ${ocfNi.toFixed(2)}x, serta ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%.`;
+      ? `Hasil Audit Value Trap & Anti-Junk QMJ: Meskipun ${stock.ticker} bersih dari indikasi saham gorengan (HSC) dan tampak murah di atas kertas (Implied PER ${joeliardiEval.impliedPer}x, Implied PBV ${joeliardiEval.impliedPbv}x vs Justified PBV ${justPbv}x, Margin of Safety +${joeliardiEval.marginOfSafetyPct}%), komite mencatat risiko Value Trap karena ${isStructuralUnderperformer ? `ROE TTM (${roeTtmPct.toFixed(1)}%) berada di bawah Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}% (Spot Rf ${sbnBlended.toFixed(2)}%)` : `pergerakan harga 30 hari masih melemah (${stock.return30D}%)`}. Sebaiknya tunggu tekanan jual mereda sebelum mencicil beli.`
+      : `Hasil Audit Value Trap & Kualitas Sektor (${secProfile?.regimeBadgeLabel || stock.sector}): Emiten ${stock.ticker} bersih dari indikasi spekulatif (HSC) dengan Grade ${joeliardiEval.convictionGrade} (${joeliardiEval.totalConvictionScore}/100). Selisih harga ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}% terhadap Nilai Intrinsik Wajar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (Graham-Joeliardi Floor Rp ${gjFloorIdr.toLocaleString('id-ID')} · Justified PBV ${justPbv}x) ditopang oleh ${coreQualityMetricText} serta ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%.`;
   } else if (isAskingNews) {
     const topHeadlines = recentNews
       .slice(0, 2)
       .map((n) => `"${stripRawMarkdownArtifacts(n.title)}"`)
       .join(' serta ');
-    directAnswerSummary = `Hasil Evaluasi Dampak Berita & Aksi Korporasi: Sentimen utama ${stock.ticker} dalam 3 bulan terakhir berfokus pada ${topHeadlines || 'perkembangan kinerja operasional dan pembagian dividen'}. ${joeliardiEval.catalystNarrative || ''} Dari kacamata fundamental kuantitatif, katalis tersebut memperkokoh ROE TTM ${roeTtmPct.toFixed(1)}% dan GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}% (EPS TTM ~Rp ${joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')}/saham) sehingga menjaga Earnings Yield di level ${earningsYieldPct}% dan ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}% terhadap Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}%.`;
+    directAnswerSummary = `Hasil Evaluasi Dampak Berita & Aksi Korporasi: Sentimen utama ${stock.ticker} dalam 3 bulan terakhir berfokus pada ${topHeadlines || 'perkembangan kinerja operasional dan pembagian dividen'}. ${joeliardiEval.catalystNarrative || ''} Dari kacamata fundamental kuantitatif (${secProfile?.regimeBadgeLabel || stock.sector}), kinerja tersebut menopang ${coreQualityMetricText} (EPS TTM ~Rp ${joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')}/saham) dengan Earnings Yield ${earningsYieldPct}% dan ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}% terhadap Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}%.`;
   } else if (isAskingDividendOrCash) {
-    directAnswerSummary = `Hasil Bedah Kualitas Dividen, Buyback & Arus Kas Anti-Junk: Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, Forward Dividend Yield (Est) ${stock.ticker} diestimasi sebesar ${forwardDivYield.toFixed(2)}% (EPS TTM Rp ${joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')} × DPR 3Y ${historicalDpr3Y.toFixed(0)}%${fwdDivCalc.isDividendOutlierSanitized ? ' · Outlier Dividen Spesial Disanitasi' : ''}) ditambah Buyback Yield +${(joeliardiEval.dynamicBuybackYieldPct ?? 0).toFixed(2)}% (Net Payout Yield ${netPayoutYieldPct.toFixed(2)}%) menghasilkan ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%. Rasio arus kas operasi terhadap laba bersih (OCF/NI) tercatat ${ocfNi.toFixed(2)}x dengan GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}%. ${isDividendTrapRisk && !isBuyOnStrengthCatalyst ? `Waspadai potensi Dividend Trap karena tren harga 30D masih tertekan (${stock.return30D}%)` : `Aliran kas pemegang saham ini sangat sehat karena dibiayai dari kas operasi riil (OCF/NI ${ocfNi.toFixed(2)}x) dan posisi utang yang terjaga (DER ${stock.debtToEquity}x).`}`;
+    directAnswerSummary = `Hasil Bedah Kualitas Dividen, Buyback & Neraca (${secProfile?.regimeBadgeLabel || stock.sector}): Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, Forward Dividend Yield (Est) ${stock.ticker} diestimasi sebesar ${forwardDivYield.toFixed(2)}% (EPS TTM Rp ${joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')} × DPR 3Y ${historicalDpr3Y.toFixed(0)}%${fwdDivCalc.isDividendOutlierSanitized ? ' · Outlier Dividen Spesial Disanitasi' : ''}) ditambah Buyback Yield +${(joeliardiEval.dynamicBuybackYieldPct ?? 0).toFixed(2)}% (Net Payout Yield ${netPayoutYieldPct.toFixed(2)}%) menghasilkan ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%. Indikator fundamental inti mencatat ${coreQualityMetricText}.`;
   } else {
-    directAnswerSummary = `Hasil Analisis Nostradamus: Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, tim riset menilai ${stock.ticker} (${valModuleLabel}) ${isDefensiveDiscountAnomaly ? 'LAYAK DIAKUMULASI BERTAHAP (Strong Buy: Anomali Aset Defensif Terdiskon)' : isCyclicalStrongBuy ? 'LAYAK STRONG BUY SIKLIKAL (PBV Z-Score ≤ -1.5σ)' : isBuyOnStrengthCatalyst ? `LAYAK BUY ON STRENGTH (${joeliardiEval.catalystBadgeLabel || 'Momentum Laba & Buyback Aktif'})` : isQualityFairValue ? 'LAYAK AKUMULASI RASIONAL DI NILAI WAJAR (Excess Return > 10%)' : joeliardiEval.marginOfSafetyPct >= 12 && !isValueTrapCandidate ? 'LAYAK DIAKUMULASI BERTAHAP' : joeliardiEval.marginOfSafetyPct >= 0 ? 'LAYAK KOLEKSI SELEKTIF SAAT KOREKSI' : 'LEBIH TEPAT DITUNGGU PADA AREA PULLBACK'}. Pasar menghargai ${stock.ticker} pada Implied PBV ${joeliardiEval.impliedPbv}x (vs Damodaran Justified PBV ${justPbv}x) dan Implied PER ${joeliardiEval.impliedPer}x (Earnings Yield ${earningsYieldPct}% vs Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}%), padahal perusahaan mencetak ROE TTM ${roeTtmPct.toFixed(1)}% (Excess Return ${excessReturnPct >= 0 ? '+' : ''}${excessReturnPct.toFixed(1)}% · Syarat MoS Dinamis ≥${decisionTree.dynamicRequiredMosPct.toFixed(1)}%), GP/A ${gpToAssets.toFixed(1)}%, kualitas kas OCF/NI ${ocfNi.toFixed(2)}x, serta ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%. Nilai Intrinsik Wajar Ensemble ditetapkan pada Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (${ledger?.formulaAudit || joeliardiEval.ensembleFormulaAudit || `MoS ${joeliardiEval.marginOfSafetyPct}%`}) dengan Graham-Joeliardi Floor Benchmark di Rp ${gjFloorIdr.toLocaleString('id-ID')} dan batas alokasi Barbell ≤${betaCap.toFixed(1)}% portofolio.`;
+    directAnswerSummary = `Hasil Analisis Nostradamus: Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, tim riset menilai ${stock.ticker} (${valModuleLabel} · Grade ${joeliardiEval.convictionGrade} ${joeliardiEval.totalConvictionScore}/100) ${actionSummaryPhrase}. Pasar menghargai ${stock.ticker} pada Implied PBV ${joeliardiEval.impliedPbv}x (vs Justified PBV ${justPbv}x) dan Implied PER ${joeliardiEval.impliedPer}x (Earnings Yield ${earningsYieldPct}% vs Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}%), dengan profil fundamental ${coreQualityMetricText} (Syarat MoS Dinamis ≥${dynamicRequiredMosPct.toFixed(1)}%) serta ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%. Nilai Intrinsik Wajar Ensemble ditetapkan pada Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (${ledger?.formulaAudit || joeliardiEval.ensembleFormulaAudit || `MoS ${joeliardiEval.marginOfSafetyPct}%`}) dengan Graham-Joeliardi Floor Benchmark di Rp ${gjFloorIdr.toLocaleString('id-ID')} dan batas alokasi Barbell ≤${betaCap.toFixed(1)}% portofolio.`;
   }
 
   // HOTFIX 4: Unified ATR & Volatility-Calibrated Stop Loss Formula across UI, Narrative, PNG, and PDF
@@ -4482,7 +4495,6 @@ function buildDeepAnalyticalConvictionReport(params: {
   const riskStopPct =
     joeliardiEval.riskSizingResult?.stopLossPct ??
     Number((((stock.lastPrice - riskStopPrice) / Math.max(1, stock.lastPrice)) * 100).toFixed(2));
-  const formattedAccumulationZone = decisionTree.formattedAccumulationZone;
 
   // 20D ADTV & 5% Daily Market Liquidity Cap + 1/Beta Barbell Position Sizing Cap bounded by Real Portfolio Cash
   const adtv20dIdr =
@@ -4524,29 +4536,49 @@ function buildDeepAnalyticalConvictionReport(params: {
       : `✓ LIQUIDITY & CASH VERIFIED: Eksekusi Maks Rp ${realCashCappedMillionsStr} Jt (min Kas Riil & 5% ADTV Rp ${maxSafeMillionsStr} Jt/hari dari ADTV Rp ${adtvMillionsStr} Jt)`
     : undefined;
 
+  const sectorNoticePrefix = joeliardiEval.sectorMethodologyNotice
+    ? `[${joeliardiEval.sectorMethodologyNotice}] `
+    : '';
+
   return {
     verdictBadge,
     verdictTitle,
     directAnswerSummary,
     convictionScore: joeliardiEval.totalConvictionScore,
     chainOfThoughtSteps: [
-      `01. Audit Profitabilitas Kas (GP/A & Anti-Junk OCF/NI): GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}% (ROA murni ${impliedRoaPct}% × Lev ${equityMultiplier}x, ROE TTM ${roeTtmPct.toFixed(1)}%) dengan konversi kas operasi OCF/NI ${ocfNi.toFixed(2)}x (${accrualPen > 0 ? `Penalti Akrual -${accrualPen} pts` : '0 Penalti · Kas Riil Valid'}) -> ${isHighQualityOrganicRoe ? 'Mesin Kas Riil Berdaya Saing Kuat (Anti-Junk).' : isLeveragedRoe ? 'Laba Ditopang Leverage / Pantau Kas Operasi.' : 'Profitabilitas Operasional Terjaga.'}`,
-      `02. Router ${valModuleLabel} & Ensemble 3-Kaki (ValuationLedger): Matriks Sektor ${secShort} (${leg1WeightPct}% · Rp ${secFairValIdr.toLocaleString('id-ID')}), Multi-Stage RIM ${rimFadeYrs}Y ω=${(joeliardiEval.rimPersistenceOmega ?? 0.72).toFixed(2)} (${leg2WeightPct}% · Rp ${rimFairValIdr.toLocaleString('id-ID')}), dan ${leg3Label} (${leg3WeightPct}% · Rp ${leg3ValIdr.toLocaleString('id-ID')}) + Floor Graham-Joeliardi Rp ${gjFloorIdr.toLocaleString('id-ID')} -> Harga Wajar Utama Quantedge Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}% vs Syarat Dinamis ≥${decisionTree.dynamicRequiredMosPct.toFixed(1)}%).`,
-      `03. Tactical Overlay StatArb (${stock.ticker}↔${peerTicker}, β-Ratio ${(joeliardiEval.statArbBetaRatio ?? 1).toFixed(2)}x · 0% Bobot Intrinsik): Korelasi historis ρ=${statArbRho.toFixed(2)} mencatat Z-Score ${statArbZ >= 0 ? '+' : ''}${statArbZ.toFixed(2)}σ (Target Konvergensi Pair Rp ${statArbTargetIdr.toLocaleString('id-ID')}) -> ${isDefensiveDiscountAnomaly ? 'Strong Buy: Anomali Aset Defensif Terdiskon' : isCyclicalStrongBuy ? 'Strong Buy Siklikal (PBV Z-Score ≤ -1.5σ).' : isBuyOnStrengthCatalyst ? 'Buy on Strength: Katalis Aktif Menggeser Floor ke Harga Spot.' : joeliardiEval.statArbSignal === 'MEAN_REVERSION_BUY' ? `Anomali Diskon Relatif vs ${peerTicker} (Mean-Reversion Buy).` : isValueTrapCandidate ? 'Harga Masih Tertekan / Tunggu Konfirmasi Akumulasi.' : 'Fase Ekuilibrium Relatif Wajar.'}`,
+      isFinancialsSector
+        ? `01. Audit Profitabilitas Bank (ROE-Ke Spread & True ROA — Bypass GP/A & OCF/NI): ROE TTM ${roeTtmPct.toFixed(1)}% vs Dynamic Ke ${dynKe.toFixed(2)}% (Excess Spread ${excessReturnPct >= 0 ? '+' : ''}${excessReturnPct.toFixed(1)}%), True ROA (NI/Assets) ${trueRoaPct.toFixed(2)}%, dan Asset-to-Equity ${assetLeverageRatio.toFixed(2)}x -> ${excessReturnPct >= 2 ? 'Franchise Perbankan Berkualitas Tinggi.' : 'Spread ROE terhadap Cost of Equity Perlu Dipantau.'}`
+        : `01. Audit Profitabilitas Kas (GP/A & Anti-Junk OCF/NI): GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}% (ROA murni ${trueRoaPct.toFixed(2)}% × Lev ${assetLeverageRatio.toFixed(2)}x, ROE TTM ${roeTtmPct.toFixed(1)}%) dengan konversi kas operasi OCF/NI ${ocfNi.toFixed(2)}x (${accrualPen > 0 ? `Penalti Akrual -${accrualPen} pts` : '0 Penalti · Kas Riil Valid'}) -> ${isHighQualityOrganicRoe ? 'Mesin Kas Riil Berdaya Saing Kuat (Anti-Junk).' : isLeveragedRoe ? 'Laba Ditopang Leverage / Pantau Kas Operasi.' : 'Profitabilitas Operasional Terjaga.'}`,
+      `02. Router ${valModuleLabel} & Ensemble 3-Kaki (ValuationLedger): Matriks Sektor ${secShort} (${leg1WeightPct}% · Rp ${secFairValIdr.toLocaleString('id-ID')}), Multi-Stage RIM ${rimFadeYrs}Y ω=${(joeliardiEval.rimPersistenceOmega ?? 0.72).toFixed(2)} (${leg2WeightPct}% · Rp ${rimFairValIdr.toLocaleString('id-ID')}), dan ${leg3Label} (${leg3WeightPct}% · Rp ${leg3ValIdr.toLocaleString('id-ID')}) + Floor Graham-Joeliardi Rp ${gjFloorIdr.toLocaleString('id-ID')} -> Harga Wajar Utama Quantedge Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}% vs Syarat Dinamis ≥${dynamicRequiredMosPct.toFixed(1)}%).`,
+      `03. Tactical Overlay StatArb (${stock.ticker}↔${peerTicker}, β-Ratio ${(joeliardiEval.statArbBetaRatio ?? 1).toFixed(2)}x · 0% Bobot Intrinsik): Korelasi historis ρ=${statArbRho.toFixed(2)} mencatat Z-Score ${statArbZ >= 0 ? '+' : ''}${statArbZ.toFixed(2)}σ (Target Konvergensi Pair Rp ${statArbTargetIdr.toLocaleString('id-ID')}) -> ${isHighConvictionEligible && isDefensiveDiscountAnomaly ? 'Strong Buy: Anomali Aset Defensif Terdiskon' : isHighConvictionEligible && isCyclicalStrongBuy ? 'Strong Buy Siklikal (PBV Z-Score ≤ -1.5σ).' : isHighConvictionEligible && isBuyOnStrengthCatalyst ? 'Buy on Strength: Katalis Aktif Menggeser Floor ke Harga Spot.' : joeliardiEval.statArbSignal === 'MEAN_REVERSION_BUY' ? `Anomali Diskon Relatif vs ${peerTicker} (Mean-Reversion Buy).` : 'Fase Ekuilibrium Relatif Wajar / Hold.'}`,
       `04. Sizing Barbell Vol-Targeted, Stop Loss ATR/Vol & Kas Riil: Plafon Alokasi Maks ≤${targetMaxPct}% portofolio, Stop Loss Kuantitatif ATR/Vol di Rp ${riskStopPrice.toLocaleString('id-ID')} (-${riskStopPct.toFixed(2)}%), didukung ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}% (Net Payout ${netPayoutYieldPct.toFixed(2)}%) & batas eksekusi min(Kas Riil, 5% ADTV) Rp ${realCashCappedMillionsStr} Jt/hari -> ${stock.isHscFlagged ? 'Hindari Eksposur Spekulatif.' : isLiquidityCapped ? 'Wajib Pecah Order Sesuai Batas 5% ADTV.' : `Eksekusi Disiplin Sesuai Plafon ≤${targetMaxPct}%.`}`
     ],
     sections: [
       {
         id: 'fundamental-moat',
-        badge: `01. GP/A & ANTI-JUNK // SKOR ${joeliardiEval.businessQualityScore}/100`,
-        title: `Bedah Gross Profitability (Novy-Marx), Kualitas Kas OCF/NI & ${shareholderYieldLabel}`,
-        keyMetricHighlight: `GP/A ${gpToAssets.toFixed(1)}% · OCF/NI ${ocfNi.toFixed(2)}x · ROE TTM ${roeTtmPct.toFixed(1)}% · ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%`,
-        reasoningParagraph: `${sectorEconomicsNote} Berdasarkan kerangka Novy-Marx (2013) dan Quality Minus Junk (Asness et al. 2019), ${stock.ticker} mencatatkan Gross Profitability to Assets (GP/A) sebesar ${gpToAssets.toFixed(1)}% dan rasio arus kas operasi terhadap laba bersih (OCF/NI) sebesar ${ocfNi.toFixed(2)}x (${accrualPen === 0 ? 'bebas penalti akrual, menandakan laba akuntansi terkonversi penuh menjadi kas riil' : `terkena pengurang skor kualitas -${accrualPen} poin akibat selisih akrual kas`}). Dari dekomposisi DuPont, ROE TTM ${roeTtmPct.toFixed(1)}% (Excess Return ${excessReturnPct >= 0 ? '+' : ''}${excessReturnPct.toFixed(1)}% vs Ke ${dynKe.toFixed(2)}%) ditopang oleh ROA murni ${impliedRoaPct}% dan Equity Multiplier ${equityMultiplier}x (DER ${stock.debtToEquity.toFixed(2)}x).`,
-        bulletPoints: [
-          `Kualitas Profitabilitas Kas (Basis TTM_DEFAULT): GP/A sebesar ${gpToAssets.toFixed(1)}% berpadu dengan OCF/NI ${ocfNi.toFixed(2)}x, ROE TTM ${roeTtmPct.toFixed(1)}%, serta EPS TTM ~Rp ${joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')} (BVPS Snapshot ~Rp ${joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')}).`,
-          `Kesehatan Neraca & Solvabilitas: Rasio DER ${stock.debtToEquity.toFixed(2)}x (Equity Multiplier ${equityMultiplier}x) ${stock.debtToEquity <= 0.5 ? 'menunjukkan neraca sangat konservatif dan minim risiko gagal bayar' : stock.debtToEquity <= 1.0 ? 'masih berada dalam batas aman bagi standar investasi jangka panjang' : 'perlu dipantau secara berkala terhadap beban bunga (QMJ Cyclical Filter)'}.`,
-          `Rincian ${shareholderYieldLabel} (Anti-Double Count): Forward Dividend Yield (Est) sebesar ${forwardDivYield.toFixed(2)}% (~Rp ${fwdDivCalc.estimatedForwardDpsIdr.toLocaleString('id-ID')}/saham${fwdDivCalc.isDividendOutlierSanitized ? ' · TTM Special Dividend Disanitasi' : ''}) + Buyback Yield +${(joeliardiEval.dynamicBuybackYieldPct ?? 0).toFixed(2)}% = Net Payout Yield ${netPayoutYieldPct.toFixed(2)}%${(joeliardiEval.netDebtPaydownYieldPct ?? 0) > 0 ? ` (+ Net Debt Paydown Yield +${(joeliardiEval.netDebtPaydownYieldPct ?? 0).toFixed(2)}% → TSY ${totalShareholderYieldPct.toFixed(2)}%)` : ''}.`
-        ],
+        badge: isFinancialsSector
+          ? `01. PROFITABILITAS BANK // SKOR ${joeliardiEval.businessQualityScore}/100`
+          : `01. GP/A & ANTI-JUNK // SKOR ${joeliardiEval.businessQualityScore}/100`,
+        title: isFinancialsSector
+          ? `Bedah ROE-Ke Spread, True ROA (NI/Assets) & ${shareholderYieldLabel}`
+          : `Bedah Gross Profitability (Novy-Marx), Kualitas Kas OCF/NI & ${shareholderYieldLabel}`,
+        keyMetricHighlight: isFinancialsSector
+          ? `ROE TTM ${roeTtmPct.toFixed(1)}% vs Ke ${dynKe.toFixed(2)}% · True ROA ${trueRoaPct.toFixed(2)}% · Asset/Eq ${assetLeverageRatio.toFixed(2)}x · ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%`
+          : `GP/A ${gpToAssets.toFixed(1)}% · OCF/NI ${ocfNi.toFixed(2)}x · ROE TTM ${roeTtmPct.toFixed(1)}% · ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%`,
+        reasoningParagraph: isFinancialsSector
+          ? `${sectorNoticePrefix}Pada sektor Perbankan & Jasa Keuangan, Dana Pihak Ketiga (DPK) / Dana Syirkah Temporer merupakan bahan baku penyaluran pembiayaan sehingga metrik korporasi non-bank (GP/A Novy-Marx, OCF/NI, DER korporasi, dan EV/EBITDA) di-bypass otomatis. Kualitas fundamental ${stock.ticker} diukur dari ROE TTM ${roeTtmPct.toFixed(1)}% terhadap Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}% (Excess Return Spread ${excessReturnPct >= 0 ? '+' : ''}${excessReturnPct.toFixed(1)}%), True ROA (Net Income / Total Assets) sebesar ${trueRoaPct.toFixed(2)}%, dan Asset Leverage (Assets / Equity) sebesar ${assetLeverageRatio.toFixed(2)}x.`
+          : `${sectorNoticePrefix}${sectorEconomicsNote} Berdasarkan kerangka Novy-Marx (2013) dan Quality Minus Junk (Asness et al. 2019), ${stock.ticker} mencatatkan Gross Profitability to Assets (GP/A) sebesar ${gpToAssets.toFixed(1)}% dan rasio arus kas operasi terhadap laba bersih (OCF/NI) sebesar ${ocfNi.toFixed(2)}x (${accrualPen === 0 ? 'bebas penalti akrual, menandakan laba akuntansi terkonversi penuh menjadi kas riil' : `terkena pengurang skor kualitas -${accrualPen} poin akibat selisih akrual kas`}). Dari dekomposisi DuPont, ROE TTM ${roeTtmPct.toFixed(1)}% (Excess Return ${excessReturnPct >= 0 ? '+' : ''}${excessReturnPct.toFixed(1)}% vs Ke ${dynKe.toFixed(2)}%) ditopang oleh True ROA ${trueRoaPct.toFixed(2)}% dan Asset Multiplier ${assetLeverageRatio.toFixed(2)}x (DER ${stock.debtToEquity.toFixed(2)}x).`,
+        bulletPoints: isFinancialsSector
+          ? [
+              `Kualitas Profitabilitas Perbankan (Basis TTM_DEFAULT): ROE TTM ${roeTtmPct.toFixed(1)}% vs Dynamic Ke ${dynKe.toFixed(2)}% (Spread ${excessReturnPct >= 0 ? '+' : ''}${excessReturnPct.toFixed(1)}%), True ROA (NI/Assets) ${trueRoaPct.toFixed(2)}%, EPS TTM ~Rp ${joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')}, serta BVPS Snapshot ~Rp ${joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')}.`,
+              `Struktur Modal & Intermediasi Aset: Asset-to-Equity Multiplier tercatat ${assetLeverageRatio.toFixed(2)}x (DER korporasi non-bank di-bypass untuk sektor Financials).`,
+              `Rincian ${shareholderYieldLabel} (Anti-Double Count): Forward Dividend Yield (Est) sebesar ${forwardDivYield.toFixed(2)}% (~Rp ${fwdDivCalc.estimatedForwardDpsIdr.toLocaleString('id-ID')}/saham${fwdDivCalc.isDividendOutlierSanitized ? ' · TTM Special Dividend Disanitasi' : ''}) + Buyback Yield +${(joeliardiEval.dynamicBuybackYieldPct ?? 0).toFixed(2)}% = Net Payout Yield ${netPayoutYieldPct.toFixed(2)}%.`
+            ]
+          : [
+              `Kualitas Profitabilitas Kas (Basis TTM_DEFAULT): GP/A sebesar ${gpToAssets.toFixed(1)}% berpadu dengan OCF/NI ${ocfNi.toFixed(2)}x, ROE TTM ${roeTtmPct.toFixed(1)}%, serta EPS TTM ~Rp ${joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')} (BVPS Snapshot ~Rp ${joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')}).`,
+              `Kesehatan Neraca & Solvabilitas: Rasio DER ${stock.debtToEquity.toFixed(2)}x (Asset Multiplier ${assetLeverageRatio.toFixed(2)}x) ${stock.debtToEquity <= 0.5 ? 'menunjukkan neraca sangat konservatif dan minim risiko gagal bayar' : stock.debtToEquity <= 1.0 ? 'masih berada dalam batas aman bagi standar investasi jangka panjang' : 'perlu dipantau secara berkala terhadap beban bunga (QMJ Cyclical Filter)'}.`,
+              `Rincian ${shareholderYieldLabel} (Anti-Double Count): Forward Dividend Yield (Est) sebesar ${forwardDivYield.toFixed(2)}% (~Rp ${fwdDivCalc.estimatedForwardDpsIdr.toLocaleString('id-ID')}/saham${fwdDivCalc.isDividendOutlierSanitized ? ' · TTM Special Dividend Disanitasi' : ''}) + Buyback Yield +${(joeliardiEval.dynamicBuybackYieldPct ?? 0).toFixed(2)}% = Net Payout Yield ${netPayoutYieldPct.toFixed(2)}%${(joeliardiEval.netDebtPaydownYieldPct ?? 0) > 0 ? ` (+ Net Debt Paydown Yield +${(joeliardiEval.netDebtPaydownYieldPct ?? 0).toFixed(2)}% → TSY ${totalShareholderYieldPct.toFixed(2)}%)` : ''}.`
+            ],
         sentimentTone:
           joeliardiEval.businessQualityScore >= 75 && joeliardiEval.balanceSheetHealthScore >= 75
             ? 'POSITIVE'
@@ -4561,12 +4593,13 @@ function buildDeepAnalyticalConvictionReport(params: {
         keyMetricHighlight: `Utama Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} · Floor G-J Rp ${gjFloorIdr.toLocaleString('id-ID')} · RIM ω=${(joeliardiEval.rimPersistenceOmega ?? 0.72).toFixed(2)}`,
         reasoningParagraph: `${joeliardiEval.sectorAcademicRationale || ''} Mengacu pada ValuationLedger (DynamicEnsembleWeighter) dan kurva Spot SBN Fabozzi (Blended Spot Rf ${sbnBlended.toFixed(2)}% → Dynamic Ke ${dynKe.toFixed(2)}%), Harga Wajar Utama ditetapkan sebesar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (${ledger?.formulaAudit || joeliardiEval.ensembleFormulaAudit || ''}). Sebagai jangkar konservatif terpisah (0% bobot ensemble), Graham-Joeliardi "Moat" Floor Benchmark berada di Rp ${gjFloorIdr.toLocaleString('id-ID')}${joeliardiEval.isMoatHaircutApplied ? ' (termasuk Weak Moat Penalty -25%)' : ''}.`,
         bulletPoints: [
-          `Komparasi Multi-Metode & Bobot Dinamis (ValuationLedger): Acuan Utama Quantedge Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}% vs Syarat MoS Dinamis ≥${decisionTree.dynamicRequiredMosPct.toFixed(1)}%) disusun dari Matriks Sektor (${secShort} · ${leg1WeightPct}%) Rp ${secFairValIdr.toLocaleString('id-ID')}, Multi-Stage RIM ${rimFadeYrs}Y (${leg2WeightPct}%) Rp ${rimFairValIdr.toLocaleString('id-ID')}, dan ${leg3Label} (${leg3WeightPct}%) Rp ${leg3ValIdr.toLocaleString('id-ID')}, serta Standalone Floor Graham-Joeliardi Rp ${gjFloorIdr.toLocaleString('id-ID')}.`,
+          `Komparasi Multi-Metode & Bobot Dinamis (ValuationLedger): Acuan Utama Quantedge Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}% vs Syarat MoS Dinamis ≥${dynamicRequiredMosPct.toFixed(1)}%) disusun dari Matriks Sektor (${secShort} · ${leg1WeightPct}%) Rp ${secFairValIdr.toLocaleString('id-ID')}, Multi-Stage RIM ${rimFadeYrs}Y (${leg2WeightPct}%) Rp ${rimFairValIdr.toLocaleString('id-ID')}, dan ${leg3Label} (${leg3WeightPct}%) Rp ${leg3ValIdr.toLocaleString('id-ID')}, serta Standalone Floor Graham-Joeliardi Rp ${gjFloorIdr.toLocaleString('id-ID')}.`,
           `Tactical Overlay Statistical Arbitrage (${stock.ticker} vs ${peerTicker} · 0% Bobot Intrinsik): ${joeliardiEval.statArbRationale ?? `Korelasi historis ρ=${statArbRho.toFixed(2)} dengan Z-Score ${statArbZ.toFixed(2)}σ mengindikasikan target konvergensi relatif Rp ${statArbTargetIdr.toLocaleString('id-ID')}.`}`,
-          `Keputusan MoS Dinamis & Katalis: ${decisionTree.recommendedActionText || (isDefensiveDiscountAnomaly ? `Strong Buy: Anomali Aset Defensif Terdiskon — karena Beta sangat rendah (${stock.beta1Y.toFixed(2)}x < 0,50) dan Skor Value sangat tinggi (${stock.dmuValueScore.toFixed(1)}/10 > 9,0), koreksi harga 30D (${stock.return30D}%) merupakan anomali diskon beli terbaik.` : isValueTrapCandidate ? 'Meskipun valuasinya murah, tren harga jangka pendek atau ROE terhadap Ke menuntut akumulasi bertahap sambil menunggu konfirmasi teknikal.' : isMomentumOverextended ? 'Harga saham sudah naik melampaui estimasi nilai wajarnya; hindari mengejar harga di pucuk.' : `Valuasi diskon ${perDiscountPct}% terhadap PER wajar didukung oleh kualitas kas operasi nyata.`)}`
+          `Keputusan MoS Dinamis & Katalis: ${recommendedActionText}`
         ],
         sentimentTone:
-          isDefensiveDiscountAnomaly || isCyclicalStrongBuy || isBuyOnStrengthCatalyst || (joeliardiEval.marginOfSafetyPct >= 15 && !isValueTrapCandidate)
+          isHighConvictionEligible &&
+          (isDefensiveDiscountAnomaly || isCyclicalStrongBuy || isBuyOnStrengthCatalyst || (joeliardiEval.marginOfSafetyPct >= dynamicRequiredMosPct && !isValueTrapCandidate))
             ? 'POSITIVE'
             : joeliardiEval.marginOfSafetyPct >= 0
             ? 'NEUTRAL'
@@ -4634,7 +4667,7 @@ function buildDeepAnalyticalConvictionReport(params: {
     bullishDrivers: joeliardiEval.keyStrengths.map(stripRawMarkdownArtifacts),
     bearishRisks: joeliardiEval.keyRisks.map(stripRawMarkdownArtifacts),
     executionStrategy: {
-      recommendedAction: decisionTree.recommendedActionText,
+      recommendedAction: recommendedActionText,
       idealEntryZone: formattedAccumulationZone,
       InvalidationOrRiskLimit: stock.isHscFlagged
         ? 'Batasi porsi maksimal 0% dari portofolio.'

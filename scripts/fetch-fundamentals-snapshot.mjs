@@ -624,6 +624,8 @@ async function fetchTickerFundamentalsTimeseries(ticker, session, usdIdrRate = 1
     'annualNetIncome',
     'quarterlyStockholdersEquity',
     'annualStockholdersEquity',
+    'quarterlyTotalAssets',
+    'annualTotalAssets',
     'quarterlyTotalDebt',
     'annualTotalDebt',
     'quarterlyCashAndCashEquivalents',
@@ -733,6 +735,7 @@ async function fetchTickerFundamentalsTimeseries(ticker, session, usdIdrRate = 1
   };
 
   const eqPt = pickLatestBalancePoint('quarterlyStockholdersEquity', 'annualStockholdersEquity');
+  const assetsPt = pickLatestBalancePoint('quarterlyTotalAssets', 'annualTotalAssets');
   const debtPt = pickLatestBalancePoint('quarterlyTotalDebt', 'annualTotalDebt');
   const cashPt = pickLatestBalancePoint('quarterlyCashAndCashEquivalents', 'annualCashAndCashEquivalents');
   const sharesPt = pickLatestBalancePoint('quarterlyOrdinarySharesNumber', 'annualOrdinarySharesNumber');
@@ -769,6 +772,16 @@ async function fetchTickerFundamentalsTimeseries(ticker, session, usdIdrRate = 1
   const equityAttributable = rawEqVal !== null ? Math.round(rawEqVal * fxMult) : null;
   const totalDebt = debtPt ? Math.round(debtPt.value * fxMult) : 0;
   const cashAndEquivalents = cashPt ? Math.round(cashPt.value * fxMult) : 0;
+  const totalAssets =
+    assetsPt && Number.isFinite(assetsPt.value) && assetsPt.value > 0
+      ? Math.round(assetsPt.value * fxMult)
+      : equityAttributable !== null && equityAttributable > 0
+      ? Math.round(equityAttributable + totalDebt)
+      : null;
+  const debtToEquity =
+    equityAttributable !== null && equityAttributable > 0
+      ? Number((totalDebt / equityAttributable).toFixed(2))
+      : null;
 
   const rawCapexAbs =
     capexDecum.ttmValue !== null ? Math.abs(Math.round(capexDecum.ttmValue * fxMult)) : null;
@@ -835,7 +848,9 @@ async function fetchTickerFundamentalsTimeseries(ticker, session, usdIdrRate = 1
     netIncomeYoYPct: niDecum.yoyGrowthPct,
     operatingProfitYoYPct: ebitDecum.yoyGrowthPct,
     equityAttributable,
+    totalAssets,
     totalDebt,
+    debtToEquity,
     cashAndEquivalents,
     sharesOutstanding: rawSharesVal,
     ocfTTM,
@@ -965,7 +980,9 @@ async function main() {
               netIncomeYoYPct: fundInfo.netIncomeYoYPct ?? prevEntry.netIncomeYoYPct ?? null,
               operatingProfitYoYPct: fundInfo.operatingProfitYoYPct ?? prevEntry.operatingProfitYoYPct ?? null,
               equityAttributable: fundInfo.equityAttributable,
+              totalAssets: fundInfo.totalAssets ?? prevEntry.totalAssets ?? null,
               totalDebt: fundInfo.totalDebt,
+              debtToEquity: fundInfo.debtToEquity ?? prevEntry.debtToEquity ?? null,
               cashAndEquivalents: fundInfo.cashAndEquivalents,
               sharesOutstanding: fundInfo.sharesOutstanding ?? prevEntry.sharesOutstanding ?? null,
               ocfTTM: fundInfo.ocfTTM,

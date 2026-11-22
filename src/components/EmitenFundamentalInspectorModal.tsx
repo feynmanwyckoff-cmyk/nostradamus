@@ -490,10 +490,13 @@ export function EmitenFundamentalInspectorModal({
   const [isTypingComplete, setIsTypingComplete] = useState<boolean>(false);
   const [isExporting, setIsExporting] = useState<'PNG' | 'PDF' | null>(null);
 
-  // Corporate Action, Fundamental USER_OVERRIDE Calibrator & Forensic Lineage Drawer States
+  // Corporate Action, Fundamental USER_OVERRIDE Calibrator & Forensic Lineage Drawer States (Mutually Exclusive)
   const [catalystRevision, setCatalystRevision] = useState<number>(0);
-  const [showCatalystCalibrator, setShowCatalystCalibrator] = useState<boolean>(false);
-  const [showForensicLineageDrawer, setShowForensicLineageDrawer] = useState<boolean>(false);
+  const [activeToolPanel, setActiveToolPanel] = useState<
+    'NONE' | 'CALIBRATION' | 'FORENSIC_LINEAGE'
+  >('NONE');
+  const showCatalystCalibrator = activeToolPanel === 'CALIBRATION';
+  const showForensicLineageDrawer = activeToolPanel === 'FORENSIC_LINEAGE';
   const [isFetchingLiveFundamentals, setIsFetchingLiveFundamentals] = useState<boolean>(false);
   const [isTriggeringGhActionsSync, setIsTriggeringGhActionsSync] = useState<boolean>(false);
   const [splitRatioInput, setSplitRatioInput] = useState<string>('1');
@@ -1459,92 +1462,74 @@ export function EmitenFundamentalInspectorModal({
               <div className="p-2 rounded-xs bg-[#D97706]/10 border border-[#D97706]/30 text-[#D97706] shrink-0 mt-0.5">
                 <Scale className="w-5 h-5" />
               </div>
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#D97706] bb-amber">
-                    NOSTRADAMUS QUANT TERMINAL
+              <div className="min-w-0 flex-1">
+                {/* Strict 1-Line Modal Header Badges (No Wrap) */}
+                <div className="flex items-center gap-1.5 flex-nowrap overflow-hidden whitespace-nowrap">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#D97706] bb-amber shrink-0">
+                    NOSTRADAMUS
                   </span>
                   <span
-                    className={`text-[10px] font-bold px-2 py-0.5 rounded-xs border ${gradeBadgeCls}`}
+                    className={`text-[10px] font-mono tabular-nums font-bold px-2 py-0.5 rounded-xs border shrink-0 ${gradeBadgeCls}`}
+                    title={`Grade ${joeliardiEval.convictionGrade} · Skor Komposit ${joeliardiEval.totalConvictionScore}/100`}
                   >
-                    {joeliardiEval.convictionGrade} · SKOR {joeliardiEval.totalConvictionScore}/100
+                    {joeliardiEval.compactHeaderGradeBadge ||
+                      `${joeliardiEval.convictionGrade} · ${joeliardiEval.totalConvictionScore}/100`}
                   </span>
-                  {joeliardiEval.sanityReport && (
-                    <span
-                      className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-xs border ${
-                        joeliardiEval.sanityReport.status === 'PASS'
-                          ? 'bg-emerald-50 text-emerald-900 border-emerald-300'
-                          : joeliardiEval.sanityReport.status === 'WARN'
-                          ? 'bg-amber-50 text-amber-900 border-amber-300'
-                          : 'bg-rose-50 text-rose-900 border-rose-300'
-                      }`}
-                    >
-                      SANITY: {joeliardiEval.sanityReport.status}
-                      {joeliardiEval.sanityReport.keSafetyBufferBps > 0
-                        ? ` (+${joeliardiEval.sanityReport.keSafetyBufferBps}bps Ke)`
-                        : ''}
-                    </span>
-                  )}
+                  <span
+                    title={
+                      joeliardiEval.isConvictionCappedBySeed
+                        ? `${joeliardiEval.seedCapWarningReason || ''} | SANITY: ${joeliardiEval.sanityReport?.status ?? 'SEED_WARN'}`
+                        : `SANITY: ${joeliardiEval.sanityReport?.status ?? 'PASS'}${
+                            joeliardiEval.sanityReport?.keSafetyBufferBps
+                              ? ` (+${joeliardiEval.sanityReport.keSafetyBufferBps}bps Ke)`
+                              : ''
+                          } | LINEAGE: ${joeliardiEval.dataLineage?.overallStatus ?? 'INSTITUTIONAL_GRADE'} (${
+                            joeliardiEval.dataLineage?.freshFieldCount ?? 0
+                          } Fresh / ${joeliardiEval.dataLineage?.seedFieldCount ?? 0} Seed)${
+                            joeliardiEval.dataLineage?.sbnMacroWarningMessage
+                              ? ` | ${joeliardiEval.dataLineage.sbnMacroWarningMessage}`
+                              : ''
+                          }`
+                    }
+                    className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-xs border shrink-0 ${
+                      joeliardiEval.compactHeaderDataStatus === 'FRESH'
+                        ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500/50'
+                        : joeliardiEval.compactHeaderDataStatus === 'OVERRIDE'
+                        ? 'bg-indigo-950/90 text-indigo-300 border-indigo-500/50'
+                        : joeliardiEval.compactHeaderDataStatus === 'SEED_WARN'
+                        ? 'bg-rose-950/90 text-rose-300 border-rose-500/60'
+                        : 'bg-amber-950/90 text-amber-300 border-amber-500/50'
+                    }`}
+                  >
+                    {joeliardiEval.compactHeaderDataBadge || 'DATA: FRESH'}
+                  </span>
                   {joeliardiEval.isCatalystActive && (
                     <span
                       title={
                         joeliardiEval.catalystNarrative ||
                         'Katalis Aktif Terdeteksi (Momentum Laba Kuartalan >20% YoY / Injeksi Buyback Aktif)'
                       }
-                      className="inline-flex items-center gap-1 text-[10px] font-mono font-extrabold text-[#FFFFFF] bg-[#0D5C46] border border-[#059669] px-2 py-0.5 rounded-xs shadow-2xs"
+                      className="inline-flex items-center gap-1 text-[10px] font-mono font-extrabold text-[#FFFFFF] bg-[#0D5C46] border border-[#059669] px-2 py-0.5 rounded-xs shadow-2xs shrink-0"
                     >
-                      <Sparkles className="w-2.5 h-2.5" />
+                      <Sparkles className="w-2.5 h-2.5 shrink-0" />
                       <span>
                         {joeliardiEval.catalystBadgeLabel || 'CATALYST ACTIVE'}
                       </span>
                     </span>
                   )}
                   {(activeStock.splitRatioDivisor ?? 1) > 1 && (
-                    <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-[#0284C7] bg-[#0284C7]/10 border border-[#0284C7]/40 px-2 py-0.5 rounded-xs">
-                      <span>SPLIT DIVISOR 1:{activeStock.splitRatioDivisor}</span>
+                    <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-[#0284C7] bg-[#0284C7]/10 border border-[#0284C7]/40 px-2 py-0.5 rounded-xs shrink-0">
+                      <span>SPLIT 1:{activeStock.splitRatioDivisor}</span>
                     </span>
                   )}
-                  {joeliardiEval.dataLineage && (
-                    <span
-                      title={
-                        joeliardiEval.isConvictionCappedBySeed
-                          ? joeliardiEval.seedCapWarningReason
-                          : `Provenance Status: ${joeliardiEval.dataLineage.overallStatus} (${joeliardiEval.dataLineage.freshFieldCount} Fresh / ${joeliardiEval.dataLineage.seedFieldCount} Seed)`
-                      }
-                      className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-xs border ${
-                        joeliardiEval.dataLineage.overallStatus === 'INSTITUTIONAL_GRADE'
-                          ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500/50'
-                          : joeliardiEval.dataLineage.overallStatus === 'SEED_CAPPED_GRADE_C'
-                          ? 'bg-rose-950/90 text-rose-300 border-rose-500/60'
-                          : 'bg-amber-950/90 text-amber-300 border-amber-500/50'
-                      }`}
-                    >
-                      {joeliardiEval.dataLineage.overallStatus === 'SEED_CAPPED_GRADE_C'
-                        ? 'SEED_WARN · GRADE C CAPPED'
-                        : `LINEAGE: ${joeliardiEval.dataLineage.overallStatus}`}
-                    </span>
-                  )}
-                  {joeliardiEval.dataLineage &&
-                    (joeliardiEval.dataLineage.isSbnMacroProxy ||
-                      joeliardiEval.dataLineage.isSbnMacroStale) && (
-                      <span
-                        title={joeliardiEval.dataLineage.sbnMacroWarningMessage}
-                        className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-xs bg-amber-950/90 text-amber-300 border border-amber-500/50"
-                      >
-                        ⚠ SBN 10Y:{' '}
-                        {joeliardiEval.dataLineage.isSbnMacroProxy
-                          ? 'PROXY ^TNX'
-                          : `STALE (${joeliardiEval.dataLineage.sbnAgeDays}D)`}
-                      </span>
-                    )}
                   {isSyncingOnDemand && (
-                    <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-[#0284C7] bg-[#0284C7]/10 border border-[#0284C7]/30 px-2 py-0.5 rounded-xs">
+                    <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-[#0284C7] bg-[#0284C7]/10 border border-[#0284C7]/30 px-2 py-0.5 rounded-xs shrink-0">
                       <RefreshCw className="w-2.5 h-2.5 animate-spin" />
-                      <span>Memperbarui Data Live {activeStock.ticker}.JK...</span>
+                      <span>Sync {activeStock.ticker}.JK...</span>
                     </span>
                   )}
                 </div>
-                <h3 className="text-base sm:text-lg font-bold text-[#111315] flex flex-wrap items-center gap-2 mt-0.5">
+                <h3 className="text-base sm:text-lg font-bold text-[#111315] flex items-center gap-2 mt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">
                   <span className="font-mono">{activeStock.ticker}</span>
                   <span className="text-neutral-400 font-normal">·</span>
                   <span>{activeStock.name}</span>
@@ -1585,7 +1570,11 @@ export function EmitenFundamentalInspectorModal({
 
               <button
                 type="button"
-                onClick={() => setShowCatalystCalibrator((prev) => !prev)}
+                onClick={() =>
+                  setActiveToolPanel((prev) =>
+                    prev === 'CALIBRATION' ? 'NONE' : 'CALIBRATION'
+                  )
+                }
                 className={`inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold rounded-xs border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                   showCatalystCalibrator ||
                   Boolean(getCustomCorporateActionOverrides()[activeStock.ticker]) ||
@@ -1605,7 +1594,11 @@ export function EmitenFundamentalInspectorModal({
 
               <button
                 type="button"
-                onClick={() => setShowForensicLineageDrawer((prev) => !prev)}
+                onClick={() =>
+                  setActiveToolPanel((prev) =>
+                    prev === 'FORENSIC_LINEAGE' ? 'NONE' : 'FORENSIC_LINEAGE'
+                  )
+                }
                 className={`inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-bold rounded-xs border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                   showForensicLineageDrawer
                     ? 'bg-[#0D131C] text-sky-300 border-sky-500/60'
@@ -2290,7 +2283,7 @@ export function EmitenFundamentalInspectorModal({
                   <span>{joeliardiEval.dataLineage.sbnMacroWarningMessage}</span>
                   <button
                     type="button"
-                    onClick={() => setShowCatalystCalibrator(true)}
+                    onClick={() => setActiveToolPanel('CALIBRATION')}
                     className="px-2 py-0.5 text-[10px] font-bold bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/50 rounded-xs text-amber-200 shrink-0 cursor-pointer"
                   >
                     Override SBN 10Y Manual
@@ -2594,19 +2587,44 @@ export function EmitenFundamentalInspectorModal({
             </div>
           )}
 
-          {/* Top Valuation & Intrinsic Value Bar with MetricTooltips & Inline Provenance Badges */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div className="p-3.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
-              <div className="flex items-center justify-between gap-1 text-[10px] font-bold uppercase tracking-wider text-neutral-500">
-                <MetricTooltip
-                  label="HARGA PASAR LIVE (BEI)"
-                  title="Kuotasi Harga Pasar Reguler BEI (.JK)"
-                  laymanExplanation="Harga transaksi terakhir saham di pasar reguler Bursa Efek Indonesia beserta acuan harga penutupan sesi sebelumnya (Previous Close), persentase perubahan harian (1D), bulanan (30D), dan sepanjang tahun berjalan (YTD)."
-                  practicalGuide="Bandingkan harga pasar ini terhadap Nilai Intrinsik Wajar di sebelahnya untuk melihat apakah saham sedang terdiskon atau sudah mahal."
-                />
+          {/* Concise 1-Line IDX-IC Sector Methodology Notice Strip */}
+          {joeliardiEval.sectorMethodologyNotice && (
+            <div className="px-3 py-2 bg-[#0D131C] border border-[#222C3C] rounded-xs flex items-center justify-between gap-2 text-[11px] text-slate-200 overflow-hidden">
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                <span className="px-2 py-0.5 text-[9.5px] font-mono font-bold uppercase tracking-wider bg-emerald-950/90 text-emerald-300 border border-emerald-500/40 rounded-xs shrink-0">
+                  {joeliardiEval.sectorMethodologyProfile?.regimeBadgeLabel ||
+                    `IDX-IC: ${activeStock.sector}`}
+                </span>
+                <span
+                  className="text-[11px] text-slate-200 truncate font-sans"
+                  title={joeliardiEval.sectorMethodologyNotice}
+                >
+                  {joeliardiEval.sectorMethodologyNotice}
+                </span>
+              </div>
+              {joeliardiEval.sectorMethodologyProfile?.isCyclePeakWarning && (
+                <span className="px-2 py-0.5 text-[9.5px] font-mono font-bold bg-amber-950 text-amber-300 border border-amber-500/50 rounded-xs shrink-0">
+                  ⚠ CYCLE PEAK ROE GUARD
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* Top Valuation & Intrinsic Value Bar: 3-Box Horizontal Alignment with Fixed 1-Line Title Row & tabular-nums */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-stretch">
+            <div className="p-3.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between h-full tabular-nums">
+              <div className="flex items-center justify-between gap-1 text-[10px] font-bold uppercase tracking-wider text-neutral-500 whitespace-nowrap overflow-hidden">
+                <div className="truncate">
+                  <MetricTooltip
+                    label="HARGA PASAR LIVE (BEI)"
+                    title="Kuotasi Harga Pasar Reguler BEI (.JK)"
+                    laymanExplanation="Harga transaksi terakhir saham di pasar reguler Bursa Efek Indonesia beserta acuan harga penutupan sesi sebelumnya (Previous Close), persentase perubahan harian (1D), bulanan (30D), dan sepanjang tahun berjalan (YTD)."
+                    practicalGuide="Bandingkan harga pasar ini terhadap Nilai Intrinsik Wajar di sebelahnya untuk melihat apakah saham sedang terdiskon atau sudah mahal."
+                  />
+                </div>
                 {joeliardiEval.dataLineage && (
                   <span
-                    className={`px-1.5 py-0.2 text-[8.5px] font-mono font-bold rounded-xs border ${
+                    className={`px-1.5 py-0.2 text-[8.5px] font-mono font-bold rounded-xs border shrink-0 ${
                       joeliardiEval.dataLineage.fields.lastPrice.source === 'LIVE_YAHOO_API'
                         ? 'bg-emerald-950 text-emerald-300 border-emerald-500/50'
                         : 'bg-sky-950 text-sky-300 border-sky-500/50'
@@ -2619,12 +2637,12 @@ export function EmitenFundamentalInspectorModal({
                   </span>
                 )}
               </div>
-              <div className="flex items-baseline justify-between gap-2 mt-1">
-                <div className="text-lg font-bold font-mono text-[#111315]">
+              <div className="flex items-baseline justify-between gap-2 my-1">
+                <div className="text-lg font-bold font-mono tabular-nums text-[#111315] whitespace-nowrap">
                   Rp {formatIdrPriceDisplay(activeStock.lastPrice)}
                 </div>
                 {typeof activeStock.previousClose === 'number' && activeStock.previousClose > 0 && (
-                  <span className="text-[10.5px] font-mono text-neutral-500">
+                  <span className="text-[10.5px] font-mono tabular-nums text-neutral-500 whitespace-nowrap">
                     Prev: Rp {formatIdrPriceDisplay(activeStock.previousClose)}
                   </span>
                 )}
@@ -2635,7 +2653,7 @@ export function EmitenFundamentalInspectorModal({
                     ? activeStock.returnYTD
                     : Number((activeStock.return30D * 1.45).toFixed(1));
                 return (
-                  <div className="text-[10.5px] font-bold font-mono mt-0.5 flex flex-wrap items-center gap-x-1">
+                  <div className="text-[10.5px] font-bold font-mono tabular-nums flex items-center gap-x-1 whitespace-nowrap overflow-hidden">
                     <span
                       className={
                         activeStock.change1D < 0 ? 'text-[#9E2A2B]' : 'text-[#0D5C46]'
@@ -2667,8 +2685,8 @@ export function EmitenFundamentalInspectorModal({
               })()}
             </div>
 
-            <div className="p-3.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
-              <div className="text-[10px] font-bold uppercase tracking-wider text-[#D97706] bb-amber">
+            <div className="p-3.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between h-full tabular-nums">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-[#D97706] bb-amber whitespace-nowrap overflow-hidden truncate">
                 <MetricTooltip
                   label="NILAI INTRINSIK WAJAR"
                   title="Harga Wajar: Quantedge Dynamic Sector-Adaptive Ensemble + Graham-Joeliardi Floor"
@@ -2677,11 +2695,11 @@ export function EmitenFundamentalInspectorModal({
                   className="text-[#D97706] bb-amber"
                 />
               </div>
-              <div className="text-lg font-bold font-mono text-[#111315] mt-1">
+              <div className="text-lg font-bold font-mono tabular-nums text-[#111315] my-1 whitespace-nowrap">
                 Rp {formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)}
               </div>
-              <div className="text-[10px] text-neutral-600 font-mono leading-tight mt-0.5">
-                Floor G-J (0%):{' '}
+              <div className="text-[10px] text-neutral-600 font-mono tabular-nums leading-tight whitespace-nowrap overflow-hidden truncate">
+                Floor G-J:{' '}
                 <strong className="text-[#0D5C46]">
                   Rp{' '}
                   {formatIdrPriceDisplay(
@@ -2689,28 +2707,29 @@ export function EmitenFundamentalInspectorModal({
                       Math.round(joeliardiEval.intrinsicValueIdr * 0.82)
                   )}
                 </strong>{' '}
-                · RIM ω={(joeliardiEval.rimPersistenceOmega ?? 0.72).toFixed(2)}: Rp{' '}
+                · RIM: Rp{' '}
                 {formatIdrPriceDisplay(
                   joeliardiEval.rimFairValueIdr ?? joeliardiEval.intrinsicValueIdr
                 )}
               </div>
             </div>
 
-            <div className="p-3.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
-              <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
+            <div className="p-3.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between h-full tabular-nums">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 whitespace-nowrap overflow-hidden truncate">
                 <MetricTooltip
                   label="MARGIN OF SAFETY & STATE"
-                  title="Sabuk Pengaman Valuasi Dinamis (Excess Return) & Catalyst Override"
-                  laymanExplanation="Syarat MoS dikompresi ke 0%–10% bila Excess Return (Forward ROE − Ke) > 10% (atau dikunci minimal 25,0% saat IHSG VOLATIL). Jika emiten memiliki katalis aktif (hasActiveCatalyst: Buyback, lonjakan laba >20%, atau akuisisi), status otomatis beralih ke Buy on Strength dengan harga spot sebagai floor."
-                  practicalGuide="MoS ≥ Syarat Dinamis = Akumulasi Rasional; Katalis Aktif = Buy on Strength; Siklikal PBV Z ≤ -1.5σ = Strong Buy."
+                  title="Sabuk Pengaman Valuasi Dinamis (Excess Return) & Guardrail Konflik Aksi"
+                  laymanExplanation="Syarat MoS dikompresi ke 0%–10% bila Excess Return (Forward ROE − Ke) > 10% (atau dikunci minimal 25,0% saat IHSG VOLATIL). Aksi Strong Buy / Buy on Strength hanya menyala apabila Sanity PASS, bebas Seed Cap, dan Grade mencapai A/A+ (≥75/100)."
+                  practicalGuide="MoS ≥ Syarat Dinamis & Grade A = Akumulasi Rasional; Grade B/C = Watchlist / Hold."
                 />
               </div>
               <div
-                className={`text-lg font-bold font-mono mt-1 ${
-                  joeliardiEval.marginOfSafetyPct >= 10 ||
-                  joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST' ||
-                  joeliardiEval.decisionState === 'STRONG_BUY_CYCLICAL_ZSCORE' ||
-                  joeliardiEval.decisionState === 'ACCUMULATE_QUALITY_FAIR_VALUE'
+                className={`text-lg font-bold font-mono tabular-nums my-1 whitespace-nowrap ${
+                  joeliardiEval.isHighConvictionActionEligible &&
+                  (joeliardiEval.marginOfSafetyPct >= 10 ||
+                    joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST' ||
+                    joeliardiEval.decisionState === 'STRONG_BUY_CYCLICAL_ZSCORE' ||
+                    joeliardiEval.decisionState === 'ACCUMULATE_QUALITY_FAIR_VALUE')
                     ? 'text-[#0D5C46]'
                     : joeliardiEval.marginOfSafetyPct >= 0
                     ? 'text-[#D97706]'
@@ -2721,29 +2740,33 @@ export function EmitenFundamentalInspectorModal({
                 {joeliardiEval.marginOfSafetyPct.toFixed(1)}%
               </div>
               <span
-                className={`text-[10.5px] font-mono font-bold block truncate ${
-                  joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST' ||
-                  joeliardiEval.decisionState === 'STRONG_BUY_CYCLICAL_ZSCORE'
+                className={`text-[10.5px] font-mono tabular-nums font-bold block truncate ${
+                  joeliardiEval.isHighConvictionActionEligible &&
+                  (joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST' ||
+                    joeliardiEval.decisionState === 'STRONG_BUY_CYCLICAL_ZSCORE')
                     ? 'text-[#0D5C46]'
                     : 'text-neutral-600'
                 }`}
+                title={joeliardiEval.valuationLabel}
               >
                 {joeliardiEval.valuationLabel}
               </span>
             </div>
 
-            <div className="p-3.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs">
-              <div className="flex items-center justify-between gap-1 text-[10px] font-bold uppercase tracking-wider text-neutral-500">
-                <MetricTooltip
-                  label={`MATRIKS SEKTOR (${joeliardiEval.sectorPrimaryMetricShort ?? 'PBV'}) & PBV`}
-                  title={`Matriks Spesifik Sektor (${joeliardiEval.sectorPrimaryMetricLabel ?? 'Justified PBV'}) & Damodaran PBV`}
-                  laymanExplanation="Riset analis finansial membuktikan tidak ada satu rasio untuk semua sektor: Energi/Komoditas memakai P/CF atau Mid-Cycle PBV, Hilirisasi/Capex Aggressor memakai Blended RIM + Forward PE, Properti memakai 80% PBV Replacement + 20% RelVal, dan Perbankan memakai Justified PBV."
-                  practicalGuide="Bandingkan rasio sektor aktual terhadap kelipatan wajarnya serta Implied PBV terhadap Justified PBV Damodaran."
-                  align="right"
-                />
+            <div className="p-3.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between h-full tabular-nums">
+              <div className="flex items-center justify-between gap-1 text-[10px] font-bold uppercase tracking-wider text-neutral-500 whitespace-nowrap overflow-hidden">
+                <div className="truncate">
+                  <MetricTooltip
+                    label={`MATRIKS SEKTOR (${joeliardiEval.sectorPrimaryMetricShort ?? 'PBV'}) & PBV`}
+                    title={`Matriks Spesifik Sektor (${joeliardiEval.sectorPrimaryMetricLabel ?? 'Justified PBV'}) & Damodaran PBV`}
+                    laymanExplanation="Riset analis finansial membuktikan tidak ada satu rasio untuk semua sektor: Energi/Komoditas memakai Normalized P/E & EV/EBITDA, Properti memakai PBV/RNAV, Infrastruktur/Telko memakai EV/EBITDA, dan Perbankan memakai Justified PBV."
+                    practicalGuide="Bandingkan rasio sektor aktual terhadap kelipatan wajarnya serta Implied PBV terhadap Justified PBV tunggal."
+                    align="right"
+                  />
+                </div>
                 {joeliardiEval.dataLineage && (
                   <span
-                    className={`px-1.5 py-0.2 text-[8.5px] font-mono font-bold rounded-xs border ${
+                    className={`px-1.5 py-0.2 text-[8.5px] font-mono font-bold rounded-xs border shrink-0 ${
                       joeliardiEval.dataLineage.fields.netIncomeTTMIdr.source === 'HARDCODED_SEED'
                         ? 'bg-rose-950 text-rose-300 border-rose-500/60'
                         : joeliardiEval.dataLineage.fields.netIncomeTTMIdr.source === 'USER_OVERRIDE'
@@ -2760,209 +2783,260 @@ export function EmitenFundamentalInspectorModal({
                   </span>
                 )}
               </div>
-              <div className="text-sm font-bold font-mono text-[#111315] mt-1">
+              <div className="text-base font-bold font-mono tabular-nums text-[#111315] my-1 whitespace-nowrap overflow-hidden truncate">
                 {joeliardiEval.sectorPrimaryMetricShort ?? 'PBV'}{' '}
                 {joeliardiEval.sectorPrimaryImpliedMultiple ?? joeliardiEval.impliedPbv}x{' '}
                 <span className="text-xs font-normal text-[#0D5C46]">
-                  (Wajar {joeliardiEval.sectorPrimaryFairMultiple ?? joeliardiEval.damodaranJustifiedPbv}x)
+                  (Wajar {joeliardiEval.sectorPrimaryFairMultiple ?? joeliardiEval.joeliardiFairPbv}x)
                 </span>
               </div>
-              <span className="text-[11px] font-bold font-mono text-[#0284C7] bb-cyan block mt-0.5">
-                PBV {joeliardiEval.impliedPbv}x (Just.{' '}
-                {joeliardiEval.damodaranJustifiedPbv ?? joeliardiEval.joeliardiFairPbv}x) · PER{' '}
+              <span className="text-[10.5px] font-bold font-mono tabular-nums text-[#0284C7] bb-cyan block whitespace-nowrap overflow-hidden truncate">
+                PBV {joeliardiEval.impliedPbv}x (Wajar {joeliardiEval.joeliardiFairPbv}x) · PER{' '}
                 {joeliardiEval.impliedPer}x
               </span>
             </div>
           </div>
 
-          {/* 4 Pillar Scores Grid: Fundamental Kualitas Moat + Out-of-Sample (OOS) Quant with MetricTooltips */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-            <div className="p-3.5 border border-[#E4E2DD] rounded-xs bg-[#FFFFFF]">
-              <div className="flex items-center justify-between text-xs font-bold text-[#111315] mb-1">
-                <MetricTooltip
-                  label="1. Gross Profit & Anti-Junk"
-                  title="Pilar 1: Gross Profitability to Assets (Novy-Marx 2013) & Contextual Anti-Junk QMJ (Asness 2019)"
-                  laymanExplanation="Mengganti ketergantungan pada Operating Margin dan ROE mentah dengan Gross Profitability to Assets (Laba Kotor ÷ Total Aset) yang kebal rekayasa akuntansi, ditambah pengurang skor kontekstual berbasis modul rute (effective_module)."
-                  practicalGuide="Rule A (Compounder/Pure Cyclical): OCF/NI > 0,80x–1,00x. Rule B (Capex Aggressor): Toleransi OCF/NI > 0,50x bebas penalti karena ekspansi konstruksi aset baru."
-                />
-                <span className="font-mono text-[#0D5C46]">
-                  {joeliardiEval.businessQualityScore}/100
-                </span>
-              </div>
-              <div className="w-full h-1.5 bg-[#E4E2DD] rounded-xs overflow-hidden mb-2">
-                <div
-                  className="h-full bg-[#059669]"
-                  style={{ width: `${joeliardiEval.businessQualityScore}%` }}
-                />
-              </div>
-              <div className="text-[11px] text-neutral-600 font-mono space-y-0.5">
-                <div>
-                  GP/A (Novy-Marx):{' '}
-                  <strong className="text-[#0D5C46]">
-                    {(joeliardiEval.grossProfitabilityToAssets ?? activeStock.grossProfitabilityToAssets ?? activeStock.roe * 0.85).toFixed(1)}%
-                  </strong>{' '}
-                  (ROE TTM {(joeliardiEval.valuationLedger?.roeTTM ?? joeliardiEval.trailingRoePct ?? activeStock.roe).toFixed(1)}%)
-                </div>
-                <div>
-                  OCF/NI (Anti-Junk):{' '}
-                  <strong
-                    className={
-                      (joeliardiEval.accrualPenaltyPts ?? 0) > 0
-                        ? 'text-[#D97706]'
-                        : 'text-[#0D5C46]'
-                    }
-                  >
-                    {(joeliardiEval.ocfToNetIncomeRatio ?? activeStock.ocfToNetIncomeRatio ?? 0.9).toFixed(2)}x
-                  </strong>{' '}
-                  {(joeliardiEval.accrualPenaltyPts ?? 0) > 0
-                    ? `(Penalti -${joeliardiEval.accrualPenaltyPts} pts)`
-                    : (joeliardiEval.effectiveModule ?? joeliardiEval.valuationReport?.applied_module) === 'Capex_Aggressor'
-                    ? '(Lolos Rule B >0,50x)'
-                    : '(Kas Riil Sehat >0,80x)'}
-                </div>
-                <div>
-                  {(joeliardiEval.netDebtPaydownYieldPct ?? 0) > 0 && activeStock.sector !== 'Financials'
-                    ? 'TSY'
-                    : 'Net Payout'}:{' '}
-                  <strong className="text-[#0D5C46]">
-                    {(joeliardiEval.totalShareholderYieldPct ?? joeliardiEval.forwardDividendYieldPct).toFixed(2)}%
-                  </strong>{' '}
-                  (Div {joeliardiEval.forwardDividendYieldPct.toFixed(2)}%
-                  {(joeliardiEval.dynamicBuybackYieldPct ?? 0) > 0
-                    ? ` + Buyback ${(joeliardiEval.dynamicBuybackYieldPct ?? 0).toFixed(2)}%`
-                    : ''}
-                  {(joeliardiEval.netDebtPaydownYieldPct ?? 0) > 0
-                    ? ` + DebtPay ${(joeliardiEval.netDebtPaydownYieldPct ?? 0).toFixed(2)}%`
-                    : ''})
-                </div>
-              </div>
-            </div>
-
-            <div className="p-3.5 border border-[#E4E2DD] rounded-xs bg-[#FFFFFF]">
-              <div className="flex items-center justify-between text-xs font-bold text-[#111315] mb-1">
-                <MetricTooltip
-                  label="2. Kesehatan Neraca"
-                  title="Pilar 2: Solvabilitas & Ketahanan Neraca (DER & Filter HSC)"
-                  laymanExplanation="Menilai seberapa aman perusahaan dari beban utang (Debt-to-Equity Ratio) serta memastikan saham bersih dari manipulasi spekulatif / gorengan (HSC)."
-                  practicalGuide="DER ≤ 0,80x dengan status Bebas HSC menghasilkan neraca tangguh yang tahan terhadap gejolak suku bunga tinggi."
-                />
-                <span className="font-mono text-[#0284C7]">
-                  {joeliardiEval.balanceSheetHealthScore}/100
-                </span>
-              </div>
-              <div className="w-full h-1.5 bg-[#E4E2DD] rounded-xs overflow-hidden mb-2">
-                <div
-                  className="h-full bg-[#0284C7]"
-                  style={{ width: `${joeliardiEval.balanceSheetHealthScore}%` }}
-                />
-              </div>
-              <div className="text-[11px] text-neutral-600 font-mono space-y-0.5">
-                <div>DER: {activeStock.debtToEquity.toFixed(2)}x</div>
-                <div>
-                  Status Neraca:{' '}
-                  {activeStock.debtToEquity <= 0.8 ? 'Konservatif' : 'Moderat/Tinggi'}
-                </div>
-                <div>
-                  Status HSC:{' '}
-                  {activeStock.hscSource === 'KSEI_OFFICIAL' &&
-                  activeStock.kseiHscConcentrationPct ? (
-                    <strong
-                      className={
-                        activeStock.hscTier === 'KSEI_DIVIDEND_PENALTY'
-                          ? 'text-[#D97706]'
-                          : 'text-[#9E2A2B]'
+          {/* 4 Pillar Scores Grid: Strict 1-Line Titles + 3-Box Horizontal Alignment + IDX-IC Sector-Aware Metrics */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-stretch">
+            <div className="p-3.5 border border-[#E4E2DD] rounded-xs bg-[#FFFFFF] flex flex-col justify-between h-full tabular-nums">
+              <div>
+                <div className="flex items-center justify-between gap-1 text-xs font-bold text-[#111315] mb-1.5 whitespace-nowrap overflow-hidden">
+                  <div className="truncate">
+                    <MetricTooltip
+                      label={
+                        joeliardiEval.sectorMethodologyProfile?.pillar1Title ||
+                        '1. Gross Profit & Anti-Junk'
                       }
-                    >
-                      KSEI {activeStock.kseiHscConcentrationPct.toFixed(2).replace('.', ',')}%
-                      {activeStock.kseiHscIsNew ? ' (BARU)' : ''}
-                      {activeStock.kseiHscFootnote && activeStock.kseiHscFootnote !== 'NONE'
-                        ? ` ${formatKseiFootnoteShortLabel(activeStock.kseiHscFootnote)}`
-                        : ''}
-                    </strong>
-                  ) : activeStock.hscTier === 'EARLY_WARNING_SUSPECT' ? (
-                    <strong className="text-[#9E2A2B]">Suspect HSC (Early Warning)</strong>
-                  ) : activeStock.isHscFlagged ? (
-                    <strong className="text-[#9E2A2B]">Manual HSC Blokir</strong>
-                  ) : (
-                    <strong className="text-[#0D5C46]">Bebas HSC (&lt;92,5%)</strong>
-                  )}
+                      title={`Pilar 1: ${
+                        joeliardiEval.sectorMethodologyProfile?.pillar1Title ||
+                        'Gross Profitability & Anti-Junk'
+                      } (${joeliardiEval.sectorMethodologyProfile?.regimeBadgeLabel || activeStock.sector})`}
+                      laymanExplanation={
+                        joeliardiEval.sectorMethodologyNotice ||
+                        'Mengukur kualitas profitabilitas inti emiten sesuai struktur akuntansi sektor IDX-IC.'
+                      }
+                      practicalGuide="Skor ≥ 70/100 menandakan mesin profitabilitas yang melampaui biaya modal (Cost of Equity)."
+                    />
+                  </div>
+                  <span className="font-mono tabular-nums text-[#0D5C46] shrink-0">
+                    {joeliardiEval.businessQualityScore}/100
+                  </span>
                 </div>
+                <div className="w-full h-1.5 bg-[#E4E2DD] rounded-xs overflow-hidden mb-2.5">
+                  <div
+                    className="h-full bg-[#059669]"
+                    style={{ width: `${joeliardiEval.businessQualityScore}%` }}
+                  />
+                </div>
+              </div>
+              <div className="text-[11px] text-neutral-600 font-mono tabular-nums space-y-1">
+                {joeliardiEval.sectorMethodologyProfile?.pillar1Lines ? (
+                  joeliardiEval.sectorMethodologyProfile.pillar1Lines.map((line, idx) => (
+                    <div key={idx} className="truncate" title={line}>
+                      {line}
+                    </div>
+                  ))
+                ) : (
+                  <>
+                    <div className="truncate">
+                      GP/A (Novy-Marx):{' '}
+                      <strong className="text-[#0D5C46]">
+                        {(
+                          joeliardiEval.grossProfitabilityToAssets ??
+                          activeStock.grossProfitabilityToAssets ??
+                          activeStock.roe * 0.85
+                        ).toFixed(1)}
+                        %
+                      </strong>{' '}
+                      (ROE {(joeliardiEval.valuationLedger?.roeTTM ?? activeStock.roe).toFixed(1)}%)
+                    </div>
+                    <div className="truncate">
+                      OCF/NI (Anti-Junk):{' '}
+                      <strong
+                        className={
+                          (joeliardiEval.accrualPenaltyPts ?? 0) > 0
+                            ? 'text-[#D97706]'
+                            : 'text-[#0D5C46]'
+                        }
+                      >
+                        {(
+                          joeliardiEval.ocfToNetIncomeRatio ??
+                          activeStock.ocfToNetIncomeRatio ??
+                          0.9
+                        ).toFixed(2)}
+                        x
+                      </strong>
+                    </div>
+                    <div className="truncate">
+                      Net Payout:{' '}
+                      <strong className="text-[#0D5C46]">
+                        {(
+                          joeliardiEval.totalShareholderYieldPct ??
+                          joeliardiEval.forwardDividendYieldPct
+                        ).toFixed(2)}
+                        %
+                      </strong>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
 
-            <div className="p-3.5 border border-[#E4E2DD] rounded-xs bg-[#FFFFFF]">
-              <div className="flex items-center justify-between text-xs font-bold text-[#111315] mb-1">
-                <MetricTooltip
-                  label="3. Justified PBV & Kurva SBN"
-                  title="Pilar 3: Valuasi Masa Depan Damodaran (2012) & Forward ROE Annualizer"
-                  laymanExplanation="Menghitung nilai wajar dengan rumus Justified PBV = (Forward ROE − g) ÷ (Ke − g) di mana Forward ROE menyetahunkan momentum laba kuartal terakhir dan tingkat diskonto (Ke) ditarik dari kurva Spot SBN."
-                  practicalGuide="Skor ≥ 68/100 mengonfirmasi harga beli memberikan Margin of Safety atau didukung oleh katalis pertumbuhan laba/buyback aktif."
-                />
-                <span className="font-mono text-[#D97706]">
-                  {joeliardiEval.valuationSafetyScore}/100
-                </span>
+            <div className="p-3.5 border border-[#E4E2DD] rounded-xs bg-[#FFFFFF] flex flex-col justify-between h-full tabular-nums">
+              <div>
+                <div className="flex items-center justify-between gap-1 text-xs font-bold text-[#111315] mb-1.5 whitespace-nowrap overflow-hidden">
+                  <div className="truncate">
+                    <MetricTooltip
+                      label={
+                        joeliardiEval.sectorMethodologyProfile?.pillar2Title ||
+                        '2. Kesehatan Neraca'
+                      }
+                      title={`Pilar 2: ${
+                        joeliardiEval.sectorMethodologyProfile?.pillar2Title ||
+                        'Solvabilitas & Ketahanan Neraca'
+                      }`}
+                      laymanExplanation={
+                        joeliardiEval.sectorMethodologyProfile?.regime === 'FINANCIALS'
+                          ? 'Pada sektor Perbankan/Financials, DPK adalah bahan baku intermediasi sehingga DER korporasi di-bypass dan digantikan dengan Asset-to-Equity Multiplier serta audit konsentrasi HSC.'
+                          : 'Menilai ketahanan struktur modal dan solvabilitas perusahaan terhadap beban utang serta memastikan saham bersih dari manipulasi HSC.'
+                      }
+                      practicalGuide="Struktur modal yang sehat dengan status Bebas HSC melindungi portofolio dari risiko gagal bayar dan gejolak likuiditas."
+                    />
+                  </div>
+                  <span className="font-mono tabular-nums text-[#0284C7] shrink-0">
+                    {joeliardiEval.balanceSheetHealthScore}/100
+                  </span>
+                </div>
+                <div className="w-full h-1.5 bg-[#E4E2DD] rounded-xs overflow-hidden mb-2.5">
+                  <div
+                    className="h-full bg-[#0284C7]"
+                    style={{ width: `${joeliardiEval.balanceSheetHealthScore}%` }}
+                  />
+                </div>
               </div>
-              <div className="w-full h-1.5 bg-[#E4E2DD] rounded-xs overflow-hidden mb-2">
-                <div
-                  className="h-full bg-[#D97706]"
-                  style={{ width: `${joeliardiEval.valuationSafetyScore}%` }}
-                />
+              <div className="text-[11px] text-neutral-600 font-mono tabular-nums space-y-1">
+                {joeliardiEval.sectorMethodologyProfile?.pillar2Lines ? (
+                  joeliardiEval.sectorMethodologyProfile.pillar2Lines.map((line, idx) => (
+                    <div key={idx} className="truncate" title={line}>
+                      {line}
+                    </div>
+                  ))
+                ) : (
+                  <>
+                    <div className="truncate">DER: {activeStock.debtToEquity.toFixed(2)}x</div>
+                    <div className="truncate">
+                      Status Neraca:{' '}
+                      {activeStock.debtToEquity <= 0.8 ? 'Konservatif' : 'Moderat/Tinggi'}
+                    </div>
+                    <div className="truncate">
+                      Status HSC:{' '}
+                      {activeStock.isHscFlagged ? (
+                        <strong className="text-[#9E2A2B]">Blokir HSC</strong>
+                      ) : (
+                        <strong className="text-[#0D5C46]">Bebas HSC (&lt;92,5%)</strong>
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
-              <div className="text-[11px] text-neutral-600 font-mono space-y-0.5">
-                <div>
-                  Justified PBV: {joeliardiEval.damodaranJustifiedPbv ?? joeliardiEval.joeliardiFairPbv}x (g{' '}
+            </div>
+
+            <div className="p-3.5 border border-[#E4E2DD] rounded-xs bg-[#FFFFFF] flex flex-col justify-between h-full tabular-nums">
+              <div>
+                <div className="flex items-center justify-between gap-1 text-xs font-bold text-[#111315] mb-1.5 whitespace-nowrap overflow-hidden">
+                  <div className="truncate">
+                    <MetricTooltip
+                      label={
+                        joeliardiEval.sectorMethodologyProfile?.pillar3Title ||
+                        '3. Justified PBV & Kurva SBN'
+                      }
+                      title="Pilar 3: Valuasi Masa Depan Damodaran (2012) & Kurva Spot SBN"
+                      laymanExplanation="Menghitung nilai wajar dengan rumus Justified PBV = (ROE − g) ÷ (Ke − g) dengan tingkat diskonto (Ke) dari kurva Spot SBN (1Y/5Y/10Y)."
+                      practicalGuide="Skor ≥ 68/100 mengonfirmasi harga beli memberikan Margin of Safety yang memadai terhadap risiko makro."
+                    />
+                  </div>
+                  <span className="font-mono tabular-nums text-[#D97706] shrink-0">
+                    {joeliardiEval.valuationSafetyScore}/100
+                  </span>
+                </div>
+                <div className="w-full h-1.5 bg-[#E4E2DD] rounded-xs overflow-hidden mb-2.5">
+                  <div
+                    className="h-full bg-[#D97706]"
+                    style={{ width: `${joeliardiEval.valuationSafetyScore}%` }}
+                  />
+                </div>
+              </div>
+              <div className="text-[11px] text-neutral-600 font-mono tabular-nums space-y-1">
+                <div className="truncate">
+                  Justified PBV: {joeliardiEval.joeliardiFairPbv}x (g{' '}
                   {(joeliardiEval.sustainableGrowthRatePct ?? 5.5).toFixed(1)}%)
                 </div>
-                <div>
+                <div className="truncate">
                   Spot SBN Blended: {(joeliardiEval.sbnBlendedSpotRfPct ?? 6.64).toFixed(2)}% → Ke{' '}
                   {(joeliardiEval.dynamicCostOfEquityPct ?? 12.64).toFixed(2)}%
                 </div>
-                <div>
+                <div className="truncate" title={joeliardiEval.valuationLabel}>
                   State:{' '}
                   <strong
                     className={
+                      joeliardiEval.isHighConvictionActionEligible &&
                       joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST'
                         ? 'text-[#0D5C46]'
                         : 'text-[#111315]'
                     }
                   >
-                    {joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST'
+                    {joeliardiEval.isHighConvictionActionEligible &&
+                    joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST'
                       ? 'Buy on Strength / Catalyst'
-                      : `MoS ${joeliardiEval.marginOfSafetyPct}%`}
+                      : `${joeliardiEval.valuationLabel} (MoS ${
+                          joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''
+                        }${joeliardiEval.marginOfSafetyPct.toFixed(1)}%)`}
                   </strong>
                 </div>
               </div>
             </div>
 
-            <div className="p-3.5 border border-[#E4E2DD] rounded-xs bg-[#FFFFFF]">
-              <div className="flex items-center justify-between text-xs font-bold text-[#111315] mb-1">
-                <MetricTooltip
-                  label="4. 1/β Barbell Position Sizing"
-                  title="Pilar 4: Risk Parity 1/Beta (Qian 2005) & Barbell Antifragile (Taleb 2012)"
-                  laymanExplanation="Saham berfundamental prima namun bervolatilitas/Beta tinggi tidak diblokir 0%, melainkan diberi bobot proporsional 1/Beta dengan batas alokasi maksimum per saham untuk menangkap upside asimetris tanpa ancaman total ruin."
-                  practicalGuide="Peringkat Top 20%–40% dialokasikan sesuai porsi 1/Beta dan batas maksimum per saham."
-                  align="right"
-                />
-                <span className="font-mono text-[#0D5C46]">
-                  {joeliardiEval.oosQuantRobustnessScore}/100
-                </span>
+            <div className="p-3.5 border border-[#E4E2DD] rounded-xs bg-[#FFFFFF] flex flex-col justify-between h-full tabular-nums">
+              <div>
+                <div className="flex items-center justify-between gap-1 text-xs font-bold text-[#111315] mb-1.5 whitespace-nowrap overflow-hidden">
+                  <div className="truncate">
+                    <MetricTooltip
+                      label={
+                        joeliardiEval.sectorMethodologyProfile?.pillar4Title ||
+                        '4. 1/β Barbell Position Sizing'
+                      }
+                      title="Pilar 4: Risk Parity 1/Beta (Qian 2005) & Barbell Antifragile (Taleb 2012)"
+                      laymanExplanation="Saham berfundamental prima diberi bobot proporsional 1/Beta dengan batas alokasi maksimum per saham serta validasi kapasitas 5% ADTV."
+                      practicalGuide="Beta 1Y dihitung dari regresi return harian saham terhadap ^JKSE."
+                      align="right"
+                    />
+                  </div>
+                  <span className="font-mono tabular-nums text-[#0D5C46] shrink-0">
+                    {joeliardiEval.oosQuantRobustnessScore}/100
+                  </span>
+                </div>
+                <div className="w-full h-1.5 bg-[#E4E2DD] rounded-xs overflow-hidden mb-2.5">
+                  <div
+                    className="h-full bg-[#059669]"
+                    style={{ width: `${joeliardiEval.oosQuantRobustnessScore}%` }}
+                  />
+                </div>
               </div>
-              <div className="w-full h-1.5 bg-[#E4E2DD] rounded-xs overflow-hidden mb-2">
-                <div
-                  className="h-full bg-[#059669]"
-                  style={{ width: `${joeliardiEval.oosQuantRobustnessScore}%` }}
-                />
-              </div>
-              <div className="text-[11px] text-neutral-600 font-mono space-y-0.5">
-                <div>
+              <div className="text-[11px] text-neutral-600 font-mono tabular-nums space-y-1">
+                <div className="truncate">
                   Komposit: {activeStock.dmuCompositeScore.toFixed(2)}/10 (Top{' '}
                   {activeStock.dmuRankPct}%)
                 </div>
-                <div>
-                  Propensitas 1/β: {(activeStock.betaWeightedPropensity ?? 1 / Math.max(0.45, activeStock.beta1Y)).toFixed(2)}x (β{' '}
-                  {activeStock.beta1Y.toFixed(2)}x)
+                <div className="truncate">
+                  Propensitas 1/β:{' '}
+                  {(
+                    activeStock.betaWeightedPropensity ??
+                    1 / Math.max(0.45, activeStock.beta1Y)
+                  ).toFixed(2)}
+                  x (β {activeStock.beta1Y.toFixed(2)}x)
                 </div>
-                <div>
+                <div className="truncate">
                   Batas Alokasi Maks (1/β Cap):{' '}
                   <strong className="text-[#0284C7]">
                     ≤{(joeliardiEval.betaWeightedSizingCapPct ?? 14).toFixed(1)}%
@@ -3559,53 +3633,74 @@ export function EmitenFundamentalInspectorModal({
                 const sbn10Y = joeliardiEval.sbnSpot10YPct ?? 6.75;
                 const sbnBlended = joeliardiEval.sbnBlendedSpotRfPct ?? 6.64;
                 const dynKe = joeliardiEval.dynamicCostOfEquityPct ?? 12.64;
-                const justPbv =
-                  joeliardiEval.damodaranJustifiedPbv ?? joeliardiEval.joeliardiFairPbv;
+                const justPbv = joeliardiEval.joeliardiFairPbv;
                 const betaCap = joeliardiEval.betaWeightedSizingCapPct ?? 14.0;
+                const secProf = joeliardiEval.sectorMethodologyProfile;
 
                 return (
                   <>
-                    <div className="p-2.5 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs">
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
+                    <div className="p-2.5 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs flex flex-col justify-between">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 whitespace-nowrap overflow-hidden truncate">
                         <MetricTooltip
-                          label="GP/A (Novy-Marx) & DuPont"
-                          title="Gross Profitability to Assets (Laba Kotor ÷ Total Aset) & ROA Murni"
-                          laymanExplanation="Novy-Marx (2013) membuktikan bahwa membagi Laba Kotor dengan Total Aset (GP/A) adalah prediktor return masa depan paling bersih karena berada di atas baris pajak, bunga, dan rekayasa struktur modal."
-                          practicalGuide="GP/A ≥ 18% dengan ROA Murni ≥ 8% menandakan profitabilitas struktural yang kebal manipulasi akuntansi."
+                          label={
+                            secProf?.academicStripCard1.label || 'GP/A (Novy-Marx) & DuPont'
+                          }
+                          title={
+                            secProf?.academicStripCard1.label ||
+                            'Gross Profitability to Assets (Laba Kotor ÷ Total Aset) & ROA Murni'
+                          }
+                          laymanExplanation={
+                            joeliardiEval.sectorMethodologyNotice ||
+                            'Mengukur profitabilitas inti perusahaan terhadap total aset.'
+                          }
+                          practicalGuide="Pastikan profitabilitas inti berada di atas biaya modal (Ke)."
                         />
                       </div>
                       <div className="text-xs sm:text-sm font-mono tabular-nums font-bold text-[#0D5C46] mt-1">
-                        <div>GP/A {gpToAssets.toFixed(1)}%</div>
-                        <span className="block text-[10px] font-normal text-neutral-500 mt-0.5 leading-snug">
-                          (ROA {roaDuPont.toFixed(1)}% · Lev {eqMult.toFixed(2)}x)
+                        <div>
+                          {secProf?.academicStripCard1.mainVal ||
+                            `GP/A ${gpToAssets.toFixed(1)}%`}
+                        </div>
+                        <span className="block text-[10px] font-normal text-neutral-500 mt-0.5 leading-snug truncate">
+                          {secProf?.academicStripCard1.subVal ||
+                            `(ROA ${roaDuPont.toFixed(1)}% · Lev ${eqMult.toFixed(2)}x)`}
                         </span>
                       </div>
                     </div>
 
-                    <div className="p-2.5 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs">
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
+                    <div className="p-2.5 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs flex flex-col justify-between">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 whitespace-nowrap overflow-hidden truncate">
                         <MetricTooltip
                           label="Kurva Spot SBN (1Y/5Y/10Y)"
                           title="Bobot Kombinasi Spot Rate SBN 1Y, 5Y, 10Y (Fabozzi 2012) & Cost of Equity Dinamis"
-                          laymanExplanation="Menggunakan kombinasi probabilitas spot rate sepanjang yield curve obligasi pemerintah (15% SBN 1Y · 35% SBN 5Y · 50% SBN 10Y) sesuai durasi arus kas ekuitas untuk menghitung Dynamic Cost of Equity (Ke)."
+                          laymanExplanation="Menggunakan kombinasi probabilitas spot rate sepanjang yield curve obligasi pemerintah sesuai durasi arus kas ekuitas untuk menghitung Dynamic Cost of Equity (Ke)."
                           practicalGuide="Semakin tinggi ROE emiten di atas Ke dinamis ini, semakin besar penciptaan nilai intrinsik bagi pemegang saham."
                         />
                       </div>
                       <div className="text-xs sm:text-sm font-mono tabular-nums font-bold text-[#111315] mt-1">
                         <div>Ke {dynKe.toFixed(2)}%</div>
-                        <span className="block text-[10px] font-normal text-neutral-500 mt-0.5 leading-snug">
+                        <span className="block text-[10px] font-normal text-neutral-500 mt-0.5 leading-snug truncate">
                           (Spot Rf {sbnBlended.toFixed(2)}%: 1Y {sbn1Y}%·5Y {sbn5Y}%·10Y {sbn10Y}%)
                         </span>
                       </div>
                     </div>
 
-                    <div className="p-2.5 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs">
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
+                    <div className="p-2.5 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs flex flex-col justify-between">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 whitespace-nowrap overflow-hidden truncate">
                         <MetricTooltip
-                          label="Anti-Junk (QMJ Accrual)"
-                          title="Contextual Quality Minus Junk (Asness et al. 2019) — Ambang OCF/NI Kontekstual"
-                          laymanExplanation="Mendeteksi selisih laba akuntansi vs arus kas operasi (OCF/NI) secara kontekstual sesuai modul rute aktif (effective_module): ketat untuk Compounder/Pure Cyclical, dan toleran untuk Capex Aggressor."
-                          practicalGuide="Rule A (Compounder/Pure Cyclical): OCF/NI > 0,80x–1,00x bebas penalti. Rule B (Capex Aggressor): OCF/NI > 0,50x bebas penalti (0 pts)."
+                          label={
+                            secProf?.academicStripCard3.label || 'Anti-Junk (QMJ Accrual)'
+                          }
+                          title={
+                            secProf?.academicStripCard3.label ||
+                            'Contextual Quality Minus Junk (Asness et al. 2019)'
+                          }
+                          laymanExplanation={
+                            secProf?.regime === 'FINANCIALS'
+                              ? 'Pada sektor Perbankan/Financials, OCF/NI & DER korporasi di-bypass otomatis karena struktur DPK dan penyaluran pembiayaan; fokus beralih ke Asset-to-Equity Multiplier.'
+                              : 'Mendeteksi selisih laba akuntansi vs arus kas operasi (OCF/NI) secara kontekstual sesuai modul rute aktif.'
+                          }
+                          practicalGuide="Konversi kas sehat dan leverage terkendali memastikan kualitas laba bebas manipulasi."
                         />
                       </div>
                       <div
@@ -3613,19 +3708,21 @@ export function EmitenFundamentalInspectorModal({
                           accrualPen === 0 ? 'text-[#0D5C46]' : 'text-[#D97706]'
                         }`}
                       >
-                        <div>OCF/NI {ocfNi.toFixed(2)}x</div>
-                        <span className="block text-[10px] font-normal text-neutral-500 mt-0.5 leading-snug">
-                          {accrualPen > 0
-                            ? `(Penalti Akrual -${accrualPen} pts)`
-                            : (joeliardiEval.effectiveModule ?? joeliardiEval.valuationReport?.applied_module) === 'Capex_Aggressor'
-                            ? '(0 Penalti · Rule B Capex >0,50x)'
-                            : '(0 Penalti · Rule A Kas >0,80x)'}
+                        <div>
+                          {secProf?.academicStripCard3.mainVal ||
+                            `OCF/NI ${ocfNi.toFixed(2)}x`}
+                        </div>
+                        <span className="block text-[10px] font-normal text-neutral-500 mt-0.5 leading-snug truncate">
+                          {secProf?.academicStripCard3.subVal ||
+                            (accrualPen > 0
+                              ? `(Penalti Akrual -${accrualPen} pts)`
+                              : '(0 Penalti · Kas Sehat)')}
                         </span>
                       </div>
                     </div>
 
-                    <div className="p-2.5 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs">
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
+                    <div className="p-2.5 bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs flex flex-col justify-between">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 whitespace-nowrap overflow-hidden truncate">
                         <MetricTooltip
                           label="Justified PBV & Sizing 1/β"
                           title="Damodaran Justified PBV & Beta-Weighted Position Sizing (Qian 2005 & Taleb 2012)"
@@ -3636,7 +3733,7 @@ export function EmitenFundamentalInspectorModal({
                       </div>
                       <div className="text-xs sm:text-sm font-mono tabular-nums font-bold text-[#0284C7] bb-cyan mt-1">
                         <div>PBV Wajar {justPbv}x</div>
-                        <span className="block text-[10px] font-normal text-neutral-500 mt-0.5 leading-snug">
+                        <span className="block text-[10px] font-normal text-neutral-500 mt-0.5 leading-snug truncate">
                           (MoS {joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}
                           {joeliardiEval.marginOfSafetyPct.toFixed(1)}% · Cap 1/β ≤{betaCap.toFixed(1)}%)
                         </span>
@@ -4339,8 +4436,12 @@ export function EmitenFundamentalInspectorModal({
               riskSizingResult={joeliardiEval.riskSizingResult}
               dataLineage={joeliardiEval.dataLineage}
               onAutoSyncSharesMarketCap={handleAutoSyncP0Sanity}
-              onOpenCalibrator={() => setShowCatalystCalibrator(true)}
-              onOpenLineageDrawer={() => setShowForensicLineageDrawer((prev) => !prev)}
+              onOpenCalibrator={() => setActiveToolPanel('CALIBRATION')}
+              onOpenLineageDrawer={() =>
+                setActiveToolPanel((prev) =>
+                  prev === 'FORENSIC_LINEAGE' ? 'NONE' : 'FORENSIC_LINEAGE'
+                )
+              }
             />
           )}
         </div>

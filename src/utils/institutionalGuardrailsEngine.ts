@@ -15,6 +15,103 @@ import {
   ValuationResult
 } from '../types/quant';
 import { getFundamentalUserOverride } from './dataLineageEngine';
+import { resolveAuthenticTotalAssetsIdr } from './sectorMethodologyRouter';
+import embeddedSnapshot from '../data/staticMarketSnapshot.json';
+
+/**
+ * MODUL 2.1: Realistic Sector Beta Fallback when price series is completely empty
+ * (`Financials: 1.05`, `Consumer Cyclicals: 0.95`, `Energy/Basic Materials: 1.00`,
+ *  `Properties: 0.95`, `Healthcare/Consumer Staples: 0.70`, `Industrials: 0.85`)
+ */
+export function resolveSectorBetaFallback(sector: string): number {
+  const sec = (sector || '').trim();
+  if (sec === 'Financials') return 1.05;
+  if (sec === 'Consumer Cyclicals') return 0.95;
+  if (sec === 'Energy' || sec === 'Basic Materials') return 1.00;
+  if (sec === 'Properties & Real Estate' || sec === 'Properties') return 0.95;
+  if (sec === 'Healthcare' || sec === 'Consumer Non-Cyclicals' || sec === 'Consumer Staples') {
+    return 0.70;
+  }
+  if (sec === 'Industrials') return 0.85;
+  if (sec === 'Infrastructures' || sec === 'Infrastructure') return 0.85;
+  if (sec === 'Technology') return 1.15;
+  return 0.90;
+}
+
+/**
+ * MODUL 2.1: Computes authentic 1Y Beta from daily return regression of the stock vs ^JKSE
+ * using at least 30–35 overlapping trading days from static-market-snapshot.json when
+ * live 1Y chart falls back or beta1Y is stuck at the 0.32 floor.
+ */
+export function computeAuthenticBeta1YFromSnapshotOrSeries(
+  ticker: string,
+  sector: string,
+  currentBeta?: number
+): number {
+  if (
+    typeof currentBeta === 'number' &&
+    Number.isFinite(currentBeta) &&
+    currentBeta > 0.34 &&
+    currentBeta < 2.38
+  ) {
+    return Number(currentBeta.toFixed(2));
+  }
+
+  const cleanTicker = ticker.replace(/\.JK$/i, '').trim().toUpperCase();
+  const yfSym = `${cleanTicker}.JK`;
+  const snapData = (
+    embeddedSnapshot as unknown as {
+      data?: Record<string, { closes?: number[]; timestamps?: number[] }>;
+    }
+  )?.data;
+
+  const stockEntry = snapData?.[yfSym];
+  const jkseEntry = snapData?.['^JKSE'];
+  const stockCloses = (stockEntry?.closes ?? []).filter((c) => Number.isFinite(c) && c > 0);
+  const jkseCloses = (jkseEntry?.closes ?? []).filter((c) => Number.isFinite(c) && c > 0);
+
+  if (stockCloses.length >= 15 && jkseCloses.length >= 15) {
+    const sRet: number[] = [];
+    for (let i = 1; i < stockCloses.length; i++) {
+      sRet.push((stockCloses[i] - stockCloses[i - 1]) / stockCloses[i - 1]);
+    }
+    const mRet: number[] = [];
+    for (let i = 1; i < jkseCloses.length; i++) {
+      mRet.push((jkseCloses[i] - jkseCloses[i - 1]) / jkseCloses[i - 1]);
+    }
+
+    // Use up to 60 overlapping recent trading days (minimum 14–35 days available in snapshot)
+    const overlapLen = Math.min(sRet.length, mRet.length, 60);
+    if (overlapLen >= 14) {
+      const sWindow = sRet.slice(-overlapLen);
+      const mWindow = mRet.slice(-overlapLen);
+      const meanS = sWindow.reduce((a, b) => a + b, 0) / overlapLen;
+      const meanM = mWindow.reduce((a, b) => a + b, 0) / overlapLen;
+      let cov = 0;
+      let varM = 0;
+      for (let i = 0; i < overlapLen; i++) {
+        const dS = sWindow[i] - meanS;
+        const dM = mWindow[i] - meanM;
+        cov += dS * dM;
+        varM += dM * dM;
+      }
+      cov /= Math.max(1, overlapLen - 1);
+      varM /= Math.max(1, overlapLen - 1);
+
+      if (varM > 1e-8) {
+        const rawRegressedBeta = cov / varM;
+        // Blend 70% empirical snapshot regression + 30% Vasicek shrinkage toward sector prior
+        const sectorPrior = resolveSectorBetaFallback(sector);
+        const vasicekBeta = 0.70 * rawRegressedBeta + 0.30 * sectorPrior;
+        if (Number.isFinite(vasicekBeta) && vasicekBeta > 0.38) {
+          return Number(Math.max(0.42, Math.min(2.25, vasicekBeta)).toFixed(2));
+        }
+      }
+    }
+  }
+
+  return Number(resolveSectorBetaFallback(sector).toFixed(2));
+}
 
 /**
  * Helper: Normalizes percentage or decimal inputs into decimal (e.g., 18.5 -> 0.185, 0.185 -> 0.185).
@@ -1347,13 +1444,16 @@ export function calculateVolatilityTargetedSizingAndStop(
   } else if (input.sanityReport.maxAllowedStatus === 'DATA_AUDIT_REQUIRED') {
     // P0.1 & Hotfix 1 Guardrail: Block Grade A / Core Conviction if CRITICAL_DATA_MISMATCH or YTD_CUMULATIVE_SUM_SUSPECT
     finalConvictionGrade = 'DATA_AUDIT_REQUIRED';
-  } else if (input.sanityReport.maxAllowedStatus === 'WATCHLIST_SEED_CAPPED') {
-    // FIX 4 Guardrail: Hardcoded seed fundamentals cap conviction at Grade C
-    finalConvictionGrade = 'C (SPECULATIVE)';
+  } else if (
+    input.sanityReport.maxAllowedStatus === 'WATCHLIST_SEED_CAPPED' ||
+    input.sanityReport.status === 'SEED_WARN'
+  ) {
+    // MODUL 2.2 Guardrail: Hardcoded seed fundamentals uniformly display C (SEED CAPPED)
+    finalConvictionGrade = 'C (SEED CAPPED)';
   } else if (adjustedConvictionScore >= 82 && !input.sanityReport.isRfStale) {
     finalConvictionGrade = 'A+ (CORE CONVICTION)';
-  } else if (adjustedConvictionScore >= 72) {
-    // Stale RF (>7d) downgrades A+ (CORE CONVICTION) to A (SOLID VALUE)
+  } else if (adjustedConvictionScore >= 75) {
+    // Grade A requires finalScore >= 75 per Modul 2 Action Lock specification
     finalConvictionGrade = 'A (SOLID VALUE)';
   } else if (adjustedConvictionScore >= 58) {
     finalConvictionGrade = 'B (WATCHLIST / HOLD)';
@@ -1592,10 +1692,16 @@ export function buildRawTickerDataFromStock(params: {
       : stock.totalDebtIdr && stock.totalDebtIdr >= 0
       ? Math.round(stock.totalDebtIdr * fxScale)
       : Math.round(equityAttributable * der);
-  const totalAssets =
-    stock.totalAssetsIdr && stock.totalAssetsIdr > 0
-      ? Math.round(stock.totalAssetsIdr * fxScale)
-      : Math.round(equityAttributable + totalDebt + equityAttributable * 0.15);
+  const totalAssets = resolveAuthenticTotalAssetsIdr({
+    ticker: stock.ticker,
+    sector: stock.sector,
+    explicitTotalAssetsIdr:
+      stock.totalAssetsIdr && stock.totalAssetsIdr > 0
+        ? Math.round(stock.totalAssetsIdr * fxScale)
+        : undefined,
+    equityAttributableIdr: equityAttributable,
+    totalDebtIdr: totalDebt
+  });
   const cashAndEquivalents =
     userOverride?.cashAndEquivalentsIdr && userOverride.cashAndEquivalentsIdr >= 0
       ? Math.round(userOverride.cashAndEquivalentsIdr * fxScale)
@@ -1655,6 +1761,13 @@ export function buildRawTickerDataFromStock(params: {
     ? paramRfLastUpdated
     : stock.rfLastUpdated ?? null;
 
+  // MODUL 2.1: Fix beta1Y stuck at 0.32x by regressing daily returns vs ^JKSE or using sector prior
+  const authenticBeta1Y = computeAuthenticBeta1YFromSnapshotOrSeries(
+    stock.ticker,
+    stock.sector,
+    stock.beta1Y
+  );
+
   return {
     ticker: stock.ticker,
     name: stock.name,
@@ -1698,7 +1811,7 @@ export function buildRawTickerDataFromStock(params: {
     baseCostOfEquity: dynamicCostOfEquityPct / 100,
     baseGrowthRate: sustainableGrowthRatePct / 100,
     evToEbitda5YMean: stock.evToEbitda5YMean,
-    beta1Y: stock.beta1Y,
+    beta1Y: authenticBeta1Y,
     realizedAnnualVol: (stock.volatilityAnn || 24) / 100,
     atr20,
     marketRegime,
