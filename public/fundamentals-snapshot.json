@@ -1,6 +1,6 @@
 {
   "provenanceMode": "AUTOMATED_FETCH",
-  "generatedAt": "2026-11-22T12:48:34.258Z",
+  "generatedAt": "2026-11-22T12:49:07.945Z",
   "macroBenchmarks": {
     "sbn1YPct": 6.95,
     "sbn5YPct": 7.6,
@@ -19,7 +19,7 @@
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
       "decumulationNote": "4Q standalone valid (rasio TTM/FY <= 1.65x).",
-      "fetchedAt": "2026-11-22T12:48:34.258Z",
+      "fetchedAt": "2026-11-22T12:49:07.945Z",
       "raw4QRevenueSum": 5655283981491,
       "latestFullYearRevenue": 5368322143294,
       "revenueTTM": 5655283981491,
@@ -45,7 +45,7 @@
     "SILO": {
       "ticker": "SILO",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T12:48:34.258Z",
+      "fetchedAt": "2026-11-22T12:49:07.945Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -75,7 +75,7 @@
     "ARNA": {
       "ticker": "ARNA",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T12:48:34.258Z",
+      "fetchedAt": "2026-11-22T12:49:07.945Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -105,7 +105,7 @@
     "BBCA": {
       "ticker": "BBCA",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T12:48:34.258Z",
+      "fetchedAt": "2026-11-22T12:49:07.945Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -135,7 +135,7 @@
     "BBRI": {
       "ticker": "BBRI",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T12:48:34.258Z",
+      "fetchedAt": "2026-11-22T12:49:07.945Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -165,7 +165,7 @@
     "HEAL": {
       "ticker": "HEAL",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T12:48:34.258Z",
+      "fetchedAt": "2026-11-22T12:49:07.945Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -195,7 +195,7 @@
     "ASII": {
       "ticker": "ASII",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T12:48:34.258Z",
+      "fetchedAt": "2026-11-22T12:49:07.945Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -225,7 +225,7 @@
     "TLKM": {
       "ticker": "TLKM",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T12:48:34.258Z",
+      "fetchedAt": "2026-11-22T12:49:07.945Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -255,7 +255,7 @@
     "BMRI": {
       "ticker": "BMRI",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T12:48:34.258Z",
+      "fetchedAt": "2026-11-22T12:49:07.945Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -481,7 +481,7 @@
     "LSIP": {
       "ticker": "LSIP",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T12:48:34.258Z",
+      "fetchedAt": "2026-11-22T12:49:07.945Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "reportingCurrency": "IDR",
