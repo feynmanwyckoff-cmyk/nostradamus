@@ -1,6 +1,6 @@
 {
   "provenanceMode": "AUTOMATED_FETCH",
-  "generatedAt": "2026-11-22T09:21:14.981Z",
+  "generatedAt": "2026-11-22T09:24:17.487Z",
   "macroBenchmarks": {
     "sbn1YPct": 6.95,
     "sbn5YPct": 7.6,
@@ -19,7 +19,7 @@
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
       "decumulationNote": "4Q standalone valid (rasio TTM/FY <= 1.65x).",
-      "fetchedAt": "2026-11-22T09:21:14.981Z",
+      "fetchedAt": "2026-11-22T09:24:17.487Z",
       "raw4QRevenueSum": 5655283981491,
       "latestFullYearRevenue": 5368322143294,
       "revenueTTM": 5655283981491,
@@ -40,7 +40,7 @@
     "SILO": {
       "ticker": "SILO",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T09:21:14.981Z",
+      "fetchedAt": "2026-11-22T09:24:17.487Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -65,7 +65,7 @@
     "ARNA": {
       "ticker": "ARNA",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T09:21:14.981Z",
+      "fetchedAt": "2026-11-22T09:24:17.487Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -90,7 +90,7 @@
     "BBCA": {
       "ticker": "BBCA",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T09:21:14.981Z",
+      "fetchedAt": "2026-11-22T09:24:17.487Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -115,7 +115,7 @@
     "BBRI": {
       "ticker": "BBRI",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T09:21:14.981Z",
+      "fetchedAt": "2026-11-22T09:24:17.487Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -140,7 +140,7 @@
     "HEAL": {
       "ticker": "HEAL",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T09:21:14.981Z",
+      "fetchedAt": "2026-11-22T09:24:17.487Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -165,7 +165,7 @@
     "ASII": {
       "ticker": "ASII",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T09:21:14.981Z",
+      "fetchedAt": "2026-11-22T09:24:17.487Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -190,7 +190,7 @@
     "TLKM": {
       "ticker": "TLKM",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T09:21:14.981Z",
+      "fetchedAt": "2026-11-22T09:24:17.487Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -215,7 +215,7 @@
     "BMRI": {
       "ticker": "BMRI",
       "provenanceMode": "AUTOMATED_FETCH",
-      "fetchedAt": "2026-11-22T09:21:14.981Z",
+      "fetchedAt": "2026-11-22T09:24:17.487Z",
       "asOfDate": "2026-09-30",
       "fiscalPeriod": "TTM (2026-09-30)",
       "decumulationMethod": "STANDALONE_4Q_SUM",
@@ -235,6 +235,31 @@
       "capexTTM": 6068373000000,
       "daTTM": null,
       "adtv20dIdr": 621649611350,
+      "adtvAsOfDate": "2026-11-20"
+    },
+    "DRMA": {
+      "ticker": "DRMA",
+      "provenanceMode": "AUTOMATED_FETCH",
+      "fetchedAt": "2026-11-22T09:24:17.487Z",
+      "asOfDate": "2026-09-30",
+      "fiscalPeriod": "TTM (2026-09-30)",
+      "decumulationMethod": "STANDALONE_4Q_SUM",
+      "decumulationNote": "4Q standalone valid (rasio TTM/FY <= 1.65x).",
+      "raw4QRevenueSum": 6643977846835,
+      "latestFullYearRevenue": 5939676041503,
+      "revenueTTM": 6643977846835,
+      "ebitTTM": 789944027560,
+      "netIncomeTTM": 712199375414,
+      "netIncomeYoYPct": 9.14,
+      "operatingProfitYoYPct": 7.09,
+      "equityAttributable": 2925835711004,
+      "totalDebt": 416628738013,
+      "cashAndEquivalents": 716697971097,
+      "sharesOutstanding": 4705882300,
+      "ocfTTM": null,
+      "capexTTM": 316468363091,
+      "daTTM": null,
+      "adtv20dIdr": 1199234175,
       "adtvAsOfDate": "2026-11-20"
     }
   },
