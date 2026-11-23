@@ -41,6 +41,8 @@ jobs:
         run: node scripts/generate-static-market-bundle.mjs
 
       - name: Build Production Bundle (dist/)
+        env:
+          VITE_REALTIME_WORKER_URL: ${{ secrets.VITE_REALTIME_WORKER_URL || vars.VITE_REALTIME_WORKER_URL || 'https://nostradamus-yahoo-proxy.feynman-wyckoff.workers.dev' }}
         run: npm run build
 
       - name: Configure GitHub Pages

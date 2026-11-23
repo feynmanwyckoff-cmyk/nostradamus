@@ -64,6 +64,20 @@ const renderMiniProvenanceBadge = (
   status?: FieldFreshnessStatus
 ): React.ReactNode => {
   if (!source) return null;
+  if (status === 'ANOMALY') {
+    return (
+      <span className="rounded border border-amber-500/60 bg-amber-500/20 px-1 py-0.2 font-mono text-[8.5px] font-bold text-amber-300">
+        ANOMALY
+      </span>
+    );
+  }
+  if (status === 'SEED_WARN') {
+    return (
+      <span className="rounded border border-rose-500/50 bg-rose-500/15 px-1 py-0.2 font-mono text-[8.5px] font-bold text-rose-300">
+        SEED_WARN
+      </span>
+    );
+  }
   if (source === 'USER_OVERRIDE') {
     return (
       <span className="rounded border border-indigo-500/50 bg-indigo-500/15 px-1 py-0.2 font-mono text-[8.5px] font-bold text-indigo-300">

@@ -120,17 +120,26 @@ const KBMI4_AND_CONSUMER_MONOPOLY_TICKERS = new Set([
 ]);
 
 const CPO_AGRI_TICKERS = new Set([
-  'TAPG',
   'LSIP',
   'AALI',
+  'TAPG',
   'DSNG',
   'SSMS',
+  'SMAR',
   'SIMP',
-  'BWPT',
-  'SGRO',
-  'TBLA',
   'STAA',
+  'SGRO',
+  'BWPT',
   'CSRA',
+  'ANJT',
+  'TBLA',
+  'GZCO',
+  'JAWA',
+  'PALM',
+  'FAPA',
+  'MGRO',
+  'NSSS',
+  'PGUN',
   'JARR'
 ]);
 

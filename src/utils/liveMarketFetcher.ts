@@ -32,10 +32,13 @@ import { pullLiveMarketSnapshotFromGitHubApi } from './githubCloudSync';
 import embeddedSnapshotRaw from '../data/staticMarketSnapshot.json';
 import {
   DataSourceType,
+  FlowAuditMetadata,
   FundamentalsSnapshotDocument,
   FundamentalsSnapshotTickerEntry,
   getFundamentalUserOverride,
-  recordSyncDiagnostic
+  getRealtimeWorkerUrl,
+  recordSyncDiagnostic,
+  sanitizeRealtimeWorkerUrl
 } from './dataLineageEngine';
 import {
   computeAuthenticBeta1YFromSnapshotOrSeries,
@@ -599,6 +602,14 @@ export async function loadFundamentalsSnapshot(
             continue;
           }
 
+          // Preserve live Cloudflare Worker macroBenchmarks if already hydrated during this session
+          if (
+            cachedFundamentalsSnapshotDoc?.macroBenchmarks?.provenanceMode ===
+              'LIVE_REALTIME_WORKER' &&
+            cachedFundamentalsSnapshotDoc.macroBenchmarks.source === 'LIVE_YAHOO_API'
+          ) {
+            parsed.macroBenchmarks = cachedFundamentalsSnapshotDoc.macroBenchmarks;
+          }
           bestDoc = parsed;
           cachedFundamentalsSnapshotDoc = parsed;
 
@@ -670,7 +681,9 @@ export function resolveTickerFundamentalOverlay(
   computedOpMarginPct: number;
   computedDer: number;
   revenueTTMIdr?: number;
+  latestFullYearRevenueIdr?: number;
   operatingProfitTTMIdr?: number;
+  ebitdaTTMIdr?: number;
   netIncomeTTMIdr?: number;
   netIncomeYoYPct?: number;
   operatingProfitYoYPct?: number;
@@ -682,6 +695,12 @@ export function resolveTickerFundamentalOverlay(
   ocfTTMIdr?: number;
   capexTTMIdr?: number;
   daTTMIdr?: number;
+  roeAvg3YPct?: number;
+  roeAvg5YPct?: number;
+  beta1Y?: number;
+  realizedAnnualVol?: number;
+  atr20Idr?: number;
+  dividendYieldTTM?: number;
   adtv20dIdr?: number;
   adtvSource?: DataSourceType;
   adtvAsOfDate?: string;
@@ -689,6 +708,13 @@ export function resolveTickerFundamentalOverlay(
   fundamentalsAsOfDate?: string;
   fundamentalsFiscalPeriod?: string;
   fundamentalsNote?: string;
+  daAnomaly?: boolean;
+  daMethodNote?: string;
+  ttmMethod?: string;
+  flowAudit?: FlowAuditMetadata | null;
+  missingFundamentalFields?: string[];
+  reportingCurrency?: string;
+  fxRateUsdIdr?: number;
 } {
   const clean = ticker.trim().toUpperCase().replace(/\.JK$/i, '');
   const userOverride = getFundamentalUserOverride(clean);
@@ -698,7 +724,8 @@ export function resolveTickerFundamentalOverlay(
 
   const verifiedSnapEntry =
     snapEntry &&
-    snapEntry.provenanceMode === 'AUTOMATED_FETCH' &&
+    (snapEntry.provenanceMode === 'AUTOMATED_FETCH' ||
+      snapEntry.provenanceMode === 'LIVE_REALTIME_WORKER') &&
     typeof snapEntry.revenueTTM === 'number' &&
     snapEntry.revenueTTM > 0 &&
     typeof snapEntry.netIncomeTTM === 'number' &&
@@ -706,6 +733,14 @@ export function resolveTickerFundamentalOverlay(
     snapEntry.equityAttributable > 0
       ? snapEntry
       : null;
+
+  const isLiveEntryValid =
+    liveEntry &&
+    (liveEntry.provenanceMode === 'LIVE_REALTIME_WORKER' ||
+      liveEntry.provenanceMode === 'AUTOMATED_FETCH') &&
+    ((typeof liveEntry.revenueTTM === 'number' && liveEntry.revenueTTM > 0) ||
+      (typeof liveEntry.netIncomeTTM === 'number' && liveEntry.netIncomeTTM !== 0) ||
+      (typeof liveEntry.equityAttributable === 'number' && liveEntry.equityAttributable > 0));
 
   // Determine active statement source priority: USER_OVERRIDE > LIVE_YAHOO_API > FUNDAMENTALS_JSON (AUTOMATED_FETCH) > HARDCODED_SEED
   const hasUserFundamentalOverride =
@@ -719,10 +754,7 @@ export function resolveTickerFundamentalOverlay(
 
   const activeStatementSource: DataSourceType = hasUserFundamentalOverride
     ? 'USER_OVERRIDE'
-    : liveEntry &&
-      liveEntry.provenanceMode === 'AUTOMATED_FETCH' &&
-      typeof liveEntry.revenueTTM === 'number' &&
-      liveEntry.revenueTTM > 0
+    : isLiveEntryValid
     ? 'LIVE_YAHOO_API'
     : verifiedSnapEntry
     ? 'FUNDAMENTALS_JSON'
@@ -731,15 +763,21 @@ export function resolveTickerFundamentalOverlay(
   const baseRecord =
     activeStatementSource === 'LIVE_YAHOO_API'
       ? liveEntry
-      : verifiedSnapEntry || undefined;
+      : verifiedSnapEntry || liveEntry || undefined;
+
+  const isRealtimeWorkerRecord = baseRecord?.provenanceMode === 'LIVE_REALTIME_WORKER';
 
   const sharesOutstanding =
     userOverride?.sharesOutstanding ??
-    (typeof baseRecord?.sharesOutstanding === 'number' ? baseRecord.sharesOutstanding : undefined);
+    (typeof baseRecord?.sharesOutstanding === 'number' && baseRecord.sharesOutstanding > 0
+      ? baseRecord.sharesOutstanding
+      : undefined);
 
   // Auto-Detect & Normalize USD-denominated financial statements in snapshot/live records
-  // (e.g., IDX mining/energy/commodity issuers where Yahoo reports Net Income & Equity in USD while Shares & Price are in IDR)
-  const rawSpotUsdIdr = Number(embeddedSnapshot?.data?.['IDR=X']?.lastPrice);
+  const rawSpotUsdIdr =
+    typeof baseRecord?.fxRateUsdIdr === 'number' && baseRecord.fxRateUsdIdr > 10000
+      ? baseRecord.fxRateUsdIdr
+      : Number(embeddedSnapshot?.data?.['IDR=X']?.lastPrice);
   const spotUsdIdrRate =
     Number.isFinite(rawSpotUsdIdr) && rawSpotUsdIdr >= 12000 && rawSpotUsdIdr <= 22000
       ? Math.round(rawSpotUsdIdr)
@@ -747,8 +785,10 @@ export function resolveTickerFundamentalOverlay(
 
   const rawBaseEq =
     typeof baseRecord?.equityAttributable === 'number' ? baseRecord.equityAttributable : undefined;
+  // Note: Worker responses with reportingCurrency === 'USD' have already converted all monetary fields to IDR
   const isBaseRecordUnconvertedUsd =
     baseRecord !== undefined &&
+    !isRealtimeWorkerRecord &&
     baseRecord.reportingCurrency !== 'USD_CONVERTED_TO_IDR' &&
     (baseRecord.reportingCurrency === 'USD' ||
       (typeof rawBaseEq === 'number' &&
@@ -777,7 +817,7 @@ export function resolveTickerFundamentalOverlay(
     scaleBaseMonetary(baseRecord?.revenueTTM);
   const operatingProfitTTMIdr =
     scaleUserMonetary(userOverride?.ebitTTM) ??
-    scaleBaseMonetary(baseRecord?.ebitTTM);
+    scaleBaseMonetary(baseRecord?.operatingProfitTTM ?? baseRecord?.ebitTTM);
   const netIncomeTTMIdr =
     scaleUserMonetary(userOverride?.netIncomeTTM) ??
     scaleBaseMonetary(baseRecord?.netIncomeTTM);
@@ -800,13 +840,18 @@ export function resolveTickerFundamentalOverlay(
     scaleUserMonetary(userOverride?.cashAndEquivalents) ??
     scaleBaseMonetary(baseRecord?.cashAndEquivalents);
 
+  // Partial-Data Honesty for IPO / Micro-Cap issuers:
+  // When using LIVE_REALTIME_WORKER, if Yahoo returned null for capexTTM / daTTM / ocfTTM,
+  // keep them undefined here so their individual lineage badge falls back to SEED_WARN (with Perbaiki -> button),
+  // while buildRawTickerDataFromStock safely provides a non-zero denominator for valuation math.
   const rawCapexIdr =
     scaleUserMonetary(userOverride?.capexTTM) ??
     scaleBaseMonetary(baseRecord?.capexTTM);
   const capexTTMIdr =
     typeof rawCapexIdr === 'number' && rawCapexIdr > 0
       ? rawCapexIdr
-      : activeStatementSource !== 'HARDCODED_SEED' &&
+      : !isRealtimeWorkerRecord &&
+        activeStatementSource !== 'HARDCODED_SEED' &&
         typeof revenueTTMIdr === 'number' &&
         revenueTTMIdr > 0
       ? Math.round(revenueTTMIdr * 0.055)
@@ -819,7 +864,7 @@ export function resolveTickerFundamentalOverlay(
   const daTTMIdr =
     typeof rawDaIdr === 'number' && rawDaIdr > 0
       ? rawDaIdr
-      : activeStatementSource !== 'HARDCODED_SEED'
+      : !isRealtimeWorkerRecord && activeStatementSource !== 'HARDCODED_SEED'
       ? typeof baseEbitdaIdr === 'number' &&
         typeof operatingProfitTTMIdr === 'number' &&
         baseEbitdaIdr > operatingProfitTTMIdr
@@ -837,7 +882,8 @@ export function resolveTickerFundamentalOverlay(
   const ocfTTMIdr =
     typeof rawOcfIdr === 'number' && rawOcfIdr !== 0
       ? rawOcfIdr
-      : activeStatementSource !== 'HARDCODED_SEED' &&
+      : !isRealtimeWorkerRecord &&
+        activeStatementSource !== 'HARDCODED_SEED' &&
         typeof netIncomeTTMIdr === 'number' &&
         netIncomeTTMIdr !== 0
       ? Math.round(
@@ -872,7 +918,7 @@ export function resolveTickerFundamentalOverlay(
 
   // FIX 3: Resolve 20-Day ADTV provenance priority:
   // 1. USER_OVERRIDE
-  // 2. LIVE_YAHOO_API (liveChartAdtvMemoryCache from chart 3mo, or direct live chartAdtv20dIdr, or liveFundamentalsMemoryCache)
+  // 2. LIVE_YAHOO_API (liveChartAdtvMemoryCache from chart 3mo/worker, or direct live chartAdtv20dIdr, or liveFundamentalsMemoryCache)
   // 3. FUNDAMENTALS_JSON (AUTOMATED_FETCH in fundamentals-snapshot.json)
   // 4. HARDCODED_SEED (undefined here -> falls back to catalog seed with SEED_WARN)
   let adtv20dIdr: number | undefined = undefined;
@@ -938,7 +984,7 @@ export function resolveTickerFundamentalOverlay(
     (activeStatementSource === 'USER_OVERRIDE'
       ? `Dikalibrasi manual oleh analis pada ${userOverride?.updatedAt}`
       : activeStatementSource === 'LIVE_YAHOO_API'
-      ? baseRecord?.decumulationNote || 'Ditarik langsung dari Yahoo Finance fundamentals-timeseries'
+      ? baseRecord?.decumulationNote || 'Ditarik real-time via Cloudflare Worker dari Yahoo Finance fundamentals-timeseries'
       : activeStatementSource === 'FUNDAMENTALS_JSON'
       ? baseRecord?.decumulationNote || 'Dari fundamentals-snapshot.json (AUTOMATED_FETCH)'
       : snapEntry?.provenanceMode === 'BOOTSTRAP_PLACEHOLDER'
@@ -954,7 +1000,9 @@ export function resolveTickerFundamentalOverlay(
     computedOpMarginPct: derivedOpMargin,
     computedDer: derivedDer,
     revenueTTMIdr,
+    latestFullYearRevenueIdr: scaleBaseMonetary(baseRecord?.latestFullYearRevenue),
     operatingProfitTTMIdr,
+    ebitdaTTMIdr: baseEbitdaIdr,
     netIncomeTTMIdr,
     netIncomeYoYPct,
     operatingProfitYoYPct,
@@ -966,52 +1014,482 @@ export function resolveTickerFundamentalOverlay(
     ocfTTMIdr,
     capexTTMIdr,
     daTTMIdr,
+    roeAvg3YPct:
+      typeof baseRecord?.roeAvg3YPct === 'number' && Number.isFinite(baseRecord.roeAvg3YPct)
+        ? baseRecord.roeAvg3YPct
+        : undefined,
+    roeAvg5YPct:
+      typeof baseRecord?.roeAvg5YPct === 'number' && Number.isFinite(baseRecord.roeAvg5YPct)
+        ? baseRecord.roeAvg5YPct
+        : undefined,
+    beta1Y:
+      typeof baseRecord?.beta1Y === 'number' &&
+      Number.isFinite(baseRecord.beta1Y) &&
+      baseRecord.beta1Y > 0
+        ? baseRecord.beta1Y
+        : undefined,
+    realizedAnnualVol:
+      typeof baseRecord?.realizedAnnualVol === 'number' &&
+      Number.isFinite(baseRecord.realizedAnnualVol) &&
+      baseRecord.realizedAnnualVol > 0
+        ? baseRecord.realizedAnnualVol
+        : undefined,
+    atr20Idr:
+      typeof baseRecord?.atr20 === 'number' &&
+      Number.isFinite(baseRecord.atr20) &&
+      baseRecord.atr20 > 0
+        ? baseRecord.atr20
+        : undefined,
+    dividendYieldTTM:
+      typeof baseRecord?.dividendYieldTTM === 'number' &&
+      Number.isFinite(baseRecord.dividendYieldTTM) &&
+      baseRecord.dividendYieldTTM >= 0
+        ? baseRecord.dividendYieldTTM
+        : undefined,
     adtv20dIdr,
     adtvSource,
     adtvAsOfDate,
     fundamentalsSource: activeStatementSource,
     fundamentalsAsOfDate,
     fundamentalsFiscalPeriod,
-    fundamentalsNote
+    fundamentalsNote,
+    daAnomaly: Boolean(baseRecord?.daAnomaly),
+    daMethodNote: baseRecord?.daMethodNote || undefined,
+    ttmMethod:
+      baseRecord?.ttmMethod ||
+      baseRecord?.flowAudit?.unifiedMethod ||
+      baseRecord?.decumulationMethod ||
+      undefined,
+    flowAudit: baseRecord?.flowAudit || null,
+    missingFundamentalFields: Array.isArray(baseRecord?.missingFields)
+      ? baseRecord.missingFields
+      : undefined,
+    reportingCurrency: baseRecord?.reportingCurrency,
+    fxRateUsdIdr:
+      typeof baseRecord?.fxRateUsdIdr === 'number' ? baseRecord.fxRateUsdIdr : undefined
   };
 }
 
+export interface RealtimeWorkerConnectionTestResult {
+  ok: boolean;
+  httpStatus?: number;
+  latencyMs: number;
+  message: string;
+  samplePrice?: number;
+  fiscalPeriod?: string;
+}
+
 /**
- * Attempts an on-demand live fundamental + 20-day chart volume sync for a single IDX ticker.
- * If browser CORS / Yahoo crumb blocks `quoteSummary` (401/403), records a clean `SyncDiagnosticEntry`
- * without throwing red console errors and falls back to `fundamentals-snapshot.json` + Chart v8 20D ADTV.
+ * Tests the configured Cloudflare Worker URL by pinging `/?ticker=BBCA&nocache=1`
+ * and measuring round-trip latency + Yahoo crumb handshake verification.
+ */
+export async function testRealtimeWorkerConnection(
+  rawUrl?: string
+): Promise<RealtimeWorkerConnectionTestResult> {
+  const baseUrl = sanitizeRealtimeWorkerUrl(rawUrl ?? getRealtimeWorkerUrl());
+  if (!baseUrl) {
+    return {
+      ok: false,
+      latencyMs: 0,
+      message: 'URL Cloudflare Worker belum diisi atau format URL tidak valid.'
+    };
+  }
+
+  const endpoint = `${baseUrl}/?ticker=BBCA&nocache=1`;
+  const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 9000);
+    const res = await fetch(endpoint, {
+      method: 'GET',
+      signal: controller.signal,
+      cache: 'no-store'
+    });
+    clearTimeout(timer);
+    const latencyMs = Math.max(
+      1,
+      Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0)
+    );
+
+    if (!res.ok) {
+      let errText = '';
+      try {
+        errText = (await res.text()).slice(0, 120);
+      } catch {
+        // ignore
+      }
+      return {
+        ok: false,
+        httpStatus: res.status,
+        latencyMs,
+        message: `HTTP ${res.status} dari Worker (${latencyMs} ms)${errText ? ` — ${errText}` : ''}`
+      };
+    }
+
+    const data = await res.json();
+    if (!data || typeof data !== 'object' || data.ticker !== 'BBCA') {
+      return {
+        ok: false,
+        httpStatus: res.status,
+        latencyMs,
+        message: `Respons Worker bukan payload JSON Nostradamus yang valid (${latencyMs} ms).`
+      };
+    }
+
+    const priceStr =
+      typeof data.lastPrice === 'number' && data.lastPrice > 0
+        ? `Rp ${Math.round(data.lastPrice).toLocaleString('id-ID')}`
+        : 'N/A';
+    const revStr =
+      typeof data.revenueTTM === 'number' && data.revenueTTM > 0
+        ? `Rev TTM Rp ${(data.revenueTTM / 1e12).toFixed(1)}T`
+        : 'LK parsial';
+
+    return {
+      ok: true,
+      httpStatus: res.status,
+      latencyMs,
+      samplePrice: typeof data.lastPrice === 'number' ? data.lastPrice : undefined,
+      fiscalPeriod: data.fiscalPeriod,
+      message: `Koneksi Sukses (${latencyMs} ms) · BBCA ${priceStr} · ${revStr} (${data.fiscalPeriod || 'TTM'})`
+    };
+  } catch (err) {
+    const latencyMs = Math.max(
+      1,
+      Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0)
+    );
+    return {
+      ok: false,
+      latencyMs,
+      message:
+        err instanceof Error
+          ? `Gagal menghubungi Worker (${latencyMs} ms): ${err.message}`
+          : `Gagal menghubungi Worker (${latencyMs} ms). Periksa CORS / URL Worker.`
+    };
+  }
+}
+
+/**
+ * On-Demand Single-Ticker Real-Time Sync Cascade:
+ * - Priority 0: USER_OVERRIDE (handled per-field in resolveTickerFundamentalOverlay & quantEngine)
+ * - Priority 1 (True Real-Time via Cloudflare Worker):
+ *   If `getRealtimeWorkerUrl()` is configured, fetches `${workerUrl}/?ticker=${clean}`
+ *   (or `&nocache=1` when `options.forceRefresh === true`). Hydrates price, ADTV 20D,
+ *   1Y Beta, volatility, ATR20, TTM financial statements, and SBN 1Y/5Y/10Y curve in 1–2 seconds!
+ * - Priority 2 (Fallback without Worker):
+ *   Fetches live Chart v8 3mo price/ADTV and checks `fundamentals-snapshot.json`.
+ *   If the ticker is missing from `fundamentals-snapshot.json`, logs an honest
+ *   `status: "FALLBACK_USED"` (`TICKER_NOT_IN_SNAPSHOT`) diagnostic instead of claiming `OK`.
  */
 export async function tryFetchLiveTickerFundamentalsOnDemand(
-  ticker: string
+  ticker: string,
+  options?: { forceRefresh?: boolean }
 ): Promise<FundamentalsSnapshotTickerEntry | null> {
   const clean = ticker.trim().toUpperCase().replace(/\.JK$/i, '');
   const yfSym = `${clean}.JK`;
+  const forceRefresh = Boolean(options?.forceRefresh);
+  const workerBaseUrl = getRealtimeWorkerUrl();
 
-  // 1. Pull Chart v8 3mo to extract real 20D volume * close ADTV (automatically locked into liveChartAdtvMemoryCache)
+  // Check in-memory cache first if not forcing refresh
+  if (!forceRefresh) {
+    const cachedLive = liveFundamentalsMemoryCache.get(clean);
+    if (cachedLive && cachedLive.provenanceMode === 'LIVE_REALTIME_WORKER') {
+      return cachedLive;
+    }
+  }
+
+  // PRIORITY 1: True Real-Time Single-Ticker Sync via Cloudflare Worker Relay
+  if (workerBaseUrl) {
+    const workerEndpoint = `${workerBaseUrl}/?ticker=${encodeURIComponent(clean)}${
+      forceRefresh ? '&nocache=1' : ''
+    }`;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8500);
+      const res = await fetch(workerEndpoint, {
+        method: 'GET',
+        signal: controller.signal,
+        cache: forceRefresh ? 'no-store' : 'default'
+      });
+      clearTimeout(timer);
+
+      if (res.ok) {
+        const text = await res.text();
+        const payload = JSON.parse(text);
+        if (payload && typeof payload === 'object' && payload.ticker === clean) {
+          const asOfDate =
+            typeof payload.asOfDate === 'string' && payload.asOfDate
+              ? payload.asOfDate
+              : new Date().toISOString().slice(0, 10);
+
+          const resolvedTtmMethod =
+            payload.ttmMethod ||
+            payload.flowAudit?.unifiedMethod ||
+            payload.fundamentals?.ttmMethod ||
+            payload.fundamentals?.flowAudit?.unifiedMethod ||
+            payload.decumulationMethod ||
+            null;
+          const resolvedFlowAudit: FlowAuditMetadata | null =
+            payload.flowAudit || payload.fundamentals?.flowAudit || null;
+          const resolvedDaMethodNote =
+            payload.daMethodNote || payload.fundamentals?.daMethodNote || null;
+
+          const workerEntry: FundamentalsSnapshotTickerEntry = {
+            ticker: clean,
+            asOfDate,
+            fiscalPeriod: payload.fiscalPeriod || 'TTM_WORKER',
+            provenanceMode: 'LIVE_REALTIME_WORKER',
+            fetchedAt: payload.fetchedAt || new Date().toISOString(),
+            reportingCurrency:
+              payload.reportingCurrency === 'USD'
+                ? 'USD_CONVERTED_TO_IDR'
+                : payload.reportingCurrency || 'IDR',
+            fxRateUsdIdr:
+              typeof payload.fxRateUsdIdr === 'number' ? payload.fxRateUsdIdr : undefined,
+            lastPrice: typeof payload.lastPrice === 'number' ? payload.lastPrice : null,
+            previousClose:
+              typeof payload.previousClose === 'number' ? payload.previousClose : null,
+            change1D: typeof payload.change1D === 'number' ? payload.change1D : null,
+            return30D: typeof payload.return30D === 'number' ? payload.return30D : null,
+            closes: Array.isArray(payload.closes) ? payload.closes : undefined,
+            timestamps: Array.isArray(payload.timestamps) ? payload.timestamps : undefined,
+            beta1Y: typeof payload.beta1Y === 'number' ? payload.beta1Y : null,
+            realizedAnnualVol:
+              typeof payload.realizedAnnualVol === 'number' ? payload.realizedAnnualVol : null,
+            atr20: typeof payload.atr20 === 'number' ? payload.atr20 : null,
+            dividendYieldTTM:
+              typeof payload.dividendYieldTTM === 'number' ? payload.dividendYieldTTM : null,
+            revenueTTM: typeof payload.revenueTTM === 'number' ? payload.revenueTTM : null,
+            revenueTTMIdr: typeof payload.revenueTTM === 'number' ? payload.revenueTTM : null,
+            latestFullYearRevenue:
+              typeof payload.latestFullYearRevenue === 'number'
+                ? payload.latestFullYearRevenue
+                : null,
+            ebitTTM:
+              typeof payload.operatingProfitTTM === 'number'
+                ? payload.operatingProfitTTM
+                : typeof payload.ebitTTM === 'number'
+                ? payload.ebitTTM
+                : null,
+            operatingProfitTTM:
+              typeof payload.operatingProfitTTM === 'number'
+                ? payload.operatingProfitTTM
+                : typeof payload.ebitTTM === 'number'
+                ? payload.ebitTTM
+                : null,
+            ebitdaTTM: typeof payload.ebitdaTTM === 'number' ? payload.ebitdaTTM : null,
+            netIncomeTTM: typeof payload.netIncomeTTM === 'number' ? payload.netIncomeTTM : null,
+            netIncomeTTMIdr: typeof payload.netIncomeTTM === 'number' ? payload.netIncomeTTM : null,
+            netIncomeYoYPct:
+              typeof payload.netIncomeYoYPct === 'number' ? payload.netIncomeYoYPct : null,
+            operatingProfitYoYPct:
+              typeof payload.operatingProfitYoYPct === 'number'
+                ? payload.operatingProfitYoYPct
+                : null,
+            equityAttributable:
+              typeof payload.equityAttributable === 'number' ? payload.equityAttributable : null,
+            equityAttributableIdr:
+              typeof payload.equityAttributable === 'number' ? payload.equityAttributable : null,
+            totalAssets: typeof payload.totalAssets === 'number' ? payload.totalAssets : null,
+            totalDebt: typeof payload.totalDebt === 'number' ? payload.totalDebt : null,
+            cashAndEquivalents:
+              typeof payload.cashAndEquivalents === 'number' ? payload.cashAndEquivalents : null,
+            sharesOutstanding:
+              typeof payload.sharesOutstanding === 'number' ? payload.sharesOutstanding : null,
+            ocfTTM: typeof payload.ocfTTM === 'number' ? payload.ocfTTM : null,
+            capexTTM: typeof payload.capexTTM === 'number' ? payload.capexTTM : null,
+            daTTM: typeof payload.daTTM === 'number' ? payload.daTTM : null,
+            daAnomaly: Boolean(payload.daAnomaly),
+            daMethodNote: resolvedDaMethodNote,
+            ttmMethod: resolvedTtmMethod,
+            flowAudit: resolvedFlowAudit,
+            roeAvg3YPct: typeof payload.roeAvg3YPct === 'number' ? payload.roeAvg3YPct : null,
+            roeAvg5YPct: typeof payload.roeAvg5YPct === 'number' ? payload.roeAvg5YPct : null,
+            missingFields: Array.isArray(payload.missingFields) ? payload.missingFields : [],
+            adtv20dIdr: typeof payload.adtv20dIdr === 'number' ? payload.adtv20dIdr : null,
+            adtvAsOfDate: asOfDate,
+            adtvProvenanceMode: 'LIVE_REALTIME_WORKER',
+            decumulationMethod: resolvedTtmMethod || undefined,
+            decumulationNote: payload.note || payload.decumulationNote
+          };
+
+          liveFundamentalsMemoryCache.set(clean, workerEntry);
+
+          if (typeof workerEntry.adtv20dIdr === 'number' && workerEntry.adtv20dIdr > 0) {
+            setLiveChartAdtvCacheEntry(clean, workerEntry.adtv20dIdr, asOfDate);
+          }
+
+          // Hydrate live market quote in embeddedSnapshot so buildIdx100StockUniverse & modal reflect live price/closes
+          if (typeof workerEntry.lastPrice === 'number' && workerEntry.lastPrice > 0) {
+            const existingSnap = embeddedSnapshot.data?.[yfSym];
+            const closesArr =
+              Array.isArray(workerEntry.closes) && workerEntry.closes.length >= 2
+                ? workerEntry.closes
+                : existingSnap?.closes || [workerEntry.lastPrice];
+            if (!embeddedSnapshot.data) embeddedSnapshot.data = {};
+            embeddedSnapshot.data[yfSym] = {
+              ...(existingSnap || {}),
+              symbol: yfSym,
+              lastPrice: Math.round(workerEntry.lastPrice),
+              previousClose:
+                typeof workerEntry.previousClose === 'number' && workerEntry.previousClose > 0
+                  ? Math.round(workerEntry.previousClose)
+                  : existingSnap?.previousClose,
+              change1D:
+                typeof workerEntry.change1D === 'number'
+                  ? workerEntry.change1D
+                  : existingSnap?.change1D ?? 0,
+              closes: closesArr,
+              timestamp:
+                Array.isArray(workerEntry.timestamps) &&
+                workerEntry.timestamps.length === closesArr.length
+                  ? workerEntry.timestamps
+                  : existingSnap?.timestamp,
+              adtv20dIdr:
+                typeof workerEntry.adtv20dIdr === 'number' && workerEntry.adtv20dIdr > 0
+                  ? Math.round(workerEntry.adtv20dIdr)
+                  : existingSnap?.adtv20dIdr,
+              adtvSource: 'LIVE_YAHOO_API',
+              adtvAsOfDate: asOfDate,
+              priceSource: 'LIVE_YAHOO_API',
+              priceAsOfDate: asOfDate
+            };
+          }
+
+          // Update SBN macro benchmarks if Worker returned live SBN yields (supports both sbn10YYieldPct and sbn10YPct)
+          const rawSbn10Y =
+            payload.macroBenchmarks?.sbn10YYieldPct ??
+            payload.macroBenchmarks?.sbn10YPct;
+          const rawSbn5Y =
+            payload.macroBenchmarks?.sbn5YYieldPct ??
+            payload.macroBenchmarks?.sbn5YPct;
+          const rawSbn1Y =
+            payload.macroBenchmarks?.sbn1YYieldPct ??
+            payload.macroBenchmarks?.sbn1YPct;
+
+          if (
+            typeof rawSbn10Y === 'number' &&
+            Number.isFinite(rawSbn10Y) &&
+            rawSbn10Y >= 3.0 &&
+            rawSbn10Y <= 14.0
+          ) {
+            const activeDoc: FundamentalsSnapshotDocument = cachedFundamentalsSnapshotDoc ?? {
+              version: '2.0.0',
+              generatedAt: new Date().toISOString(),
+              provenanceMode: 'LIVE_REALTIME_WORKER',
+              tickers: {}
+            };
+            const finalSbn1Y =
+              typeof rawSbn1Y === 'number' && Number.isFinite(rawSbn1Y)
+                ? rawSbn1Y
+                : Number((rawSbn10Y - 0.55).toFixed(2));
+            const finalSbn5Y =
+              typeof rawSbn5Y === 'number' && Number.isFinite(rawSbn5Y)
+                ? rawSbn5Y
+                : Number((rawSbn10Y - 0.25).toFixed(2));
+            const sbnFeedName =
+              payload.macroBenchmarks?.sbnSource || 'CNBC_SOVEREIGN_ID10Y_LIVE';
+
+            activeDoc.macroBenchmarks = {
+              sbn1YPct: finalSbn1Y,
+              sbn5YPct: finalSbn5Y,
+              sbn10YPct: rawSbn10Y,
+              sbn1YYieldPct: finalSbn1Y,
+              sbn5YYieldPct: finalSbn5Y,
+              sbn10YYieldPct: rawSbn10Y,
+              sbnAsOfDate: payload.macroBenchmarks?.sbnAsOfDate || asOfDate,
+              sbnSource: sbnFeedName,
+              sourceLabel: sbnFeedName,
+              provenanceMode: 'LIVE_REALTIME_WORKER',
+              source: 'LIVE_YAHOO_API'
+            };
+            cachedFundamentalsSnapshotDoc = activeDoc;
+          }
+
+          const missingCount = workerEntry.missingFields?.length ?? 0;
+          recordSyncDiagnostic({
+            ticker: clean,
+            stage: 'QUOTE_SUMMARY_FUNDAMENTALS',
+            endpoint: `${workerBaseUrl}/?ticker=${clean}`,
+            httpStatus: res.status,
+            payloadBytes: text.length,
+            status: 'OK',
+            errorDetail:
+              missingCount > 0
+                ? `Cloudflare Worker Real-Time Sync berhasil (${workerEntry.fiscalPeriod}). ${missingCount} field parsial kosong di Yahoo (${workerEntry.missingFields?.join(', ')}) → SEED_WARN per-field.`
+                : `Cloudflare Worker Real-Time Sync berhasil menarik harga, ADTV 20D, Beta 1Y, LK TTM (${workerEntry.fiscalPeriod} · ${resolvedTtmMethod || 'TTM'}), dan kurva SBN.`,
+            fallbackSource: 'LIVE_YAHOO_API'
+          });
+
+          return workerEntry;
+        }
+      } else {
+        recordSyncDiagnostic({
+          ticker: clean,
+          stage: 'QUOTE_SUMMARY_FUNDAMENTALS',
+          endpoint: `${workerBaseUrl}/?ticker=${clean}`,
+          httpStatus: res.status,
+          status: 'FALLBACK_USED',
+          errorCode: `WORKER_HTTP_${res.status}`,
+          errorDetail: `Cloudflare Worker mengembalikan HTTP ${res.status}; beralih ke Chart v8 + fundamentals-snapshot.json.`,
+          fallbackSource: 'FUNDAMENTALS_JSON'
+        });
+      }
+    } catch (err) {
+      recordSyncDiagnostic({
+        ticker: clean,
+        stage: 'QUOTE_SUMMARY_FUNDAMENTALS',
+        endpoint: `${workerBaseUrl}/?ticker=${clean}`,
+        status: 'FALLBACK_USED',
+        errorCode: 'WORKER_FETCH_FAILED',
+        errorDetail:
+          err instanceof Error
+            ? `Gagal menghubungi Cloudflare Worker (${err.message}); beralih ke Chart v8 + fundamentals-snapshot.json.`
+            : 'Gagal menghubungi Cloudflare Worker; beralih ke Chart v8 + fundamentals-snapshot.json.',
+        fallbackSource: 'FUNDAMENTALS_JSON'
+      });
+    }
+  }
+
+  // PRIORITY 2 (Fallback without Worker):
+  // 1. Pull Chart v8 3mo to extract real 20D volume * close ADTV
   const chartRes = await fetchSingleChartViaBrowserRelay(yfSym, '3mo');
   if (chartRes?.adtv20dIdr && chartRes.adtv20dIdr > 0) {
     setLiveChartAdtvCacheEntry(clean, chartRes.adtv20dIdr, chartRes.adtvAsOfDate);
   }
 
-  // 2. Skip direct unauthenticated browser calls to Yahoo v10/finance/quoteSummary
-  // (Yahoo v10 quoteSummary requires a server-side Crumb/Cookie and always returns 401 in browser).
-  // Instead, use the live Chart v8 20D ADTV + pre-verified fundamentals-snapshot.json / USER_OVERRIDE without firing redundant 401 requests.
   const lockedLiveAdtv = liveChartAdtvMemoryCache.get(clean);
   const snapTickerEntry = cachedFundamentalsSnapshotDoc?.tickers?.[clean];
+  const isSnapVerified =
+    Boolean(snapTickerEntry) &&
+    snapTickerEntry?.provenanceMode === 'AUTOMATED_FETCH' &&
+    typeof snapTickerEntry?.revenueTTM === 'number' &&
+    snapTickerEntry.revenueTTM > 0;
 
-  recordSyncDiagnostic({
-    ticker: clean,
-    stage: 'QUOTE_SUMMARY_FUNDAMENTALS',
-    endpoint: 'fundamentals-snapshot.json + v8/chart/3mo',
-    httpStatus: 200,
-    status: 'OK',
-    errorDetail:
-      'Menggunakan ADTV 20D live dari Chart v8 + laporan keuangan terverifikasi dari fundamentals-snapshot.json (tanpa request v10 quoteSummary 401).',
-    fallbackSource:
-      snapTickerEntry?.provenanceMode === 'AUTOMATED_FETCH'
-        ? 'FUNDAMENTALS_JSON'
-        : 'HARDCODED_SEED'
-  });
+  // Honest Sync Diagnostics: never log status: "OK" with "laporan keuangan terverifikasi" if ticker is missing from snapshot!
+  if (isSnapVerified) {
+    recordSyncDiagnostic({
+      ticker: clean,
+      stage: 'QUOTE_SUMMARY_FUNDAMENTALS',
+      endpoint: 'fundamentals-snapshot.json + v8/chart/3mo',
+      httpStatus: 200,
+      status: 'OK',
+      errorDetail:
+        'Menggunakan ADTV 20D live dari Chart v8 + laporan keuangan terverifikasi dari fundamentals-snapshot.json.',
+      fallbackSource: 'FUNDAMENTALS_JSON'
+    });
+  } else {
+    recordSyncDiagnostic({
+      ticker: clean,
+      stage: 'QUOTE_SUMMARY_FUNDAMENTALS',
+      endpoint: 'fundamentals-snapshot.json',
+      httpStatus: 404,
+      status: 'FALLBACK_USED',
+      errorCode: 'TICKER_NOT_IN_SNAPSHOT',
+      errorDetail: `TICKER_NOT_IN_SNAPSHOT: Data laporan keuangan ${clean} belum tersedia di fundamentals-snapshot.json dan Realtime Proxy Worker belum dipasang. Pasang Cloudflare Worker URL (1–2 dtk real-time) atau klik [⚡ Tarik Data ${clean} via Actions].`,
+      fallbackSource: 'HARDCODED_SEED'
+    });
+  }
 
   const activeLiveAdtv = chartRes?.adtv20dIdr ?? lockedLiveAdtv?.liveAdtv20dIdr;
   const activeLiveAdtvDate = chartRes?.adtvAsOfDate ?? lockedLiveAdtv?.liveAdtvAsOfDate;
@@ -1153,13 +1631,16 @@ export function buildIdx100StockUniverse(
         change1D,
         return30D,
         returnYTD,
-        beta1Y,
-        volatilityAnn,
+        beta1Y: overlay.beta1Y ?? beta1Y,
+        volatilityAnn: overlay.realizedAnnualVol ?? volatilityAnn,
+        atr20Idr: overlay.atr20Idr,
         roe: overlay.roe,
         debtToEquity: overlay.debtToEquity,
         operatingMargin: overlay.operatingMargin,
         revenueTTMIdr: overlay.revenueTTMIdr,
+        latestFullYearRevenueIdr: overlay.latestFullYearRevenueIdr,
         operatingProfitTTMIdr: overlay.operatingProfitTTMIdr,
+        ebitdaTTMIdr: overlay.ebitdaTTMIdr,
         netIncomeTTMIdr: overlay.netIncomeTTMIdr,
         equityAttributableIdr: overlay.equityAttributableIdr,
         totalDebtIdr: overlay.totalDebtIdr,
@@ -1169,6 +1650,8 @@ export function buildIdx100StockUniverse(
         ocfTTMIdr: overlay.ocfTTMIdr,
         capexTTMIdr: overlay.capexTTMIdr,
         daTTMIdr: overlay.daTTMIdr,
+        roeAvg3YPct: overlay.roeAvg3YPct,
+        roeAvg5YPct: overlay.roeAvg5YPct,
         earningsGrowthYoYPct: overlay.netIncomeYoYPct,
         operatingProfitGrowthYoYPct: overlay.operatingProfitYoYPct,
         adtv20dIdr: overlay.adtv20dIdr,
@@ -1180,9 +1663,16 @@ export function buildIdx100StockUniverse(
         fundamentalsAsOfDate: overlay.fundamentalsAsOfDate,
         fundamentalsFiscalPeriod: overlay.fundamentalsFiscalPeriod,
         fundamentalsNote: overlay.fundamentalsNote,
+        daAnomaly: overlay.daAnomaly,
+        daMethodNote: overlay.daMethodNote,
+        ttmMethod: overlay.ttmMethod,
+        flowAudit: overlay.flowAudit,
+        missingFundamentalFields: overlay.missingFundamentalFields,
+        reportingCurrency: overlay.reportingCurrency,
+        fxRateUsdIdr: overlay.fxRateUsdIdr,
         isLiveFetched: true,
         isLiquid,
-        dividendYieldPct: dynamicDivYield,
+        dividendYieldPct: overlay.dividendYieldTTM ?? dynamicDivYield,
         lastSyncedAt: nowStr
       });
     }
@@ -4181,15 +4671,24 @@ function buildDeepAnalyticalConvictionReport(params: {
       ? 'Total Shareholder Yield'
       : 'Net Payout Yield';
 
-  // 5-Pillar Academic Quantitative Metrics
+  // 5-Pillar Academic Quantitative Metrics (Single Source of Truth from rawTickerData when available)
+  const rawTd = joeliardiEval.rawTickerData;
   const gpToAssets =
     joeliardiEval.grossProfitabilityToAssets ??
     stock.grossProfitabilityToAssets ??
     Number((stock.roe * 0.85).toFixed(1));
   const ocfNi =
-    joeliardiEval.ocfToNetIncomeRatio ??
-    stock.ocfToNetIncomeRatio ??
-    0.92;
+    rawTd && typeof rawTd.ocfTTM === 'number' && typeof rawTd.netIncomeTTM === 'number' && rawTd.netIncomeTTM > 0
+      ? Number((rawTd.ocfTTM / rawTd.netIncomeTTM).toFixed(2))
+      : joeliardiEval.ocfToNetIncomeRatio ??
+        stock.ocfToNetIncomeRatio ??
+        0.92;
+  const ocfNiNarrativeClause =
+    ocfNi >= 0.90
+      ? 'konversi kas operasi sangat sehat (laba akuntansi terkonversi penuh menjadi kas riil)'
+      : ocfNi >= 0.50
+      ? 'konversi kas operasi moderat (sebagian laba terserap modal kerja / fase ekspansi)'
+      : 'konversi kas operasi rendah (waspadai kualitas laba akrual)';
   const accrualPen = joeliardiEval.accrualPenaltyPts ?? 0;
   const sbn1Y = joeliardiEval.sbnSpot1YPct ?? 6.15;
   const sbn5Y = joeliardiEval.sbnSpot5YPct ?? 6.48;
@@ -4548,7 +5047,7 @@ function buildDeepAnalyticalConvictionReport(params: {
     chainOfThoughtSteps: [
       isFinancialsSector
         ? `01. Audit Profitabilitas Bank (ROE-Ke Spread & True ROA — Bypass GP/A & OCF/NI): ROE TTM ${roeTtmPct.toFixed(1)}% vs Dynamic Ke ${dynKe.toFixed(2)}% (Excess Spread ${excessReturnPct >= 0 ? '+' : ''}${excessReturnPct.toFixed(1)}%), True ROA (NI/Assets) ${trueRoaPct.toFixed(2)}%, dan Asset-to-Equity ${assetLeverageRatio.toFixed(2)}x -> ${excessReturnPct >= 2 ? 'Franchise Perbankan Berkualitas Tinggi.' : 'Spread ROE terhadap Cost of Equity Perlu Dipantau.'}`
-        : `01. Audit Profitabilitas Kas (GP/A & Anti-Junk OCF/NI): GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}% (ROA murni ${trueRoaPct.toFixed(2)}% × Lev ${assetLeverageRatio.toFixed(2)}x, ROE TTM ${roeTtmPct.toFixed(1)}%) dengan konversi kas operasi OCF/NI ${ocfNi.toFixed(2)}x (${accrualPen > 0 ? `Penalti Akrual -${accrualPen} pts` : '0 Penalti · Kas Riil Valid'}) -> ${isHighQualityOrganicRoe ? 'Mesin Kas Riil Berdaya Saing Kuat (Anti-Junk).' : isLeveragedRoe ? 'Laba Ditopang Leverage / Pantau Kas Operasi.' : 'Profitabilitas Operasional Terjaga.'}`,
+        : `01. Audit Profitabilitas Kas (GP/A & Anti-Junk OCF/NI): GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}% (ROA murni ${trueRoaPct.toFixed(2)}% × Lev ${assetLeverageRatio.toFixed(2)}x, ROE TTM ${roeTtmPct.toFixed(1)}%) dengan OCF/NI ${ocfNi.toFixed(2)}x (${ocfNiNarrativeClause}${accrualPen > 0 ? ` · Penalti Akrual -${accrualPen} pts` : ''}) -> ${isHighQualityOrganicRoe && ocfNi >= 0.90 ? 'Mesin Kas Riil Berdaya Saing Kuat (Anti-Junk).' : isLeveragedRoe ? 'Laba Ditopang Leverage / Pantau Kas Operasi.' : 'Profitabilitas Operasional Terjaga.'}`,
       `02. Router ${valModuleLabel} & Ensemble 3-Kaki (ValuationLedger): Matriks Sektor ${secShort} (${leg1WeightPct}% · Rp ${secFairValIdr.toLocaleString('id-ID')}), Multi-Stage RIM ${rimFadeYrs}Y ω=${(joeliardiEval.rimPersistenceOmega ?? 0.72).toFixed(2)} (${leg2WeightPct}% · Rp ${rimFairValIdr.toLocaleString('id-ID')}), dan ${leg3Label} (${leg3WeightPct}% · Rp ${leg3ValIdr.toLocaleString('id-ID')}) + Floor Graham-Joeliardi Rp ${gjFloorIdr.toLocaleString('id-ID')} -> Harga Wajar Utama Quantedge Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct}% vs Syarat Dinamis ≥${dynamicRequiredMosPct.toFixed(1)}%).`,
       `03. Tactical Overlay StatArb (${stock.ticker}↔${peerTicker}, β-Ratio ${(joeliardiEval.statArbBetaRatio ?? 1).toFixed(2)}x · 0% Bobot Intrinsik): Korelasi historis ρ=${statArbRho.toFixed(2)} mencatat Z-Score ${statArbZ >= 0 ? '+' : ''}${statArbZ.toFixed(2)}σ (Target Konvergensi Pair Rp ${statArbTargetIdr.toLocaleString('id-ID')}) -> ${isHighConvictionEligible && isDefensiveDiscountAnomaly ? 'Strong Buy: Anomali Aset Defensif Terdiskon' : isHighConvictionEligible && isCyclicalStrongBuy ? 'Strong Buy Siklikal (PBV Z-Score ≤ -1.5σ).' : isHighConvictionEligible && isBuyOnStrengthCatalyst ? 'Buy on Strength: Katalis Aktif Menggeser Floor ke Harga Spot.' : joeliardiEval.statArbSignal === 'MEAN_REVERSION_BUY' ? `Anomali Diskon Relatif vs ${peerTicker} (Mean-Reversion Buy).` : 'Fase Ekuilibrium Relatif Wajar / Hold.'}`,
       `04. Sizing Barbell Vol-Targeted, Stop Loss ATR/Vol & Kas Riil: Plafon Alokasi Maks ≤${targetMaxPct}% portofolio, Stop Loss Kuantitatif ATR/Vol di Rp ${riskStopPrice.toLocaleString('id-ID')} (-${riskStopPct.toFixed(2)}%), didukung ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}% (Net Payout ${netPayoutYieldPct.toFixed(2)}%) & batas eksekusi min(Kas Riil, 5% ADTV) Rp ${realCashCappedMillionsStr} Jt/hari -> ${stock.isHscFlagged ? 'Hindari Eksposur Spekulatif.' : isLiquidityCapped ? 'Wajib Pecah Order Sesuai Batas 5% ADTV.' : `Eksekusi Disiplin Sesuai Plafon ≤${targetMaxPct}%.`}`
@@ -4567,7 +5066,7 @@ function buildDeepAnalyticalConvictionReport(params: {
           : `GP/A ${gpToAssets.toFixed(1)}% · OCF/NI ${ocfNi.toFixed(2)}x · ROE TTM ${roeTtmPct.toFixed(1)}% · ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%`,
         reasoningParagraph: isFinancialsSector
           ? `${sectorNoticePrefix}Pada sektor Perbankan & Jasa Keuangan, Dana Pihak Ketiga (DPK) / Dana Syirkah Temporer merupakan bahan baku penyaluran pembiayaan sehingga metrik korporasi non-bank (GP/A Novy-Marx, OCF/NI, DER korporasi, dan EV/EBITDA) di-bypass otomatis. Kualitas fundamental ${stock.ticker} diukur dari ROE TTM ${roeTtmPct.toFixed(1)}% terhadap Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}% (Excess Return Spread ${excessReturnPct >= 0 ? '+' : ''}${excessReturnPct.toFixed(1)}%), True ROA (Net Income / Total Assets) sebesar ${trueRoaPct.toFixed(2)}%, dan Asset Leverage (Assets / Equity) sebesar ${assetLeverageRatio.toFixed(2)}x.`
-          : `${sectorNoticePrefix}${sectorEconomicsNote} Berdasarkan kerangka Novy-Marx (2013) dan Quality Minus Junk (Asness et al. 2019), ${stock.ticker} mencatatkan Gross Profitability to Assets (GP/A) sebesar ${gpToAssets.toFixed(1)}% dan rasio arus kas operasi terhadap laba bersih (OCF/NI) sebesar ${ocfNi.toFixed(2)}x (${accrualPen === 0 ? 'bebas penalti akrual, menandakan laba akuntansi terkonversi penuh menjadi kas riil' : `terkena pengurang skor kualitas -${accrualPen} poin akibat selisih akrual kas`}). Dari dekomposisi DuPont, ROE TTM ${roeTtmPct.toFixed(1)}% (Excess Return ${excessReturnPct >= 0 ? '+' : ''}${excessReturnPct.toFixed(1)}% vs Ke ${dynKe.toFixed(2)}%) ditopang oleh True ROA ${trueRoaPct.toFixed(2)}% dan Asset Multiplier ${assetLeverageRatio.toFixed(2)}x (DER ${stock.debtToEquity.toFixed(2)}x).`,
+          : `${sectorNoticePrefix}${sectorEconomicsNote} Berdasarkan kerangka Novy-Marx (2013) dan Quality Minus Junk (Asness et al. 2019), ${stock.ticker} mencatatkan Gross Profitability to Assets (GP/A) sebesar ${gpToAssets.toFixed(1)}% dan rasio arus kas operasi terhadap laba bersih (OCF/NI) sebesar ${ocfNi.toFixed(2)}x (${ocfNiNarrativeClause}${accrualPen > 0 ? `; terkena pengurang skor kualitas -${accrualPen} poin akibat selisih akrual kas` : ''}). Dari dekomposisi DuPont, ROE TTM ${roeTtmPct.toFixed(1)}% (Excess Return ${excessReturnPct >= 0 ? '+' : ''}${excessReturnPct.toFixed(1)}% vs Ke ${dynKe.toFixed(2)}%) ditopang oleh True ROA ${trueRoaPct.toFixed(2)}% dan Asset Multiplier ${assetLeverageRatio.toFixed(2)}x (DER ${(rawTd?.debtToEquity ?? stock.debtToEquity).toFixed(2)}x).`,
         bulletPoints: isFinancialsSector
           ? [
               `Kualitas Profitabilitas Perbankan (Basis TTM_DEFAULT): ROE TTM ${roeTtmPct.toFixed(1)}% vs Dynamic Ke ${dynKe.toFixed(2)}% (Spread ${excessReturnPct >= 0 ? '+' : ''}${excessReturnPct.toFixed(1)}%), True ROA (NI/Assets) ${trueRoaPct.toFixed(2)}%, EPS TTM ~Rp ${joeliardiEval.estimatedEpsIdr.toLocaleString('id-ID')}, serta BVPS Snapshot ~Rp ${joeliardiEval.estimatedBvpsIdr.toLocaleString('id-ID')}.`,

@@ -137,8 +137,10 @@ export interface StockMetrics {
   // P0-P2 Data Integrity, TTM & Risk Guardrail Telemetry
   sharesOutstanding?: number;          // Total shares outstanding (lembar penuh)
   revenueTTMIdr?: number;              // TTM Revenue (Rupiah penuh)
+  latestFullYearRevenueIdr?: number;   // Prior Full-Year (12M) Revenue (Rupiah penuh)
   netIncomeTTMIdr?: number;            // TTM Net Income Attributable (Rupiah penuh)
   operatingProfitTTMIdr?: number;      // TTM Operating Profit / EBIT (Rupiah penuh)
+  ebitdaTTMIdr?: number;               // TTM EBITDA (Rupiah penuh)
   operatingProfitGrowthYoYPct?: number;// YoY Operating Profit Growth (%) for Dual-Confirmation Catalyst
   equityAttributableIdr?: number;      // Total Attributable Equity (Rupiah penuh)
   totalDebtIdr?: number;               // Total Interest-Bearing Debt (Rupiah penuh)
@@ -166,6 +168,13 @@ export interface StockMetrics {
   rfLastUpdated?: string | null;       // ISO Date string when 10Y SBN yield curve was last updated (null if proxy/unfetched)
   convictionCappedByLineage?: boolean; // True when core financial statement variables come from HARDCODED_SEED
   isSbnMacroProxy?: boolean;           // True when SBN 10Y curve comes from PROXY_FORMULA
+  daAnomaly?: boolean;                 // True when D&A / Revenue exceeds normal threshold (>18% non-infra) or <0.8% under-reported
+  daMethodNote?: string;               // Accounting method note for D&A (e.g. DIRECT_RECONCILED_DA, ALIAS_DA_RECOVERED)
+  ttmMethod?: string;                  // Unified TTM decumulation method (TTM_4Q_STANDALONE | SAFE_YTD_BRIDGE_FORMULA | FY_FALLBACK)
+  flowAudit?: import('../utils/dataLineageEngine').FlowAuditMetadata | null;
+  missingFundamentalFields?: string[]; // List of fundamental fields returned as null by Yahoo / Worker
+  reportingCurrency?: string;          // Original financial statement currency ('IDR' | 'USD')
+  fxRateUsdIdr?: number;               // Live USD/IDR FX rate applied when reportingCurrency === 'USD'
 }
 
 export type RecommendationDecisionState =
@@ -587,6 +596,9 @@ export interface RawTickerData {
   realizedAnnualVol: number;      // Realized Annualized Volatility (decimal e.g. 0.38 or percentage 38.0)
   atr20: number;                  // 20-Day Average True Range in IDR (Rp)
   marketRegime?: MarketRegimeStatus;
+  ttmMethod?: string;
+  daMethodNote?: string;
+  flowAudit?: import('../utils/dataLineageEngine').FlowAuditMetadata | null;
 }
 
 export interface SanityReport {

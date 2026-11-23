@@ -22,10 +22,13 @@ import {
   DataSourceType,
   FieldFreshnessStatus,
   getFundamentalUserOverride,
+  getRealtimeWorkerUrl,
   resetFundamentalUserOverride,
   resolveCalibratorFieldProvenanceBadge,
   resolveUiNotificationBadgeMeta,
+   sanitizeRealtimeWorkerUrl,
   saveFundamentalUserOverride,
+  saveRealtimeWorkerUrl,
   TrackedField
 } from '../utils/dataLineageEngine';
 import { runQuantValuationInWorkerAsync } from '../utils/quantWorkerBridge';
@@ -35,9 +38,11 @@ import {
   fetchLiveEmitenSpecificNews,
   fetchLiveIdxTicker,
   loadFundamentalsSnapshot,
+  RealtimeWorkerConnectionTestResult,
   requestEmitenAiInspection,
   resolveTickerFundamentalOverlay,
   stripRawMarkdownArtifacts,
+  testRealtimeWorkerConnection,
   tryFetchLiveTickerFundamentalsOnDemand
 } from '../utils/liveMarketFetcher';
 import {
@@ -499,6 +504,13 @@ export function EmitenFundamentalInspectorModal({
   const showForensicLineageDrawer = activeToolPanel === 'FORENSIC_LINEAGE';
   const [isFetchingLiveFundamentals, setIsFetchingLiveFundamentals] = useState<boolean>(false);
   const [isTriggeringGhActionsSync, setIsTriggeringGhActionsSync] = useState<boolean>(false);
+  const [ghActionsPollingStep, setGhActionsPollingStep] = useState<string | null>(null);
+  const [realtimeWorkerUrlInput, setRealtimeWorkerUrlInput] = useState<string>(() =>
+    getRealtimeWorkerUrl()
+  );
+  const [isTestingWorkerConn, setIsTestingWorkerConn] = useState<boolean>(false);
+  const [workerConnTestResult, setWorkerConnTestResult] =
+    useState<RealtimeWorkerConnectionTestResult | null>(null);
   const [splitRatioInput, setSplitRatioInput] = useState<string>('1');
   const [buybackNominalInput, setBuybackNominalInput] = useState<string>('0');
   const [quarterlyGrowthInput, setQuarterlyGrowthInput] = useState<string>('0');
@@ -552,7 +564,9 @@ export function EmitenFundamentalInspectorModal({
       ...(overlay.adtv20dIdr ? { adtv20dIdr: overlay.adtv20dIdr, adtvSource: overlay.adtvSource, adtvAsOfDate: overlay.adtvAsOfDate } : {}),
       ...(overlay.sharesOutstanding ? { sharesOutstanding: overlay.sharesOutstanding } : {}),
       ...(overlay.revenueTTMIdr ? { revenueTTMIdr: overlay.revenueTTMIdr } : {}),
+      ...(overlay.latestFullYearRevenueIdr ? { latestFullYearRevenueIdr: overlay.latestFullYearRevenueIdr } : {}),
       ...(overlay.operatingProfitTTMIdr ? { operatingProfitTTMIdr: overlay.operatingProfitTTMIdr } : {}),
+      ...(overlay.ebitdaTTMIdr ? { ebitdaTTMIdr: overlay.ebitdaTTMIdr } : {}),
       ...(overlay.netIncomeTTMIdr ? { netIncomeTTMIdr: overlay.netIncomeTTMIdr } : {}),
       ...(overlay.netIncomeYoYPct !== undefined ? { earningsGrowthYoYPct: overlay.netIncomeYoYPct } : {}),
       ...(overlay.operatingProfitYoYPct !== undefined ? { operatingProfitGrowthYoYPct: overlay.operatingProfitYoYPct } : {}),
@@ -563,6 +577,19 @@ export function EmitenFundamentalInspectorModal({
       ...(overlay.ocfTTMIdr !== undefined ? { ocfTTMIdr: overlay.ocfTTMIdr } : {}),
       ...(overlay.capexTTMIdr !== undefined ? { capexTTMIdr: overlay.capexTTMIdr } : {}),
       ...(overlay.daTTMIdr !== undefined ? { daTTMIdr: overlay.daTTMIdr } : {}),
+      ...(overlay.roeAvg3YPct !== undefined ? { roeAvg3YPct: overlay.roeAvg3YPct } : {}),
+      ...(overlay.roeAvg5YPct !== undefined ? { roeAvg5YPct: overlay.roeAvg5YPct } : {}),
+      ...(overlay.beta1Y ? { beta1Y: overlay.beta1Y } : {}),
+      ...(overlay.realizedAnnualVol ? { volatilityAnn: overlay.realizedAnnualVol } : {}),
+      ...(overlay.atr20Idr ? { atr20Idr: overlay.atr20Idr } : {}),
+      ...(overlay.dividendYieldTTM !== undefined ? { dividendYieldPct: overlay.dividendYieldTTM } : {}),
+      ...(overlay.daAnomaly !== undefined ? { daAnomaly: overlay.daAnomaly } : {}),
+      ...(overlay.daMethodNote ? { daMethodNote: overlay.daMethodNote } : {}),
+      ...(overlay.ttmMethod ? { ttmMethod: overlay.ttmMethod } : {}),
+      ...(overlay.flowAudit ? { flowAudit: overlay.flowAudit } : {}),
+      ...(overlay.missingFundamentalFields ? { missingFundamentalFields: overlay.missingFundamentalFields } : {}),
+      ...(overlay.reportingCurrency ? { reportingCurrency: overlay.reportingCurrency } : {}),
+      ...(overlay.fxRateUsdIdr ? { fxRateUsdIdr: overlay.fxRateUsdIdr } : {}),
       ...(overlay.computedRoePct ? { roe: overlay.computedRoePct, trailingRoePct: overlay.computedRoePct } : {}),
       ...(overlay.computedOpMarginPct ? { operatingMargin: overlay.computedOpMarginPct } : {}),
       ...(overlay.computedDer !== undefined ? { debtToEquity: overlay.computedDer } : {}),
@@ -939,7 +966,25 @@ export function EmitenFundamentalInspectorModal({
     if (!activeStock) return;
     setIsFetchingLiveFundamentals(true);
     try {
-      const liveEntry = await tryFetchLiveTickerFundamentalsOnDemand(activeStock.ticker);
+      const liveEntry = await tryFetchLiveTickerFundamentalsOnDemand(activeStock.ticker, {
+        forceRefresh: true
+      });
+      if (liveEntry && liveEntry.lastPrice && liveEntry.lastPrice > 0) {
+        setLiveStockOverride((prev) => ({
+          ...(prev || activeStock),
+          lastPrice: liveEntry.lastPrice ?? activeStock.lastPrice,
+          previousClose: liveEntry.previousClose ?? activeStock.previousClose,
+          change1D: liveEntry.change1D ?? activeStock.change1D,
+          adtv20dIdr: liveEntry.adtv20dIdr ?? activeStock.adtv20dIdr,
+          adtvSource: 'LIVE_YAHOO_API',
+          priceSource: 'LIVE_YAHOO_API',
+          priceAsOfDate: liveEntry.asOfDate || new Date().toISOString().slice(0, 10),
+          beta1Y: liveEntry.beta1Y ?? activeStock.beta1Y,
+          volatilityAnn: liveEntry.realizedAnnualVol ?? activeStock.volatilityAnn,
+          atr20Idr: liveEntry.atr20 ?? activeStock.atr20Idr,
+          dividendYieldPct: liveEntry.dividendYieldTTM ?? activeStock.dividendYieldPct
+        }));
+      }
       setCatalystRevision((r) => r + 1);
       if (liveEntry && (liveEntry.revenueTTMIdr || liveEntry.adtv20dIdr)) {
         void Swal.fire({
@@ -947,15 +992,46 @@ export function EmitenFundamentalInspectorModal({
           position: 'top-end',
           icon: 'success',
           title: `Live Sync ${activeStock.ticker} Berhasil`,
-          text: liveEntry.revenueTTMIdr
-            ? `Laporan Keuangan & Volume 20D ditarik dari Yahoo API.`
-            : `ADTV 20D Live (Rp ${((liveEntry.adtv20dIdr ?? 0) / 1e9).toFixed(2)} M/hr) diperbarui dari Chart v8.`,
+          text:
+            liveEntry.provenanceMode === 'LIVE_REALTIME_WORKER'
+              ? `Laporan Keuangan TTM, Harga, ADTV 20D & SBN ditarik real-time via Cloudflare Worker (${liveEntry.fiscalPeriod || 'TTM'}).`
+              : liveEntry.revenueTTMIdr
+              ? `Laporan Keuangan & Volume 20D ditarik dari Yahoo API.`
+              : `ADTV 20D Live (Rp ${((liveEntry.adtv20dIdr ?? 0) / 1e9).toFixed(2)} M/hr) diperbarui dari Chart v8.`,
           showConfirmButton: false,
           timer: 2800
         });
       }
     } finally {
       setIsFetchingLiveFundamentals(false);
+    }
+  };
+
+  const handleSaveRealtimeWorkerUrl = async () => {
+    const cleaned = sanitizeRealtimeWorkerUrl(realtimeWorkerUrlInput);
+    saveRealtimeWorkerUrl(cleaned);
+    setRealtimeWorkerUrlInput(cleaned);
+    setWorkerConnTestResult(null);
+    if (cleaned && activeStock) {
+      await handleTryLiveYahooFundamentals();
+    } else {
+      setCatalystRevision((r) => r + 1);
+    }
+  };
+
+  const handleTestRealtimeWorkerConnection = async () => {
+    const cleaned = sanitizeRealtimeWorkerUrl(realtimeWorkerUrlInput);
+    saveRealtimeWorkerUrl(cleaned);
+    setRealtimeWorkerUrlInput(cleaned);
+    setIsTestingWorkerConn(true);
+    try {
+      const res = await testRealtimeWorkerConnection(cleaned);
+      setWorkerConnTestResult(res);
+      if (res.ok && activeStock) {
+        await handleTryLiveYahooFundamentals();
+      }
+    } finally {
+      setIsTestingWorkerConn(false);
     }
   };
 
@@ -1016,28 +1092,65 @@ export function EmitenFundamentalInspectorModal({
 
   const handleTriggerGitHubActionsFundamentalsSync = async () => {
     if (!activeStock) return;
+    const targetSingleTicker = activeStock.ticker.trim().toUpperCase();
     setIsTriggeringGhActionsSync(true);
+    setGhActionsPollingStep(`Menghubungi Yahoo Server via GitHub Actions (${targetSingleTicker})...`);
     try {
       const ghConfig = loadGitHubCloudConfig();
-      const priorityBatch = Array.from(
-        new Set([activeStock.ticker, 'MIKA', 'ARNA', 'SILO', 'HEAL', 'BBCA', 'BBRI', 'BMRI', 'TLKM', 'ASII'])
-      ).join(',');
       const res = await triggerGitHubActionsFundamentalsSync(ghConfig, {
-        targetTickers: priorityBatch
+        targetTickers: targetSingleTicker
       });
+      if (!res.ok) {
+        setGhActionsPollingStep(null);
+        void Swal.fire({
+          toast: true,
+          position: 'top-end',
+          icon: 'warning',
+          title: 'GitHub PAT Belum Aktif di Vault',
+          text: res.message,
+          showConfirmButton: false,
+          timer: 4200
+        });
+        return;
+      }
+
+      // Single-Ticker Auto-Polling every 4 seconds (up to 7 polls / ~28 seconds)
+      let foundEntry = false;
+      for (let attempt = 1; attempt <= 7; attempt++) {
+        setGhActionsPollingStep(
+          attempt <= 2
+            ? `Menghubungi Yahoo Server (${targetSingleTicker}) · Poll ${attempt}/7...`
+            : attempt <= 5
+            ? `Memproses Laporan Keuangan TTM ${targetSingleTicker} · Poll ${attempt}/7...`
+            : `Memuat ulang fundamentals-snapshot.json (${targetSingleTicker}) · Poll ${attempt}/7...`
+        );
+        await new Promise((r) => setTimeout(r, 4000));
+        const refreshedSnap = await loadFundamentalsSnapshot(true);
+        const entry = refreshedSnap?.tickers?.[targetSingleTicker];
+        if (entry && (entry.revenueTTMIdr || entry.netIncomeTTMIdr || entry.equityAttributableIdr)) {
+          foundEntry = true;
+          break;
+        }
+      }
+
+      setCatalystRevision((r) => r + 1);
+      setGhActionsPollingStep(null);
       void Swal.fire({
         toast: true,
         position: 'top-end',
-        icon: res.ok ? 'success' : 'warning',
-        title: res.ok
-          ? `GitHub Actions Sync Dipicu (${activeStock.ticker} + Prioritas)`
-          : 'GitHub PAT Belum Aktif di Vault',
-        text: res.message,
+        icon: foundEntry ? 'success' : 'info',
+        title: foundEntry
+          ? `Laporan Keuangan ${targetSingleTicker} Berhasil Dimuat!`
+          : `Workflow ${targetSingleTicker} Sedang Berjalan di GitHub`,
+        text: foundEntry
+          ? `Data fundamental ${targetSingleTicker} telah masuk ke snapshot dan modal diperbarui otomatis.`
+          : `GitHub Actions masih memproses ${targetSingleTicker}. Klik Refresh Emiten beberapa saat lagi.`,
         showConfirmButton: false,
-        timer: 4200
+        timer: 3800
       });
     } finally {
       setIsTriggeringGhActionsSync(false);
+      setGhActionsPollingStep(null);
     }
   };
 
@@ -1182,10 +1295,14 @@ export function EmitenFundamentalInspectorModal({
     const runLazyOnDemandInspect = async () => {
       let currentStock = stock;
 
-      // 1. Pull fresh single-ticker quote on demand
-      const quotePromise = fetchLiveIdxTicker(stock.ticker)
-        .then((fresh) => {
-          if (isMounted && fresh && fresh.lastPrice > 0) {
+      // 1. Pull fresh single-ticker quote + On-Demand Real-Time Single-Ticker Fundamentals (Cloudflare Worker / Snapshot Cascade)
+      const quotePromise = Promise.all([
+        fetchLiveIdxTicker(stock.ticker).catch(() => null),
+        tryFetchLiveTickerFundamentalsOnDemand(stock.ticker).catch(() => null)
+      ])
+        .then(([fresh, workerEntry]) => {
+          if (!isMounted) return;
+          if (fresh && fresh.lastPrice > 0) {
             currentStock = {
               ...stock,
               ...fresh,
@@ -1198,12 +1315,79 @@ export function EmitenFundamentalInspectorModal({
               kseiHscFootnote: stock.kseiHscFootnote,
               kseiHscScorePenaltyPts: stock.kseiHscScorePenaltyPts
             };
-            setLiveStockOverride(currentStock);
-            onStockSynced?.(currentStock);
           }
-        })
-        .catch(() => {
-          // Keep existing snapshot metrics if offline
+          if (workerEntry) {
+            const ov = resolveTickerFundamentalOverlay(
+              currentStock.ticker,
+              {
+                defaultRoe: currentStock.trailingRoePct ?? currentStock.roe,
+                defaultDer: currentStock.debtToEquity,
+                defaultOpMargin: currentStock.operatingMargin
+              },
+              workerEntry.adtv20dIdr ?? currentStock.adtv20dIdr,
+              'LIVE_YAHOO_API',
+              workerEntry.asOfDate || new Date().toISOString().slice(0, 10)
+            );
+            currentStock = enrichStockMetrics({
+              ...currentStock,
+              ...(workerEntry.lastPrice && workerEntry.lastPrice > 0
+                ? {
+                    lastPrice: workerEntry.lastPrice,
+                    previousClose: workerEntry.previousClose ?? currentStock.previousClose,
+                    change1D: workerEntry.change1D ?? currentStock.change1D,
+                    priceSource: 'LIVE_YAHOO_API',
+                    priceAsOfDate: workerEntry.asOfDate || new Date().toISOString().slice(0, 10)
+                  }
+                : {}),
+              ...(workerEntry.adtv20dIdr && workerEntry.adtv20dIdr > 0
+                ? {
+                    adtv20dIdr: workerEntry.adtv20dIdr,
+                    adtvSource: 'LIVE_YAHOO_API',
+                    adtvAsOfDate: workerEntry.asOfDate || new Date().toISOString().slice(0, 10)
+                  }
+                : {}),
+              ...(workerEntry.beta1Y ? { beta1Y: workerEntry.beta1Y } : {}),
+              ...(workerEntry.realizedAnnualVol ? { volatilityAnn: workerEntry.realizedAnnualVol } : {}),
+              ...(workerEntry.atr20 ? { atr20Idr: workerEntry.atr20 } : {}),
+              ...(workerEntry.dividendYieldTTM !== undefined && workerEntry.dividendYieldTTM !== null
+                ? { dividendYieldPct: workerEntry.dividendYieldTTM }
+                : {}),
+              ...(ov.sharesOutstanding ? { sharesOutstanding: ov.sharesOutstanding } : {}),
+              ...(ov.revenueTTMIdr ? { revenueTTMIdr: ov.revenueTTMIdr } : {}),
+              ...(ov.latestFullYearRevenueIdr ? { latestFullYearRevenueIdr: ov.latestFullYearRevenueIdr } : {}),
+              ...(ov.operatingProfitTTMIdr ? { operatingProfitTTMIdr: ov.operatingProfitTTMIdr } : {}),
+              ...(ov.ebitdaTTMIdr ? { ebitdaTTMIdr: ov.ebitdaTTMIdr } : {}),
+              ...(ov.netIncomeTTMIdr ? { netIncomeTTMIdr: ov.netIncomeTTMIdr } : {}),
+              ...(ov.netIncomeYoYPct !== undefined ? { earningsGrowthYoYPct: ov.netIncomeYoYPct } : {}),
+              ...(ov.operatingProfitYoYPct !== undefined ? { operatingProfitGrowthYoYPct: ov.operatingProfitYoYPct } : {}),
+              ...(ov.equityAttributableIdr ? { equityAttributableIdr: ov.equityAttributableIdr } : {}),
+              ...(ov.totalAssetsIdr ? { totalAssetsIdr: ov.totalAssetsIdr } : {}),
+              ...(ov.totalDebtIdr !== undefined ? { totalDebtIdr: ov.totalDebtIdr } : {}),
+              ...(ov.cashAndEquivalentsIdr !== undefined ? { cashAndEquivalentsIdr: ov.cashAndEquivalentsIdr } : {}),
+              ...(ov.ocfTTMIdr !== undefined ? { ocfTTMIdr: ov.ocfTTMIdr } : {}),
+              ...(ov.capexTTMIdr !== undefined ? { capexTTMIdr: ov.capexTTMIdr } : {}),
+              ...(ov.daTTMIdr !== undefined ? { daTTMIdr: ov.daTTMIdr } : {}),
+              ...(ov.roeAvg3YPct !== undefined ? { roeAvg3YPct: ov.roeAvg3YPct } : {}),
+              ...(ov.roeAvg5YPct !== undefined ? { roeAvg5YPct: ov.roeAvg5YPct } : {}),
+              ...(ov.daAnomaly !== undefined ? { daAnomaly: ov.daAnomaly } : {}),
+              ...(ov.daMethodNote ? { daMethodNote: ov.daMethodNote } : {}),
+              ...(ov.ttmMethod ? { ttmMethod: ov.ttmMethod } : {}),
+              ...(ov.flowAudit ? { flowAudit: ov.flowAudit } : {}),
+              ...(ov.missingFundamentalFields ? { missingFundamentalFields: ov.missingFundamentalFields } : {}),
+              ...(ov.reportingCurrency ? { reportingCurrency: ov.reportingCurrency } : {}),
+              ...(ov.fxRateUsdIdr ? { fxRateUsdIdr: ov.fxRateUsdIdr } : {}),
+              ...(ov.computedRoePct ? { roe: ov.computedRoePct, trailingRoePct: ov.computedRoePct } : {}),
+              ...(ov.computedOpMarginPct ? { operatingMargin: ov.computedOpMarginPct } : {}),
+              ...(ov.computedDer !== undefined ? { debtToEquity: ov.computedDer } : {}),
+              ...(ov.fundamentalsSource ? { fundamentalsSource: ov.fundamentalsSource } : {}),
+              ...(ov.fundamentalsAsOfDate ? { fundamentalsAsOfDate: ov.fundamentalsAsOfDate } : {}),
+              ...(ov.fundamentalsFiscalPeriod ? { fundamentalsFiscalPeriod: ov.fundamentalsFiscalPeriod } : {}),
+              ...(ov.fundamentalsNote ? { fundamentalsNote: ov.fundamentalsNote } : {})
+            });
+          }
+          setLiveStockOverride(currentStock);
+          setCatalystRevision((r) => r + 1);
+          onStockSynced?.(currentStock);
         })
         .finally(() => {
           if (isMounted) setIsSyncingOnDemand(false);
@@ -1279,8 +1463,11 @@ export function EmitenFundamentalInspectorModal({
     setIsSyncingOnDemand(true);
     setIsLoadingNews(true);
     try {
-      const [freshStock, freshNews] = await Promise.all([
+      const [freshStock, workerEntry, freshNews] = await Promise.all([
         fetchLiveIdxTicker(activeStock.ticker).catch(() => activeStock),
+        tryFetchLiveTickerFundamentalsOnDemand(activeStock.ticker, { forceRefresh: true }).catch(
+          () => null
+        ),
         fetchLiveEmitenSpecificNews(
           activeStock.ticker,
           activeStock.name,
@@ -1288,9 +1475,73 @@ export function EmitenFundamentalInspectorModal({
           activeStock
         ).catch(() => recentNews)
       ]);
-      const mergedStock: StockMetrics = {
+      const ov = resolveTickerFundamentalOverlay(
+        activeStock.ticker,
+        {
+          defaultRoe: activeStock.trailingRoePct ?? activeStock.roe,
+          defaultDer: activeStock.debtToEquity,
+          defaultOpMargin: activeStock.operatingMargin
+        },
+        workerEntry?.adtv20dIdr ?? freshStock.adtv20dIdr,
+        workerEntry?.adtv20dIdr ? 'LIVE_YAHOO_API' : freshStock.adtvSource,
+        workerEntry?.asOfDate || freshStock.priceAsOfDate
+      );
+      const mergedStock: StockMetrics = enrichStockMetrics({
         ...activeStock,
         ...freshStock,
+        ...(workerEntry?.lastPrice && workerEntry.lastPrice > 0
+          ? {
+              lastPrice: workerEntry.lastPrice,
+              previousClose: workerEntry.previousClose ?? freshStock.previousClose,
+              change1D: workerEntry.change1D ?? freshStock.change1D,
+              priceSource: 'LIVE_YAHOO_API',
+              priceAsOfDate: workerEntry.asOfDate || new Date().toISOString().slice(0, 10)
+            }
+          : {}),
+        ...(workerEntry?.adtv20dIdr && workerEntry.adtv20dIdr > 0
+          ? {
+              adtv20dIdr: workerEntry.adtv20dIdr,
+              adtvSource: 'LIVE_YAHOO_API',
+              adtvAsOfDate: workerEntry.asOfDate || new Date().toISOString().slice(0, 10)
+            }
+          : {}),
+        ...(workerEntry?.beta1Y ? { beta1Y: workerEntry.beta1Y } : {}),
+        ...(workerEntry?.realizedAnnualVol ? { volatilityAnn: workerEntry.realizedAnnualVol } : {}),
+        ...(workerEntry?.atr20 ? { atr20Idr: workerEntry.atr20 } : {}),
+        ...(workerEntry?.dividendYieldTTM !== undefined && workerEntry?.dividendYieldTTM !== null
+          ? { dividendYieldPct: workerEntry.dividendYieldTTM }
+          : {}),
+        ...(ov.sharesOutstanding ? { sharesOutstanding: ov.sharesOutstanding } : {}),
+        ...(ov.revenueTTMIdr ? { revenueTTMIdr: ov.revenueTTMIdr } : {}),
+        ...(ov.latestFullYearRevenueIdr ? { latestFullYearRevenueIdr: ov.latestFullYearRevenueIdr } : {}),
+        ...(ov.operatingProfitTTMIdr ? { operatingProfitTTMIdr: ov.operatingProfitTTMIdr } : {}),
+        ...(ov.ebitdaTTMIdr ? { ebitdaTTMIdr: ov.ebitdaTTMIdr } : {}),
+        ...(ov.netIncomeTTMIdr ? { netIncomeTTMIdr: ov.netIncomeTTMIdr } : {}),
+        ...(ov.netIncomeYoYPct !== undefined ? { earningsGrowthYoYPct: ov.netIncomeYoYPct } : {}),
+        ...(ov.operatingProfitYoYPct !== undefined ? { operatingProfitGrowthYoYPct: ov.operatingProfitYoYPct } : {}),
+        ...(ov.equityAttributableIdr ? { equityAttributableIdr: ov.equityAttributableIdr } : {}),
+        ...(ov.totalAssetsIdr ? { totalAssetsIdr: ov.totalAssetsIdr } : {}),
+        ...(ov.totalDebtIdr !== undefined ? { totalDebtIdr: ov.totalDebtIdr } : {}),
+        ...(ov.cashAndEquivalentsIdr !== undefined ? { cashAndEquivalentsIdr: ov.cashAndEquivalentsIdr } : {}),
+        ...(ov.ocfTTMIdr !== undefined ? { ocfTTMIdr: ov.ocfTTMIdr } : {}),
+        ...(ov.capexTTMIdr !== undefined ? { capexTTMIdr: ov.capexTTMIdr } : {}),
+        ...(ov.daTTMIdr !== undefined ? { daTTMIdr: ov.daTTMIdr } : {}),
+        ...(ov.roeAvg3YPct !== undefined ? { roeAvg3YPct: ov.roeAvg3YPct } : {}),
+        ...(ov.roeAvg5YPct !== undefined ? { roeAvg5YPct: ov.roeAvg5YPct } : {}),
+        ...(ov.daAnomaly !== undefined ? { daAnomaly: ov.daAnomaly } : {}),
+        ...(ov.daMethodNote ? { daMethodNote: ov.daMethodNote } : {}),
+        ...(ov.ttmMethod ? { ttmMethod: ov.ttmMethod } : {}),
+        ...(ov.flowAudit ? { flowAudit: ov.flowAudit } : {}),
+        ...(ov.missingFundamentalFields ? { missingFundamentalFields: ov.missingFundamentalFields } : {}),
+        ...(ov.reportingCurrency ? { reportingCurrency: ov.reportingCurrency } : {}),
+        ...(ov.fxRateUsdIdr ? { fxRateUsdIdr: ov.fxRateUsdIdr } : {}),
+        ...(ov.computedRoePct ? { roe: ov.computedRoePct, trailingRoePct: ov.computedRoePct } : {}),
+        ...(ov.computedOpMarginPct ? { operatingMargin: ov.computedOpMarginPct } : {}),
+        ...(ov.computedDer !== undefined ? { debtToEquity: ov.computedDer } : {}),
+        ...(ov.fundamentalsSource ? { fundamentalsSource: ov.fundamentalsSource } : {}),
+        ...(ov.fundamentalsAsOfDate ? { fundamentalsAsOfDate: ov.fundamentalsAsOfDate } : {}),
+        ...(ov.fundamentalsFiscalPeriod ? { fundamentalsFiscalPeriod: ov.fundamentalsFiscalPeriod } : {}),
+        ...(ov.fundamentalsNote ? { fundamentalsNote: ov.fundamentalsNote } : {}),
         isHscFlagged: activeStock.isHscFlagged,
         hscSource: activeStock.hscSource,
         hscTier: activeStock.hscTier,
@@ -1299,8 +1550,9 @@ export function EmitenFundamentalInspectorModal({
         kseiHscIsNew: activeStock.kseiHscIsNew,
         kseiHscFootnote: activeStock.kseiHscFootnote,
         kseiHscScorePenaltyPts: activeStock.kseiHscScorePenaltyPts
-      };
+      });
       setLiveStockOverride(mergedStock);
+      setCatalystRevision((r) => r + 1);
       setRecentNews(freshNews);
       onStockSynced?.(mergedStock);
     } finally {
@@ -2276,6 +2528,121 @@ export function EmitenFundamentalInspectorModal({
                 </div>
               </div>
 
+              {/* On-Demand Cloudflare Worker Realtime Proxy Configuration & Connection Tester */}
+              <div className="p-2.5 bg-[#101723] border border-sky-500/40 rounded-xs space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="px-1.5 py-0.5 text-[9px] font-extrabold uppercase bg-sky-950 text-sky-300 border border-sky-500/50 rounded-xs">
+                      ON-DEMAND REAL-TIME RELAY (1–2 DTK)
+                    </span>
+                    <span className="text-[10.5px] font-bold text-slate-200">
+                      Realtime Proxy Worker URL (Cloudflare Worker · Anti-401/CORS)
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-slate-400 font-sans">
+                    Deploy <code>workers/nostradamus-yahoo-worker.js</code> &amp; tempel URL Worker di bawah:
+                  </span>
+                </div>
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                  <input
+                    type="url"
+                    value={realtimeWorkerUrlInput}
+                    onChange={(e) => setRealtimeWorkerUrlInput(e.target.value)}
+                    placeholder="https://nostradamus-yahoo-proxy.<subdomain>.workers.dev"
+                    className="flex-1 h-8 px-2.5 text-xs font-mono bg-[#090C10] border border-[#2A364B] focus:border-sky-400 rounded-xs text-slate-100"
+                  />
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleSaveRealtimeWorkerUrl}
+                      className="h-8 px-3 text-[10.5px] font-mono font-bold text-white bg-sky-600 hover:bg-sky-500 rounded-xs cursor-pointer whitespace-nowrap shrink-0"
+                    >
+                      Simpan &amp; Sync {activeStock.ticker}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleTestRealtimeWorkerConnection}
+                      disabled={isTestingWorkerConn}
+                      className="h-8 px-3 text-[10.5px] font-mono font-bold text-emerald-300 bg-emerald-950/90 hover:bg-emerald-900 border border-emerald-500/50 rounded-xs cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
+                      title="Ping ?ticker=BBCA&nocache=1 untuk menguji status HTTP & latensi round-trip Cloudflare Worker"
+                    >
+                      {isTestingWorkerConn ? 'Menguji...' : 'Tes Koneksi'}
+                    </button>
+                  </div>
+                </div>
+                {workerConnTestResult && (
+                  <div
+                    className={`px-2.5 py-1.5 rounded-xs border text-[10.5px] font-mono flex items-center justify-between gap-2 ${
+                      workerConnTestResult.ok
+                        ? 'bg-emerald-950/60 border-emerald-500/50 text-emerald-300'
+                        : 'bg-rose-950/60 border-rose-500/50 text-rose-300'
+                    }`}
+                  >
+                    <span>{workerConnTestResult.message}</span>
+                    <span className="font-bold shrink-0">
+                      HTTP {workerConnTestResult.httpStatus ?? '-'} · {workerConnTestResult.latencyMs} ms
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Flow Statement Sync Audit & Period Alignment Telemetry Strip (flowAudit & AUDITED_FY) */}
+              {(joeliardiEval.dataLineage.flowAudit ||
+                joeliardiEval.dataLineage.ttmMethod ||
+                joeliardiEval.dataLineage.daMethodNote) && (
+                <div className="p-2.5 bg-[#0D131D] border border-[#1E293B] rounded-xs flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-slate-400 font-bold uppercase tracking-wider">
+                      FLOW STATEMENT AUDIT:
+                    </span>
+                    <span className="px-2 py-0.5 font-bold rounded-xs bg-sky-950/90 text-sky-300 border border-sky-500/50">
+                      METHOD:{' '}
+                      {joeliardiEval.dataLineage.flowAudit?.unifiedMethod ||
+                        joeliardiEval.dataLineage.ttmMethod ||
+                        'TTM_4Q_STANDALONE'}
+                    </span>
+                    {joeliardiEval.dataLineage.flowAudit && (
+                      <span
+                        className={`px-2 py-0.5 font-bold rounded-xs border ${
+                          joeliardiEval.dataLineage.flowAudit.periodAligned
+                            ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500/50'
+                            : 'bg-amber-950/90 text-amber-300 border-amber-500/50'
+                        }`}
+                      >
+                        {joeliardiEval.dataLineage.flowAudit.periodAligned
+                          ? 'PERIOD ALIGNED ✓'
+                          : 'PERIOD MIXED'}
+                      </span>
+                    )}
+                    {joeliardiEval.dataLineage.daMethodNote && (
+                      <span className="px-2 py-0.5 font-bold rounded-xs bg-[#131B28] text-slate-300 border border-[#2A364B]">
+                        D&amp;A: {joeliardiEval.dataLineage.daMethodNote}
+                      </span>
+                    )}
+                    {(joeliardiEval.dataLineage.ttmMethod === 'FY_FALLBACK' ||
+                      joeliardiEval.dataLineage.flowAudit?.unifiedMethod === 'FY_FALLBACK') && (
+                      <span
+                        className="px-2 py-0.5 font-bold rounded-xs bg-indigo-950/90 text-indigo-300 border border-indigo-500/50"
+                        title="Cross-Statement Sanity Lock memilih laporan tahunan auditan terakhir (FY_FALLBACK) demi menjaga konsistensi periode (NI <= EBIT). Tetap berstatus FRESH tanpa penalti Grade C."
+                      >
+                        AUDITED_FY · Basis FY Auditan Terakhir — Period Aligned
+                      </span>
+                    )}
+                  </div>
+                  {(joeliardiEval.dataLineage.ttmMethod === 'FY_FALLBACK' ||
+                    joeliardiEval.dataLineage.flowAudit?.unifiedMethod === 'FY_FALLBACK') && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveToolPanel('CALIBRATION')}
+                      className="px-2 py-0.5 text-[9.5px] font-mono font-bold bg-indigo-950/90 hover:bg-indigo-900 text-indigo-300 border border-indigo-500/50 rounded-xs cursor-pointer whitespace-nowrap shrink-0"
+                      title="Opsional: Buka panel Kalibrasi Manual jika Anda ingin memasukkan angka kuartal berjalan secara manual"
+                    >
+                      Perbaiki →
+                    </button>
+                  )}
+                </div>
+              )}
+
               {/* SBN Macro Benchmark Freshness Alert inside Drawer */}
               {(joeliardiEval.dataLineage.isSbnMacroProxy ||
                 joeliardiEval.dataLineage.isSbnMacroStale) && (
@@ -2348,9 +2715,12 @@ export function EmitenFundamentalInspectorModal({
                       const statusCls: Record<FieldFreshnessStatus, string> = {
                         FRESH: 'text-emerald-400',
                         STALE: 'text-amber-400',
+                        ANOMALY: 'text-amber-300 font-bold',
                         SEED_WARN: 'text-rose-400 font-bold',
                         ERROR: 'text-rose-500 font-bold'
                       };
+
+                      const isAuditedFyRow = Boolean(tf.note?.includes('AUDITED_FY'));
 
                       return (
                         <tr key={fieldKey} className="hover:bg-[#131B28]/70">
@@ -2370,14 +2740,34 @@ export function EmitenFundamentalInspectorModal({
                             </span>
                           </td>
                           <td className={`py-1.5 px-2.5 font-bold ${statusCls[tf.status]}`}>
-                            {tf.status}
+                            <div className="flex items-center gap-1">
+                              <span>{tf.status}</span>
+                              {isAuditedFyRow && (
+                                <span className="px-1 py-0.2 text-[8px] font-mono font-bold bg-indigo-950/90 text-indigo-300 border border-indigo-500/50 rounded-2xs">
+                                  AUDITED_FY
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="py-1.5 px-2.5 text-slate-400">
                             {tf.asOfDate || 'N/A'}
                             {tf.fiscalPeriod ? ` (${tf.fiscalPeriod})` : ''}
                           </td>
                           <td className="py-1.5 px-2.5 text-slate-400 font-sans text-[10px]">
-                            {tf.note || '-'}
+                            <div className="flex items-center justify-between gap-2">
+                              <span>{tf.note || '-'}</span>
+                              {(tf.status === 'SEED_WARN' ||
+                                tf.status === 'ANOMALY' ||
+                                isAuditedFyRow) && (
+                                <button
+                                  type="button"
+                                  onClick={() => setActiveToolPanel('CALIBRATION')}
+                                  className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-indigo-950/90 hover:bg-indigo-900 text-indigo-300 border border-indigo-500/50 rounded-xs cursor-pointer whitespace-nowrap shrink-0"
+                                >
+                                  Perbaiki →
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );
@@ -2458,6 +2848,51 @@ export function EmitenFundamentalInspectorModal({
 
         {/* Scrollable Content Body with Theme-Aware Dark Scrollbar */}
         <div className="p-5 sm:p-6 overflow-y-auto table-scroll-container space-y-6">
+          {/* On-Demand Single-Ticker Action Banner when Fundamentals are Missing from Cache/Snapshot */}
+          {joeliardiEval.dataLineage?.convictionCappedByLineage && (
+            <div className="p-3.5 rounded-xs bg-[#0D131C] border border-amber-500/60 text-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md">
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="px-2 py-0.5 text-[9.5px] font-mono font-extrabold bg-rose-950 text-rose-300 border border-rose-500/50 rounded-xs">
+                    TICKER_NOT_IN_SNAPSHOT · SEED_WARN
+                  </span>
+                  <span className="text-xs font-bold text-amber-300">
+                    Data fundamental {activeStock.ticker} belum tersedia di cache snapshot.
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  {ghActionsPollingStep
+                    ? `⚡ ${ghActionsPollingStep}`
+                    : `Pasang Cloudflare Worker URL (sinkronisasi real-time 1–2 detik untuk seluruh emiten BEI) atau tarik laporan keuangan ${activeStock.ticker} secara on-demand via GitHub Actions.`}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setActiveToolPanel('FORENSIC_LINEAGE')}
+                  className="px-2.5 py-1.5 text-[10.5px] font-mono font-bold text-sky-300 bg-sky-950/90 hover:bg-sky-900 border border-sky-500/50 rounded-xs cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  ⚙ Pasang Cloudflare Worker URL (1–2 dtk)
+                </button>
+                <button
+                  type="button"
+                  onClick={handleTriggerGitHubActionsFundamentalsSync}
+                  disabled={isTriggeringGhActionsSync}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[10.5px] font-mono font-bold text-white bg-amber-600 hover:bg-amber-500 rounded-xs cursor-pointer disabled:opacity-60 whitespace-nowrap shrink-0"
+                >
+                  <Zap
+                    className={`w-3.5 h-3.5 ${isTriggeringGhActionsSync ? 'animate-spin' : ''}`}
+                  />
+                  <span>
+                    {isTriggeringGhActionsSync
+                      ? ghActionsPollingStep || `Menarik ${activeStock.ticker}...`
+                      : `⚡ Tarik Data Real-Time ${activeStock.ticker} Sekarang`}
+                  </span>
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* HSC Warning Banner: Supports Official KSEI HSC (Dividend Penalty vs Hard Block) & Quant Early Warning Suspect */}
           {(activeStock.isHscFlagged || activeStock.hscSource === 'KSEI_OFFICIAL') && (
             <div
@@ -2924,10 +3359,25 @@ export function EmitenFundamentalInspectorModal({
                   ))
                 ) : (
                   <>
-                    <div className="truncate">DER: {activeStock.debtToEquity.toFixed(2)}x</div>
+                    <div className="truncate">
+                      DER:{' '}
+                      {(joeliardiEval.rawTickerData &&
+                      joeliardiEval.rawTickerData.equityAttributable > 0
+                        ? (joeliardiEval.rawTickerData.totalDebt ?? 0) /
+                          joeliardiEval.rawTickerData.equityAttributable
+                        : activeStock.debtToEquity
+                      ).toFixed(2)}
+                      x
+                    </div>
                     <div className="truncate">
                       Status Neraca:{' '}
-                      {activeStock.debtToEquity <= 0.8 ? 'Konservatif' : 'Moderat/Tinggi'}
+                      {(joeliardiEval.rawTickerData &&
+                      joeliardiEval.rawTickerData.equityAttributable > 0
+                        ? (joeliardiEval.rawTickerData.totalDebt ?? 0) /
+                          joeliardiEval.rawTickerData.equityAttributable
+                        : activeStock.debtToEquity) <= 0.8
+                        ? 'Konservatif'
+                        : 'Moderat/Tinggi'}
                     </div>
                     <div className="truncate">
                       Status HSC:{' '}

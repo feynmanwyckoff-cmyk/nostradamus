@@ -158,6 +158,40 @@ const KNOWN_TECH_TICKERS = new Set([
 ]);
 
 /**
+ * IDX Palm Oil (CPO) & Agribusiness Plantation Issuers:
+ * Classified under IDX-IC 'Consumer Non-Cyclicals', but economically operate as cyclical commodities.
+ * Routed to CYCLICAL_COMMODITIES (3-5Y through-the-cycle ROE normalization & ~5.0x-6.0x EV/EBITDA anchor).
+ */
+export const KNOWN_CPO_PLANTATION_TICKERS = new Set([
+  'LSIP',
+  'AALI',
+  'TAPG',
+  'DSNG',
+  'SSMS',
+  'SMAR',
+  'SIMP',
+  'STAA',
+  'SGRO',
+  'BWPT',
+  'CSRA',
+  'ANJT',
+  'TBLA',
+  'GZCO',
+  'JAWA',
+  'PALM',
+  'FAPA',
+  'MGRO',
+  'NSSS',
+  'PGUN'
+]);
+
+export function isCpoPlantationTicker(ticker: string): boolean {
+  if (!ticker) return false;
+  const clean = ticker.replace(/\.JK$/i, '').trim().toUpperCase();
+  return KNOWN_CPO_PLANTATION_TICKERS.has(clean);
+}
+
+/**
  * Resolves the authentic Total Assets for an issuer.
  * For Financials (Banks/Multifinance), NEVER synthesize Total Assets as `equity + debt`
  * because Customer Deposits (DPK / Dana Syirkah Temporer) are excluded from corporate debt.
@@ -251,10 +285,14 @@ export function detectSectorMethodologyRegime(params: {
     return 'TECH_UNPROFITABLE_GROWTH';
   }
 
-  // 2. Energy & Basic Materials (Cyclical Commodities)
+  // 2. Energy, Basic Materials & CPO/Agri Plantations (Cyclical Commodities)
   if (
     sec === 'Energy' ||
     sec === 'Basic Materials' ||
+    KNOWN_CPO_PLANTATION_TICKERS.has(cleanTicker) ||
+    sub.includes('plantation') ||
+    sub.includes('cpo') ||
+    sub.includes('palm') ||
     sub.includes('coal') ||
     sub.includes('mining') ||
     sub.includes('metal') ||
@@ -458,9 +496,10 @@ export function resolveSectorMethodologyProfile(
   }
 
   // ============================================================================
-  // REGIME 2: ENERGY & BASIC MATERIALS (KOMODITAS & SIKLIKAL)
+  // REGIME 2: ENERGY, BASIC MATERIALS & CPO/PLANTATIONS (KOMODITAS & SIKLIKAL)
   // ============================================================================
   if (regime === 'CYCLICAL_COMMODITIES') {
+    const isCpo = isCpoPlantationTicker(input.ticker);
     const roeAvg5Y = Math.max(1, input.roeAvg5YPct || input.roeTTM * 0.85);
     const isCyclePeakWarning = input.roeTTM > roeAvg5Y * 1.35;
     const cyclePeakWarningText = isCyclePeakWarning
@@ -469,10 +508,11 @@ export function resolveSectorMethodologyProfile(
 
     return {
       regime: 'CYCLICAL_COMMODITIES',
-      regimeShortLabel: 'CYCLICAL / KOMODITAS',
+      regimeShortLabel: isCpo ? 'CPO & AGRI (SIKLIKAL/KOMODITAS)' : 'CYCLICAL / KOMODITAS',
       regimeBadgeLabel: 'MODE SEKTOR: SIKLIKAL/KOMODITAS',
-      sectorMethodologyNotice:
-        'Mode Sektor Siklikal/Komoditas: Valuasi menggunakan normalisasi laba 3–5 tahun (through-the-cycle) & jangkar EV/EBITDA untuk mencegah jebakan laba puncak siklus.',
+      sectorMethodologyNotice: isCpo
+        ? `Mode Sektor Siklikal/Komoditas (Sub-Sektor CPO/Perkebunan): Meski tercatat di Consumer Non-Cyclicals IDX-IC, emiten sawit/CPO (${input.ticker}) dinilai dengan normalisasi ROE 3–5 tahun (through-the-cycle) & jangkar EV/EBITDA komoditas (~5.0x–6.0x, bukan 11.8x FMCG).`
+        : 'Mode Sektor Siklikal/Komoditas: Valuasi menggunakan normalisasi laba 3–5 tahun (through-the-cycle) & jangkar EV/EBITDA untuk mencegah jebakan laba puncak siklus.',
       bypassedMetrics: ['Peak-Cycle Unadjusted P/E Extrapolation'],
       activeMetrics: [
         'Normalized 3-5Y Through-the-Cycle ROE & EPS',

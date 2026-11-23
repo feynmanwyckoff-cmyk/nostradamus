@@ -13,9 +13,12 @@ export type DataSourceType =
   | 'PROXY_FORMULA'        // Dihitung dari proksi (misal SBN dari ^TNX + spread)
   | 'HARDCODED_SEED';      // Data statis bawaan kode / BOOTSTRAP_PLACEHOLDER (WAJIB DIBERI WARNING)
 
-export type FieldFreshnessStatus = 'FRESH' | 'STALE' | 'SEED_WARN' | 'ERROR';
+export type FieldFreshnessStatus = 'FRESH' | 'STALE' | 'SEED_WARN' | 'ANOMALY' | 'ERROR';
 
-export type SnapshotProvenanceMode = 'AUTOMATED_FETCH' | 'BOOTSTRAP_PLACEHOLDER';
+export type SnapshotProvenanceMode =
+  | 'AUTOMATED_FETCH'
+  | 'BOOTSTRAP_PLACEHOLDER'
+  | 'LIVE_REALTIME_WORKER';
 
 export interface TrackedField<T> {
   value: T;
@@ -44,6 +47,7 @@ export interface SyncDiagnosticEntry {
   payloadBytes?: number;
   httpStatus?: number;
   status: 'OK' | 'FALLBACK_USED' | 'ERROR';
+  errorCode?: string;
   errorDetail?: string;
   errorMessage?: string;
   fallbackSource?: DataSourceType;
@@ -90,6 +94,18 @@ export interface FundamentalUserOverride {
   sbn10YOverridePct?: number;
 }
 
+export interface FlowAuditMetadata {
+  unifiedMethod: string;
+  revMethod: string;
+  ebitMethod: string;
+  niMethod: string;
+  ocfMethod?: string;
+  capexMethod?: string;
+  daMethod?: string;
+  periodAligned: boolean;
+  crossStatementLockTriggered?: boolean;
+}
+
 export interface FundamentalsSnapshotTickerEntry {
   ticker: string;
   provenanceMode: SnapshotProvenanceMode;
@@ -98,17 +114,22 @@ export interface FundamentalsSnapshotTickerEntry {
   fiscalPeriod?: string;
   reportingCurrency?: string;
   usdIdrRateApplied?: number | null;
+  ttmMethod?: string | null;
+  flowAudit?: FlowAuditMetadata | null;
   decumulationMethod?: string;
   decumulationNote?: string;
   raw4QRevenueSum?: number | null;
   latestFullYearRevenue?: number | null;
   revenueTTM?: number | null;
   ebitTTM?: number | null;
+  operatingProfitTTM?: number | null;
   ebitdaTTM?: number | null;
   netIncomeTTM?: number | null;
+  netIncomeTTMIdr?: number | null;
   netIncomeYoYPct?: number | null;
   operatingProfitYoYPct?: number | null;
   equityAttributable?: number | null;
+  equityAttributableIdr?: number | null;
   totalDebt?: number | null;
   totalAssets?: number | null;
   cashAndEquivalents?: number | null;
@@ -120,9 +141,26 @@ export interface FundamentalsSnapshotTickerEntry {
   adtvAsOfDate?: string | null;
   adtvProvenanceMode?: SnapshotProvenanceMode;
   revenueTTMIdr?: number | null;
+  daAnomaly?: boolean;
+  daMethodNote?: string | null;
+  missingFields?: string[];
+  fxRateUsdIdr?: number | null;
+  lastPrice?: number | null;
+  previousClose?: number | null;
+  change1D?: number | null;
+  return30D?: number | null;
+  closes?: number[];
+  timestamps?: number[];
+  beta1Y?: number | null;
+  realizedAnnualVol?: number | null;
+  atr20?: number | null;
+  dividendYieldTTM?: number | null;
+  roeAvg3YPct?: number | null;
+  roeAvg5YPct?: number | null;
 }
 
 export interface FundamentalsSnapshotDocument {
+  version?: string;
   schemaVersion?: string;
   provenanceMode: SnapshotProvenanceMode;
   generatedAt: string | null;
@@ -130,7 +168,11 @@ export interface FundamentalsSnapshotDocument {
     sbn1YPct?: number | null;
     sbn5YPct?: number | null;
     sbn10YPct?: number | null;
+    sbn1YYieldPct?: number | null;
+    sbn5YYieldPct?: number | null;
+    sbn10YYieldPct?: number | null;
     sbnAsOfDate?: string | null;
+    sbnSource?: string;
     provenanceMode?: SnapshotProvenanceMode;
     source?: DataSourceType;
     sourceLabel?: string;
@@ -189,10 +231,92 @@ export interface TickerDataLineageReport {
   };
   fields: TickerDataLineageFields;
   syncDiagnostics: SyncDiagnosticEntry[];
+  ttmMethod?: string | null;
+  daMethodNote?: string | null;
+  flowAudit?: FlowAuditMetadata | null;
 }
 
 const FUNDAMENTAL_USER_OVERRIDES_STORAGE_KEY = 'nostradamus_fundamental_user_overrides_v1';
 const MACRO_SBN_OVERRIDE_STORAGE_KEY = 'nostradamus_macro_sbn_override_v1';
+const REALTIME_WORKER_URL_STORAGE_KEY = 'nostradamus_realtime_worker_url_v1';
+
+/**
+ * Permanent Default Production Cloudflare Worker URL for On-Demand Single-Ticker Real-Time Sync.
+ * Ensures zero-config out-of-the-box execution across GitHub Pages, AI Studio Preview, and localhost.
+ */
+export const DEFAULT_REALTIME_WORKER_URL =
+  'https://nostradamus-yahoo-proxy.feynman-wyckoff.workers.dev';
+
+/**
+ * Sanitizes a user-provided Cloudflare Worker URL:
+ * - Trims whitespace
+ * - Removes accidental query parameters (e.g., `/?ticker=LSIP` or `?ticker=BBCA`)
+ * - Removes trailing slashes
+ */
+export function sanitizeRealtimeWorkerUrl(rawUrl?: string | null): string {
+  if (!rawUrl || typeof rawUrl !== 'string') return '';
+  let cleaned = rawUrl.trim();
+  if (!cleaned) return '';
+
+  // Strip query parameters or hash if user pasted full test URL like https://...workers.dev/?ticker=LSIP
+  const qIndex = cleaned.indexOf('?');
+  if (qIndex !== -1) {
+    cleaned = cleaned.slice(0, qIndex);
+  }
+  const hIndex = cleaned.indexOf('#');
+  if (hIndex !== -1) {
+    cleaned = cleaned.slice(0, hIndex);
+  }
+  cleaned = cleaned.replace(/\/+$/, '').trim();
+  return cleaned;
+}
+
+/**
+ * Resolves the Cloudflare Realtime Proxy Worker URL using strict 3-tier priority:
+ * - Priority 1: `localStorage` override set by user in Settings / Forensic Drawer
+ * - Priority 2: `import.meta.env.VITE_REALTIME_WORKER_URL`
+ * - Priority 3: Permanent default fallback `'https://nostradamus-yahoo-proxy.feynman-wyckoff.workers.dev'`
+ */
+export function getRealtimeWorkerUrl(): string {
+  if (typeof window !== 'undefined') {
+    try {
+      const stored = window.localStorage.getItem(REALTIME_WORKER_URL_STORAGE_KEY);
+      if (stored && stored.trim()) {
+        const sanitizedStored = sanitizeRealtimeWorkerUrl(stored);
+        if (sanitizedStored) return sanitizedStored;
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }
+  const envUrl =
+    (import.meta as unknown as { env?: Record<string, string | undefined> })?.env
+      ?.VITE_REALTIME_WORKER_URL || '';
+  const sanitizedEnv = sanitizeRealtimeWorkerUrl(envUrl);
+  if (sanitizedEnv) {
+    return sanitizedEnv;
+  }
+  return DEFAULT_REALTIME_WORKER_URL;
+}
+
+/**
+ * Persists the Cloudflare Realtime Proxy Worker URL to localStorage (sanitized).
+ */
+export function saveRealtimeWorkerUrl(rawUrl: string): string {
+  const sanitized = sanitizeRealtimeWorkerUrl(rawUrl);
+  if (typeof window !== 'undefined') {
+    try {
+      if (sanitized) {
+        window.localStorage.setItem(REALTIME_WORKER_URL_STORAGE_KEY, sanitized);
+      } else {
+        window.localStorage.removeItem(REALTIME_WORKER_URL_STORAGE_KEY);
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }
+  return sanitized;
+}
 
 const syncDiagnosticsRegistry: SyncDiagnosticEntry[] = [];
 const MAX_DIAGNOSTIC_ENTRIES = 180;
@@ -541,6 +665,16 @@ export function resolveCalibratorFieldProvenanceBadge(
       tooltip: field?.note || 'Data telah dikalibrasi manual oleh analis (status FRESH)',
     };
   }
+  if (field?.status === 'ANOMALY') {
+    return {
+      label: 'ANOMALY GUARD',
+      isRealtimeOrFresh: false,
+      className: 'bg-amber-950/90 text-amber-300 border-amber-500/60',
+      tooltip:
+        field?.note ||
+        'Anomali rasio akuntansi terdeteksi (mis. D&A > 18% Revenue) — klik Perbaiki untuk kalibrasi',
+    };
+  }
   if (field?.source === 'LIVE_YAHOO_API') {
     return {
       label: 'LIVE REALTIME',
@@ -738,23 +872,34 @@ export function evaluateSbnMacroFreshness(
   }
 
   const macro = snapshotDoc?.macroBenchmarks;
+  const resolvedMacroSbn10Y =
+    typeof macro?.sbn10YYieldPct === 'number' && Number.isFinite(macro.sbn10YYieldPct)
+      ? macro.sbn10YYieldPct
+      : typeof macro?.sbn10YPct === 'number' && Number.isFinite(macro.sbn10YPct)
+      ? macro.sbn10YPct
+      : null;
   if (
     macro &&
-    macro.provenanceMode === 'AUTOMATED_FETCH' &&
-    typeof macro.sbn10YPct === 'number' &&
-    Number.isFinite(macro.sbn10YPct) &&
+    (macro.provenanceMode === 'AUTOMATED_FETCH' ||
+      macro.provenanceMode === 'LIVE_REALTIME_WORKER') &&
+    resolvedMacroSbn10Y !== null &&
     macro.sbnAsOfDate
   ) {
     const days = computeDaysSinceIsoDate(macro.sbnAsOfDate);
     const isStale = days === null || days > 7;
+    const isLiveWorker =
+      macro.provenanceMode === 'LIVE_REALTIME_WORKER' || macro.source === 'LIVE_YAHOO_API';
+    const feedName = macro.sbnSource || macro.sourceLabel || 'CNBC_SOVEREIGN_ID10Y_LIVE';
     const badgeLabel = isStale
       ? `SBN STALE (${days ?? '?'}d > 7d)`
+      : isLiveWorker
+      ? `SBN LIVE · ${resolvedMacroSbn10Y.toFixed(2)}% (${macro.sbnAsOfDate})`
       : `SBN SNAPSHOT (${macro.sbnAsOfDate})`;
     return {
-      source: 'FUNDAMENTALS_JSON',
+      source: isLiveWorker ? 'LIVE_YAHOO_API' : 'FUNDAMENTALS_JSON',
       status: isStale ? 'STALE' : 'FRESH',
       asOfDate: macro.sbnAsOfDate,
-      sbn10YOverridePct: macro.sbn10YPct,
+      sbn10YOverridePct: resolvedMacroSbn10Y,
       isWarning: isStale,
       isStaleOrProxy: isStale,
       ageDays: days,
@@ -762,6 +907,8 @@ export function evaluateSbnMacroFreshness(
       warningBadgeText: badgeLabel,
       note: isStale
         ? `Kurva SBN snapshot tertanggal ${macro.sbnAsOfDate} (${days ?? '?'} hari > batas maksimal 7 hari).`
+        : isLiveWorker
+        ? `Kurva SBN real-time via Cloudflare Worker (${feedName}: 10Y ${resolvedMacroSbn10Y.toFixed(2)}%) tertanggal ${macro.sbnAsOfDate}.`
         : `Kurva SBN benchmark resmi tertanggal ${macro.sbnAsOfDate}.`,
     };
   }
@@ -809,6 +956,15 @@ export function createTrackedField<T>(params: {
     note,
   } = params;
 
+  // Audited full-year statements (FY_FALLBACK) or live Yahoo fundamentals remain valid for up to 450 days
+  // so period-aligned FY statements (e.g. FY2025 on LSIP/ADMR) are never falsely penalized as STALE or SEED_WARN.
+  const effectiveMaxAgeDays =
+    source === 'LIVE_YAHOO_API' ||
+    source === 'FUNDAMENTALS_JSON' ||
+    (fiscalPeriod && /FY/i.test(fiscalPeriod))
+      ? Math.max(maxAgeDays, 450)
+      : maxAgeDays;
+
   let status: FieldFreshnessStatus = 'FRESH';
 
   if (statusOverride) {
@@ -817,10 +973,10 @@ export function createTrackedField<T>(params: {
     status = 'SEED_WARN';
   } else if (source === 'PROXY_FORMULA') {
     const days = computeDaysSinceIsoDate(asOfDate);
-    status = days !== null && days <= maxAgeDays ? 'FRESH' : 'STALE';
+    status = days !== null && days <= effectiveMaxAgeDays ? 'FRESH' : 'STALE';
   } else {
     const days = computeDaysSinceIsoDate(asOfDate);
-    if (days !== null && days > maxAgeDays) {
+    if (days !== null && days > effectiveMaxAgeDays) {
       status = 'STALE';
     }
   }

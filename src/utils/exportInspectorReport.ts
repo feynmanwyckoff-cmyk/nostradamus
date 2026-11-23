@@ -731,8 +731,9 @@ export function renderInspectorReportCanvas(
   const scratch = document.createElement('canvas');
   const sCtx = scratch.getContext('2d')!;
 
-  // Extract core academic & valuation metrics
-  const safeDer = Math.max(0, stock.debtToEquity);
+  // Extract core academic & valuation metrics (Single Source of Truth from rawTickerData)
+  const rawTd = joeliardiEval.rawTickerData;
+  const safeDer = Math.max(0, rawTd?.debtToEquity ?? stock.debtToEquity);
   const eqMult = 1 + safeDer;
   const roaDuPont = stock.roe / Math.max(1, eqMult);
   const gpToAssets =
@@ -740,9 +741,11 @@ export function renderInspectorReportCanvas(
     stock.grossProfitabilityToAssets ??
     Number((stock.roe * 0.85).toFixed(1));
   const ocfNi =
-    joeliardiEval.ocfToNetIncomeRatio ??
-    stock.ocfToNetIncomeRatio ??
-    0.92;
+    rawTd && typeof rawTd.ocfTTM === 'number' && typeof rawTd.netIncomeTTM === 'number' && rawTd.netIncomeTTM > 0
+      ? Number((rawTd.ocfTTM / rawTd.netIncomeTTM).toFixed(2))
+      : joeliardiEval.ocfToNetIncomeRatio ??
+        stock.ocfToNetIncomeRatio ??
+        0.92;
   const accrualPen = joeliardiEval.accrualPenaltyPts ?? 0;
   const sbn1Y = joeliardiEval.sbnSpot1YPct ?? 6.15;
   const sbn5Y = joeliardiEval.sbnSpot5YPct ?? 6.48;
@@ -1897,8 +1900,8 @@ export function renderInspectorReportCanvas(
       score: joeliardiEval.balanceSheetHealthScore,
       color: '#38BDF8',
       lines: secProfile?.pillar2Lines ?? [
-        `DER: ${stock.debtToEquity.toFixed(2)}x`,
-        `Status Neraca: ${stock.debtToEquity <= 0.8 ? 'Konservatif' : 'Moderat/Tinggi'}`,
+        `DER: ${safeDer.toFixed(2)}x`,
+        `Status Neraca: ${safeDer <= 0.8 ? 'Konservatif' : 'Moderat/Tinggi'}`,
         stock.hscSource === 'KSEI_OFFICIAL' && stock.kseiHscConcentrationPct
           ? `Status HSC: KSEI ${stock.kseiHscConcentrationPct.toFixed(2).replace('.', ',')}%${
               stock.kseiHscIsNew ? ' (BARU)' : ''

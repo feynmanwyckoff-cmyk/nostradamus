@@ -691,8 +691,8 @@ export function interceptCorporateActionAndAnnualize(params: {
   const earningsGrowthYoYPct = Number(
     (
       custom?.earningsGrowthYoYPct ??
-      builtIn?.earningsGrowthYoYPct ??
       stock.earningsGrowthYoYPct ??
+      builtIn?.earningsGrowthYoYPct ??
       heuristicQuarterlyGrowthPct
     ).toFixed(1)
   );

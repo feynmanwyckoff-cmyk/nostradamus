@@ -1689,24 +1689,52 @@ export function computeSbnSpotYieldCurveAndKe(
   const fxRiskShift = Math.max(-0.20, Math.min(0.45, ((usdidr - 16200) / 4000) * 0.35));
   const curveShift = Number((globalRateShift + fxRiskShift).toFixed(2));
 
-  // Check for User SBN 10Y override or Snapshot macroBenchmarks SBN curve
+  // Check for User SBN 10Y override or Snapshot macroBenchmarks SBN curve (supports both sbn10YYieldPct and sbn10YPct)
   const userOverride = getFundamentalUserOverride(stock.ticker);
   const snapshotMacro = getCachedFundamentalsSnapshot()?.macroBenchmarks;
   const proxySbn10Y = Number((6.75 + curveShift * 1.00).toFixed(2));
-  const effectiveSbn10Y =
-    userOverride?.sbn10YOverridePct && userOverride.sbn10YOverridePct > 0
-      ? Number(userOverride.sbn10YOverridePct.toFixed(2))
-      : snapshotMacro?.sbn10YPct &&
-        snapshotMacro.sbn10YPct > 0 &&
-        snapshotMacro.source !== 'PROXY_FORMULA'
-      ? Number(snapshotMacro.sbn10YPct.toFixed(2))
-      : proxySbn10Y;
+  const hasUserSbnOverride =
+    typeof userOverride?.sbn10YOverridePct === 'number' && userOverride.sbn10YOverridePct > 0;
+  const snapshotSbn10Y =
+    typeof snapshotMacro?.sbn10YYieldPct === 'number' && snapshotMacro.sbn10YYieldPct > 0
+      ? snapshotMacro.sbn10YYieldPct
+      : typeof snapshotMacro?.sbn10YPct === 'number' && snapshotMacro.sbn10YPct > 0
+      ? snapshotMacro.sbn10YPct
+      : null;
+  const snapshotSbn5Y =
+    typeof snapshotMacro?.sbn5YYieldPct === 'number' && snapshotMacro.sbn5YYieldPct > 0
+      ? snapshotMacro.sbn5YYieldPct
+      : typeof snapshotMacro?.sbn5YPct === 'number' && snapshotMacro.sbn5YPct > 0
+      ? snapshotMacro.sbn5YPct
+      : null;
+  const snapshotSbn1Y =
+    typeof snapshotMacro?.sbn1YYieldPct === 'number' && snapshotMacro.sbn1YYieldPct > 0
+      ? snapshotMacro.sbn1YYieldPct
+      : typeof snapshotMacro?.sbn1YPct === 'number' && snapshotMacro.sbn1YPct > 0
+      ? snapshotMacro.sbn1YPct
+      : null;
+  const useLiveSnapshotMacro =
+    !hasUserSbnOverride &&
+    snapshotSbn10Y !== null &&
+    snapshotMacro?.source !== 'PROXY_FORMULA';
+
+  const effectiveSbn10Y = hasUserSbnOverride
+    ? Number(userOverride!.sbn10YOverridePct!.toFixed(2))
+    : useLiveSnapshotMacro
+    ? Number(snapshotSbn10Y!.toFixed(2))
+    : proxySbn10Y;
 
   const anchorDelta10Y = effectiveSbn10Y - 6.75;
 
   // Indonesian Government Bond (SBN) Spot Curve Tenors (1Y, 5Y, 10Y)
-  const sbnSpot1YPct = Number((6.15 + anchorDelta10Y * 0.75).toFixed(2));
-  const sbnSpot5YPct = Number((6.48 + anchorDelta10Y * 0.90).toFixed(2));
+  const sbnSpot1YPct =
+    useLiveSnapshotMacro && snapshotSbn1Y !== null
+      ? Number(snapshotSbn1Y.toFixed(2))
+      : Number((6.15 + anchorDelta10Y * 0.75).toFixed(2));
+  const sbnSpot5YPct =
+    useLiveSnapshotMacro && snapshotSbn5Y !== null
+      ? Number(snapshotSbn5Y.toFixed(2))
+      : Number((6.48 + anchorDelta10Y * 0.90).toFixed(2));
   const sbnSpot10YPct = effectiveSbn10Y;
 
   // Equity Duration Weighting (Fabozzi 2012):
@@ -2513,13 +2541,18 @@ export function evaluateJoeliardiOosFundamental(
   availablePortfolioCashIdr?: number,
   explicitMarketRegime?: MarketRegimeStatus
 ): JoeliardiOosEvaluation {
-  // MODUL 2.1: Normalize beta1Y upfront from daily return regression vs ^JKSE (or sector fallback)
-  // so that SBN Ke, 1/Beta Barbell Sizing, and RawTickerData never get stuck at 0.32x
-  const authenticBeta1Y = computeAuthenticBeta1YFromSnapshotOrSeries(
-    rawInputStock.ticker,
-    rawInputStock.sector,
-    rawInputStock.beta1Y
-  );
+  // MODUL 2.1: Use direct live Worker beta1Y when available, else regress daily returns vs ^JKSE
+  const authenticBeta1Y =
+    rawInputStock.priceSource === 'LIVE_YAHOO_API' &&
+    typeof rawInputStock.beta1Y === 'number' &&
+    Number.isFinite(rawInputStock.beta1Y) &&
+    rawInputStock.beta1Y > 0
+      ? Number(rawInputStock.beta1Y.toFixed(2))
+      : computeAuthenticBeta1YFromSnapshotOrSeries(
+          rawInputStock.ticker,
+          rawInputStock.sector,
+          rawInputStock.beta1Y
+        );
   const stock: StockMetrics = {
     ...rawInputStock,
     beta1Y: authenticBeta1Y,
@@ -2527,7 +2560,7 @@ export function evaluateJoeliardiOosFundamental(
   };
 
   const price = Math.max(50, stock.lastPrice);
-  const der = Math.max(0.05, stock.debtToEquity);
+  let der = Math.max(0.05, stock.debtToEquity);
   const opMargin = Math.max(0.5, stock.operatingMargin);
   const isInst = isInstitutionalLiquidCandidate(stock.ticker);
 
@@ -2557,19 +2590,19 @@ export function evaluateJoeliardiOosFundamental(
   );
   const grossProfitabilityToAssets =
     stock.grossProfitabilityToAssets ?? gpAccrual.grossProfitabilityToAssets;
-  const ocfToNetIncomeRatio = stock.ocfToNetIncomeRatio ?? gpAccrual.ocfToNetIncomeRatio;
+  let ocfToNetIncomeRatio = stock.ocfToNetIncomeRatio ?? gpAccrual.ocfToNetIncomeRatio;
   const accrualRatioToAssets = stock.accrualRatioToAssets ?? gpAccrual.accrualRatioToAssets;
 
   // Contextual Anti-Junk (OCF/NI) Penalty Policy based on effectiveModule:
   // Rule A ('Compounder' | 'Pure_Cyclical'): > 0.80x to 1.00x; Rule B ('Capex_Aggressor'): > 0.50x
-  const contextualOcfPolicy = resolveContextualOcfNiPolicy({
+  let contextualOcfPolicy = resolveContextualOcfNiPolicy({
     effectiveModule,
     ocfToNetIncomeRatio,
     accrualRatioToAssets,
     roePct: forwardRoePct
   });
-  const rawAccrualPenaltyScore = contextualOcfPolicy.accrualPenaltyScore;
-  const rawAccrualPenaltyPts = Math.round(rawAccrualPenaltyScore * 8.5); // 0 - 20 pts on 0-100 fundamental scale
+  let rawAccrualPenaltyScore = contextualOcfPolicy.accrualPenaltyScore;
+  let rawAccrualPenaltyPts = Math.round(rawAccrualPenaltyScore * 8.5); // 0 - 20 pts on 0-100 fundamental scale
 
   const baseSectorPbv =
     stock.sector === 'Financials'
@@ -2735,6 +2768,47 @@ export function evaluateJoeliardiOosFundamental(
     isSbnMacroProxy
   });
 
+  // Single Source of Truth Synchronization: Re-derive OCF/NI, CapEx/D&A, and DER directly from rawTickerData
+  // so top cards, bottom financial statement table, PNG export, and PDF report never contradict each other.
+  if (
+    typeof rawTickerData.ocfTTM === 'number' &&
+    typeof rawTickerData.netIncomeTTM === 'number' &&
+    rawTickerData.netIncomeTTM > 0
+  ) {
+    ocfToNetIncomeRatio = Number((rawTickerData.ocfTTM / rawTickerData.netIncomeTTM).toFixed(2));
+  }
+  if (
+    typeof rawTickerData.totalDebt === 'number' &&
+    typeof rawTickerData.equityAttributable === 'number' &&
+    rawTickerData.equityAttributable > 0
+  ) {
+    der = Number(
+      Math.max(0.02, rawTickerData.totalDebt / rawTickerData.equityAttributable).toFixed(2)
+    );
+    rawTickerData.debtToEquity = der;
+  }
+  const syncedCapexToDaRatio =
+    typeof rawTickerData.capexTTM === 'number' &&
+    typeof rawTickerData.daTTM === 'number' &&
+    rawTickerData.daTTM > 0
+      ? Number((rawTickerData.capexTTM / rawTickerData.daTTM).toFixed(2))
+      : prelimRouteInfo.capexToDaRatio;
+  const syncedCapexToRevenueRatio =
+    typeof rawTickerData.capexTTM === 'number' &&
+    typeof rawTickerData.revenueTTM === 'number' &&
+    rawTickerData.revenueTTM > 0
+      ? Number((rawTickerData.capexTTM / rawTickerData.revenueTTM).toFixed(2))
+      : prelimRouteInfo.capexToRevenueRatio;
+
+  contextualOcfPolicy = resolveContextualOcfNiPolicy({
+    effectiveModule,
+    ocfToNetIncomeRatio,
+    accrualRatioToAssets,
+    roePct: forwardRoePct
+  });
+  rawAccrualPenaltyScore = contextualOcfPolicy.accrualPenaltyScore;
+  rawAccrualPenaltyPts = Math.round(rawAccrualPenaltyScore * 8.5);
+
   const sanityReport = validateFundamentalSanity(rawTickerData);
   const adtv20dIdr = sanityReport.normalizedAdtv20dIDR;
 
@@ -2823,7 +2897,7 @@ export function evaluateJoeliardiOosFundamental(
     grossProfitabilityToAssetsPct: grossProfitabilityToAssets,
     ocfToNetIncomeRatio,
     debtToEquityRatio: der,
-    capexToDaRatio: prelimRouteInfo.capexToDaRatio,
+    capexToDaRatio: syncedCapexToDaRatio,
     totalShareholderYieldPct,
     forwardDividendYieldPct,
     dynamicBuybackYieldPct: corpIntercept.dynamicBuybackYieldPct,
@@ -2976,6 +3050,10 @@ export function evaluateJoeliardiOosFundamental(
       ...stock,
       sector: effectiveSectorForValuation,
       roe: valuationRoeBasisPct,
+      debtToEquity: der,
+      ocfToNetIncomeRatio,
+      capexToDaRatio: syncedCapexToDaRatio,
+      capexToRevenueRatio: syncedCapexToRevenueRatio,
       accrualRatioToAssets: sectorProfile.isOcfNiAccrualBypassed ? 0 : accrualRatioToAssets
     },
     price,
@@ -3029,9 +3107,12 @@ export function evaluateJoeliardiOosFundamental(
 
   // METHOD 3 (FUNDAMENTAL LEG 3): Historical 5Y EV/EBITDA Band (Asset-Heavy / Healthcare / Infra) or 5Y Normalized PBV Band (Financials / Properties)
   const evEbitda5YAnchor = calculateHistoricalEvEbitda5YAnchor({
+    ticker: stock.ticker,
     sector:
       sectorProfile.regime === 'FINANCIALS' || sectorProfile.regime === 'PROPERTIES_REAL_ESTATE'
         ? 'Financials'
+        : sectorProfile.regime === 'CYCLICAL_COMMODITIES'
+        ? 'Energy'
         : stock.sector,
     price,
     sharesOutstanding: rawTickerData.sharesOutstanding,
@@ -3425,77 +3506,89 @@ export function evaluateJoeliardiOosFundamental(
   const baseFundSource: DataSourceType = stock.fundamentalsSource ?? 'HARDCODED_SEED';
   const baseFundAsOf = stock.fundamentalsAsOfDate ?? null;
   const baseFiscalPeriod = stock.fundamentalsFiscalPeriod ?? corpIntercept.latestQuarterLabel;
+  const missingSet = new Set(stock.missingFundamentalFields || []);
 
   const revSource: DataSourceType =
     userFundOverride?.revenueTTMIdr && userFundOverride.revenueTTMIdr > 0
       ? 'USER_OVERRIDE'
-      : stock.revenueTTMIdr && stock.revenueTTMIdr > 0
+      : !missingSet.has('revenueTTM') && stock.revenueTTMIdr && stock.revenueTTMIdr > 0
       ? baseFundSource
       : 'HARDCODED_SEED';
   const ebitSource: DataSourceType =
     userFundOverride?.operatingProfitTTMIdr && userFundOverride.operatingProfitTTMIdr > 0
       ? 'USER_OVERRIDE'
-      : stock.operatingProfitTTMIdr && stock.operatingProfitTTMIdr > 0
+      : !missingSet.has('operatingProfitTTM') &&
+        stock.operatingProfitTTMIdr &&
+        stock.operatingProfitTTMIdr > 0
       ? baseFundSource
       : 'HARDCODED_SEED';
   const niSource: DataSourceType =
     userFundOverride?.netIncomeTTMIdr && userFundOverride.netIncomeTTMIdr > 0
       ? 'USER_OVERRIDE'
-      : stock.netIncomeTTMIdr && stock.netIncomeTTMIdr > 0
+      : !missingSet.has('netIncomeTTM') && stock.netIncomeTTMIdr && stock.netIncomeTTMIdr > 0
       ? baseFundSource
       : 'HARDCODED_SEED';
   const eqSource: DataSourceType =
     userFundOverride?.equityAttributableIdr && userFundOverride.equityAttributableIdr > 0
       ? 'USER_OVERRIDE'
-      : stock.equityAttributableIdr && stock.equityAttributableIdr > 0
+      : !missingSet.has('equityAttributable') &&
+        stock.equityAttributableIdr &&
+        stock.equityAttributableIdr > 0
       ? baseFundSource
       : 'HARDCODED_SEED';
   const sharesSource: DataSourceType =
     userFundOverride?.sharesOutstanding && userFundOverride.sharesOutstanding > 0
       ? 'USER_OVERRIDE'
-      : baseFundSource !== 'HARDCODED_SEED' && stock.sharesOutstanding && stock.sharesOutstanding > 0
+      : !missingSet.has('sharesOutstanding') &&
+        baseFundSource !== 'HARDCODED_SEED' &&
+        stock.sharesOutstanding &&
+        stock.sharesOutstanding > 0
       ? baseFundSource
       : 'HARDCODED_SEED';
 
   const debtSource: DataSourceType =
     userFundOverride?.totalDebtIdr !== undefined
       ? 'USER_OVERRIDE'
-      : stock.totalDebtIdr !== undefined && baseFundSource !== 'HARDCODED_SEED'
+      : !missingSet.has('totalDebt') &&
+        stock.totalDebtIdr !== undefined &&
+        baseFundSource !== 'HARDCODED_SEED'
       ? baseFundSource
-      : eqSource !== 'HARDCODED_SEED'
+      : !missingSet.has('totalDebt') && eqSource !== 'HARDCODED_SEED'
       ? eqSource
       : 'HARDCODED_SEED';
   const cashSource: DataSourceType =
     userFundOverride?.cashAndEquivalentsIdr !== undefined
       ? 'USER_OVERRIDE'
-      : stock.cashAndEquivalentsIdr !== undefined && baseFundSource !== 'HARDCODED_SEED'
+      : !missingSet.has('cashAndEquivalents') &&
+        stock.cashAndEquivalentsIdr !== undefined &&
+        baseFundSource !== 'HARDCODED_SEED'
       ? baseFundSource
-      : eqSource !== 'HARDCODED_SEED'
+      : !missingSet.has('cashAndEquivalents') && eqSource !== 'HARDCODED_SEED'
       ? eqSource
       : 'HARDCODED_SEED';
   const ocfSource: DataSourceType =
     userFundOverride?.ocfTTMIdr !== undefined && userFundOverride.ocfTTMIdr > 0
       ? 'USER_OVERRIDE'
-      : stock.ocfTTMIdr !== undefined && baseFundSource !== 'HARDCODED_SEED'
+      : !missingSet.has('ocfTTM') &&
+        stock.ocfTTMIdr !== undefined &&
+        baseFundSource !== 'HARDCODED_SEED'
       ? baseFundSource
-      : niSource !== 'HARDCODED_SEED'
-      ? niSource
       : 'HARDCODED_SEED';
   const capexSource: DataSourceType =
     userFundOverride?.capexTTMIdr !== undefined && userFundOverride.capexTTMIdr > 0
       ? 'USER_OVERRIDE'
-      : stock.capexTTMIdr !== undefined && baseFundSource !== 'HARDCODED_SEED'
+      : !missingSet.has('capexTTM') &&
+        stock.capexTTMIdr !== undefined &&
+        baseFundSource !== 'HARDCODED_SEED'
       ? baseFundSource
-      : revSource !== 'HARDCODED_SEED'
-      ? revSource
       : 'HARDCODED_SEED';
   const daSource: DataSourceType =
     userFundOverride?.daTTMIdr !== undefined && userFundOverride.daTTMIdr > 0
       ? 'USER_OVERRIDE'
-      : stock.daTTMIdr !== undefined && baseFundSource !== 'HARDCODED_SEED'
+      : !missingSet.has('daTTM') &&
+        stock.daTTMIdr !== undefined &&
+        baseFundSource !== 'HARDCODED_SEED'
       ? baseFundSource
-      : ebitSource !== 'HARDCODED_SEED'
-      ? ebitSource
       : 'HARDCODED_SEED';
 
   const epsSource: DataSourceType =
@@ -3516,6 +3609,14 @@ export function evaluateJoeliardiOosFundamental(
       : niSource !== 'HARDCODED_SEED' && eqSource !== 'HARDCODED_SEED'
       ? niSource
       : 'HARDCODED_SEED';
+
+  const activeTtmMethod =
+    stock.ttmMethod || stock.flowAudit?.unifiedMethod || null;
+  const isAuditedFyFallback =
+    activeTtmMethod === 'FY_FALLBACK' && baseFundSource !== 'HARDCODED_SEED';
+  const auditedFySuffix = isAuditedFyFallback
+    ? ' · [AUDITED_FY · Basis FY Auditan Terakhir — Period Aligned]'
+    : '';
 
   const lineageFields: TickerDataLineageReport['fields'] = {
     lastPrice: createTrackedField({
@@ -3574,7 +3675,7 @@ export function evaluateJoeliardiOosFundamental(
         revSource === 'USER_OVERRIDE'
           ? `Override manual Revenue TTM (${userFundOverride?.overrideNote || 'Kalibrasi Manual'})`
           : revSource !== 'HARDCODED_SEED'
-          ? `Revenue TTM terdekumulasi (${stock.fundamentalsNote || 'Decumulated TTM'})`
+          ? `Revenue TTM terdekumulasi (${stock.fundamentalsNote || 'Decumulated TTM'})${auditedFySuffix}`
           : 'Reverse-engineered dari Net Income / Net Margin katalog statis (SEED_WARN — jalankan GitHub Actions / Override Kalibrasi)'
     }),
     operatingProfitTTMIdr: createTrackedField({
@@ -3588,7 +3689,7 @@ export function evaluateJoeliardiOosFundamental(
         ebitSource === 'USER_OVERRIDE'
           ? 'Override manual Laba Usaha (EBIT) TTM'
           : ebitSource !== 'HARDCODED_SEED'
-          ? 'EBIT TTM dari laporan laba rugi terdekumulasi'
+          ? `EBIT TTM dari laporan laba rugi terdekumulasi${auditedFySuffix}`
           : 'Reverse-engineered dari Revenue × defaultOpMargin katalog statis (SEED_WARN)'
     }),
     ebitdaTTMIdr: createTrackedField({
@@ -3598,7 +3699,7 @@ export function evaluateJoeliardiOosFundamental(
         ebitSource === 'USER_OVERRIDE' ? userFundOverride?.updatedAt ?? todayIso : baseFundAsOf,
       fiscalPeriod: baseFiscalPeriod,
       category: 'FUNDAMENTAL',
-      note: 'EBIT TTM + D&A TTM'
+      note: `EBIT TTM + D&A TTM${auditedFySuffix}`
     }),
     netIncomeTTMIdr: createTrackedField({
       value: rawTickerData.netIncomeTTM,
@@ -3611,7 +3712,7 @@ export function evaluateJoeliardiOosFundamental(
         niSource === 'USER_OVERRIDE'
           ? 'Override manual Laba Bersih (Net Income) TTM'
           : niSource !== 'HARDCODED_SEED'
-          ? 'Laba Bersih TTM yang diatribusikan ke entitas induk (terdekumulasi)'
+          ? `Laba Bersih TTM yang diatribusikan ke entitas induk (terdekumulasi)${auditedFySuffix}`
           : 'Reverse-engineered dari EPS sintetik × Shares katalog statis (SEED_WARN)'
     }),
     equityAttributableIdr: createTrackedField({
@@ -3663,7 +3764,7 @@ export function evaluateJoeliardiOosFundamental(
         ocfSource === 'USER_OVERRIDE'
           ? 'Override / rekonsiliasi manual Arus Kas Operasi (OCF) TTM'
           : ocfSource !== 'HARDCODED_SEED'
-          ? 'Arus Kas Operasi (OCF) TTM aktual / terekonsiliasi laporan keuangan'
+          ? `Arus Kas Operasi (OCF) TTM aktual / terekonsiliasi laporan keuangan${auditedFySuffix}`
           : 'Estimasi Net Income × rasio OCF/NI heuristik (SEED_WARN)'
     }),
     capexTTMIdr: createTrackedField({
@@ -3677,7 +3778,7 @@ export function evaluateJoeliardiOosFundamental(
         capexSource === 'USER_OVERRIDE'
           ? 'Override manual Belanja Modal (CapEx) TTM'
           : capexSource !== 'HARDCODED_SEED'
-          ? 'Belanja Modal (CapEx) TTM aktual'
+          ? `Belanja Modal (CapEx) TTM aktual${auditedFySuffix}`
           : 'Estimasi Revenue × rasio CapEx/Revenue sektoral (SEED_WARN)'
     }),
     daTTMIdr: createTrackedField({
@@ -3687,11 +3788,15 @@ export function evaluateJoeliardiOosFundamental(
         daSource === 'USER_OVERRIDE' ? userFundOverride?.updatedAt ?? todayIso : baseFundAsOf,
       fiscalPeriod: baseFiscalPeriod,
       category: 'FUNDAMENTAL',
+      statusOverride:
+        stock.daAnomaly && daSource !== 'USER_OVERRIDE' ? 'ANOMALY' : undefined,
       note:
         daSource === 'USER_OVERRIDE'
           ? 'Override / rekonsiliasi manual Depresiasi & Amortisasi (D&A) TTM'
+          : stock.daAnomaly
+          ? `Anomali D&A terdeteksi (${stock.daMethodNote || 'D&A > 18% atau < 0,8% Revenue'}) — klik Perbaiki untuk kalibrasi manual`
           : daSource !== 'HARDCODED_SEED'
-          ? 'Depresiasi & Amortisasi (D&A) TTM aktual / terekonsiliasi EBITDA − EBIT'
+          ? `Depresiasi & Amortisasi (D&A) TTM aktual (${stock.daMethodNote || 'DIRECT_RECONCILED_DA'})${auditedFySuffix}`
           : 'Estimasi CapEx / rasio CapEx-to-DA sektoral (SEED_WARN)'
     }),
     epsTTMIdr: createTrackedField({
@@ -3703,7 +3808,7 @@ export function evaluateJoeliardiOosFundamental(
       category: 'FUNDAMENTAL',
       note:
         epsSource !== 'HARDCODED_SEED'
-          ? `Net Income TTM / Shares = Rp ${estimatedEpsIdr.toLocaleString('id-ID')}/shm`
+          ? `Net Income TTM / Shares = Rp ${estimatedEpsIdr.toLocaleString('id-ID')}/shm${auditedFySuffix}`
           : `Sintetik BVPS × defaultRoe (${trailingRoePct}%) dari approxPrice katalog (SEED_WARN)`
     }),
     bvpsIdr: createTrackedField({
@@ -3727,7 +3832,7 @@ export function evaluateJoeliardiOosFundamental(
       category: 'FUNDAMENTAL',
       note:
         roeSource !== 'HARDCODED_SEED'
-          ? `Net Income TTM / Equity Attributable = ${ttmRoeBasisPct.toFixed(2)}%`
+          ? `Net Income TTM / Equity Attributable = ${ttmRoeBasisPct.toFixed(2)}%${auditedFySuffix}`
           : `Default ROE katalog statis idxAllEmitenCatalog.ts (${ttmRoeBasisPct.toFixed(2)}%) (SEED_WARN)`
     }),
     sbnSpot10YPct: createTrackedField({
@@ -3811,7 +3916,10 @@ export function evaluateJoeliardiOosFundamental(
       warningBadgeText: sbnFreshness.warningBadgeText
     },
     fields: lineageFields,
-    syncDiagnostics: getSyncDiagnosticsForTicker(stock.ticker)
+    syncDiagnostics: getSyncDiagnosticsForTicker(stock.ticker),
+    ttmMethod: activeTtmMethod,
+    daMethodNote: stock.daMethodNote || null,
+    flowAudit: stock.flowAudit || null
   };
 
   registerLineageReportForDebugger(dataLineage);

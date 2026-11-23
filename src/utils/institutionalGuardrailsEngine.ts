@@ -15,7 +15,10 @@ import {
   ValuationResult
 } from '../types/quant';
 import { getFundamentalUserOverride } from './dataLineageEngine';
-import { resolveAuthenticTotalAssetsIdr } from './sectorMethodologyRouter';
+import {
+  isCpoPlantationTicker,
+  resolveAuthenticTotalAssetsIdr
+} from './sectorMethodologyRouter';
 import embeddedSnapshot from '../data/staticMarketSnapshot.json';
 
 /**
@@ -1026,6 +1029,7 @@ export function calculateInvariantGrahamJoeliardiFloor(
  * and isolated into `TacticalOverlay`.
  */
 export function calculateHistoricalEvEbitda5YAnchor(params: {
+  ticker?: string;
   sector: string;
   price: number;
   sharesOutstanding: number;
@@ -1051,6 +1055,7 @@ export function calculateHistoricalEvEbitda5YAnchor(params: {
   const tickRounder = params.tickRounder ?? roundToIdxTickSize;
   const shares = Math.max(1, params.sharesOutstanding);
   const qualityMult = Math.max(0.65, Math.min(1.12, params.qualityMultiplier ?? 1.0));
+  const isCpo = params.ticker ? isCpoPlantationTicker(params.ticker) : false;
 
   // For Financials (where EV/EBITDA is not meaningful), use 5Y/10Y Historical Normalized PBV Band
   if (params.sector === 'Financials') {
@@ -1089,18 +1094,20 @@ export function calculateHistoricalEvEbitda5YAnchor(params: {
     Math.max(1.5, Math.min(45.0, currentEv / Math.max(1, ebitdaTTM))).toFixed(2)
   );
 
-  const defaultSector5YEvEbitda =
-    params.sector === 'Healthcare'
-      ? 13.5
-      : params.sector === 'Consumer Non-Cyclicals'
-      ? 11.2
-      : params.sector === 'Infrastructures' || params.sector === 'Technology'
-      ? 8.4
-      : params.sector === 'Basic Materials'
-      ? 7.8
-      : params.sector === 'Energy'
-      ? 5.2
-      : 7.5;
+  // CPO/Agri Plantation issuers operate economically as cyclical commodities (~5.5x EV/EBITDA anchor, not 11.2x-11.8x FMCG)
+  const defaultSector5YEvEbitda = isCpo
+    ? 5.5
+    : params.sector === 'Healthcare'
+    ? 13.5
+    : params.sector === 'Consumer Non-Cyclicals'
+    ? 11.2
+    : params.sector === 'Infrastructures' || params.sector === 'Technology'
+    ? 8.4
+    : params.sector === 'Basic Materials'
+    ? 7.8
+    : params.sector === 'Energy'
+    ? 5.2
+    : 7.5;
 
   const fairEvToEbitda5YMean = Number(
     Math.max(3.2, Math.min(22.0, (params.evToEbitda5YMean ?? defaultSector5YEvEbitda) * qualityMult)).toFixed(2)
@@ -1645,12 +1652,15 @@ export function buildRawTickerDataFromStock(params: {
       ? Math.round(stock.revenueTTMIdr * fxScale)
       : Math.round(netIncomeTTM / netMarginDecimal);
 
-  // Calibrate prior full-year revenue and prior-year BVPS from decumulated growth trajectory
+  // Calibrate prior full-year revenue and prior-year BVPS from live Worker latestFullYearRevenueIdr or decumulated growth trajectory
   const safeGrowthClip = Math.max(-0.35, Math.min(0.45, (earningsGrowthYoYPct || 8) / 100));
-  const latestFullYearRevenue = Math.max(
-    1,
-    Math.round(revenueTTM / Math.max(0.75, 1 + safeGrowthClip * 0.65))
-  );
+  const latestFullYearRevenue =
+    stock.latestFullYearRevenueIdr && stock.latestFullYearRevenueIdr > 0
+      ? Math.round(stock.latestFullYearRevenueIdr * fxScale)
+      : Math.max(
+          1,
+          Math.round(revenueTTM / Math.max(0.75, 1 + safeGrowthClip * 0.65))
+        );
   const priorYearBvps = Math.max(
     10,
     Math.round(bvps / Math.max(0.85, 1 + Math.min(0.24, Math.max(0.03, trailingRoePct / 100 * 0.55))))
@@ -1677,7 +1687,13 @@ export function buildRawTickerDataFromStock(params: {
       : stock.daTTMIdr && stock.daTTMIdr > 0
       ? Math.round(stock.daTTMIdr * fxScale)
       : Math.max(1, Math.round(capexTTM / Math.max(0.8, capexToDaRatio || 1.5)));
-  const ebitdaTTM = operatingProfitTTM + daTTM;
+  const ebitdaTTM =
+    !userOverride?.operatingProfitTTMIdr &&
+    !userOverride?.daTTMIdr &&
+    stock.ebitdaTTMIdr &&
+    stock.ebitdaTTMIdr > 0
+      ? Math.round(stock.ebitdaTTMIdr * fxScale)
+      : operatingProfitTTM + daTTM;
   const ocfTTM =
     userOverride?.ocfTTMIdr && userOverride.ocfTTMIdr > 0
       ? Math.round(userOverride.ocfTTMIdr * fxScale)
@@ -1761,12 +1777,18 @@ export function buildRawTickerDataFromStock(params: {
     ? paramRfLastUpdated
     : stock.rfLastUpdated ?? null;
 
-  // MODUL 2.1: Fix beta1Y stuck at 0.32x by regressing daily returns vs ^JKSE or using sector prior
-  const authenticBeta1Y = computeAuthenticBeta1YFromSnapshotOrSeries(
-    stock.ticker,
-    stock.sector,
-    stock.beta1Y
-  );
+  // MODUL 2.1: Use direct live Worker beta1Y when available, else regress daily returns vs ^JKSE
+  const authenticBeta1Y =
+    stock.priceSource === 'LIVE_YAHOO_API' &&
+    typeof stock.beta1Y === 'number' &&
+    Number.isFinite(stock.beta1Y) &&
+    stock.beta1Y > 0
+      ? Number(stock.beta1Y.toFixed(2))
+      : computeAuthenticBeta1YFromSnapshotOrSeries(
+          stock.ticker,
+          stock.sector,
+          stock.beta1Y
+        );
 
   return {
     ticker: stock.ticker,
@@ -1816,6 +1838,9 @@ export function buildRawTickerDataFromStock(params: {
     atr20,
     marketRegime,
     convictionCappedByLineage: convictionCappedByLineage ?? stock.convictionCappedByLineage,
-    isSbnMacroProxy: resolvedIsSbnProxy
+    isSbnMacroProxy: resolvedIsSbnProxy,
+    ttmMethod: stock.ttmMethod,
+    daMethodNote: stock.daMethodNote,
+    flowAudit: stock.flowAudit
   };
 }
