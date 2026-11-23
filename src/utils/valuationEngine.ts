@@ -785,26 +785,15 @@ export const ValuationEngine = {
       );
       const g = Math.min(6.0, Math.min(baseGrowthRatePct, dynamicCostOfEquityPct - 4.0));
       const rawJustifiedPbv =
-        (effectiveRoe - g) / Math.max(4.0, dynamicCostOfEquityPct - g);
+        (effectiveRoe - g) / Math.max(2.0, dynamicCostOfEquityPct - g);
 
-      const moatMultiplier =
-        KBMI4_AND_CONSUMER_MONOPOLY_TICKERS.has(clean)
-          ? 1.12
-          : grossProfitabilityToAssets >= 20
-          ? 1.08
-          : 1.0;
-
+      const upperClamp = effectiveRoe < dynamicCostOfEquityPct ? 0.99 : 6.50;
       const justifiedPbv = Number(
         Math.max(
-          0.55,
+          0.35,
           Math.min(
-            5.6,
-            rawJustifiedPbv *
-              moatMultiplier *
-              derPenaltyMultiplier *
-              accrualQualityMultiplier *
-              hscDiscountMultiplier *
-              catalystValuationMultiplier
+            upperClamp,
+            rawJustifiedPbv
           )
         ).toFixed(2)
       );
@@ -814,6 +803,12 @@ export const ValuationEngine = {
 
       // For Consumer Non-Cyclicals, blend Justified PBV with TTM Cash-Adjusted Quality P/E
       if (stock.sector !== 'Financials') {
+        const moatMultiplier =
+          grossProfitabilityToAssets >= 22.0
+            ? 1.12
+            : grossProfitabilityToAssets >= 15.0
+            ? 1.04
+            : 0.96;
         const cashEpsIdr = Math.max(
           2,
           Math.round(ttmEpsIdr * Math.max(0.82, Math.min(1.16, 0.86 + ocfToNetIncomeRatio * 0.14)))
@@ -1038,22 +1033,19 @@ export const ValuationEngine = {
       ? 1.08
       : 1.0;
 
-    const cyclicalGrowthPct = Number(Math.min(3.5, baseGrowthRatePct * 0.65).toFixed(2));
+    const cyclicalGrowthPct = Number(Math.min(5.5, baseGrowthRatePct).toFixed(2));
     const rawCyclicalJustifiedPbv =
       (normalizedRoePct - cyclicalGrowthPct) /
-      Math.max(2.2, dynamicCostOfEquityPct - cyclicalGrowthPct);
+      Math.max(2.0, dynamicCostOfEquityPct - cyclicalGrowthPct);
 
-    // Blend Normalized Justified PBV with 10Y Mean Replacement PBV
+    // Mathematical Invariant: If Normalized ROE < Ke, Justified PBV MUST be < 1.00x
+    const cyclicalUpperClamp = normalizedRoePct < dynamicCostOfEquityPct ? 0.99 : 6.50;
     const normalizedFairPbv = Number(
       Math.max(
-        0.48,
+        0.35,
         Math.min(
-          3.4,
-          (0.60 * rawCyclicalJustifiedPbv + 0.40 * pbv10YMean) *
-            cyclicalQmjMultiplier *
-            accrualQualityMultiplier *
-            hscDiscountMultiplier *
-            catalystValuationMultiplier
+          cyclicalUpperClamp,
+          rawCyclicalJustifiedPbv
         )
       ).toFixed(2)
     );

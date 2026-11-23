@@ -418,15 +418,21 @@ export interface JoeliardiOosEvaluation {
   totalConvictionScore: number;   // 0 - 100
   convictionGrade:
     | 'A+ (CORE CONVICTION)'
+    | 'A (CORE CONVICTION)'
+    | 'A- (SOLID VALUE)'
     | 'A (SOLID VALUE)'
     | 'B (WATCHLIST / HOLD)'
     | 'C (SEED CAPPED)'
     | 'C (SPECULATIVE)'
     | 'D (AVOID / HSC)'
     | 'DATA_AUDIT_REQUIRED';
-  compactHeaderGradeBadge?: string; // Strict 1-line compact badge (<= 12 chars): e.g. 'A · 84/100', 'B · 69/100', 'C · SEED CAP'
-  compactHeaderDataBadge?: string;  // 'DATA: FRESH' | 'DATA: OVERRIDE' | 'DATA: PROXY' | 'DATA: SEED WARN'
-  compactHeaderDataStatus?: 'FRESH' | 'OVERRIDE' | 'PROXY' | 'SEED_WARN';
+  compactHeaderGradeBadge?: string; // Unified single grade string: e.g. 'A+ (CORE CONVICTION) · SKOR 90/100'
+  compactHeaderDataBadge?: string;  // 'DATA: WORKER' | 'DATA: FRESH' | 'DATA: OVERRIDE' | 'DATA: PROXY' | 'DATA: SEED WARN'
+  compactHeaderDataStatus?: 'WORKER' | 'FRESH' | 'OVERRIDE' | 'PROXY' | 'SEED_WARN';
+  primaryExecutionActionLabel?: string;
+  tranche1Pct?: number;
+  tranche2Pct?: number;
+  maxBarbellCapPct?: number;
   isHighConvictionActionEligible?: boolean;
   trueRoaPct?: number;
   assetLeverageRatio?: number;
@@ -733,6 +739,8 @@ export interface RiskSizingResult {
   adjustedConvictionScore: number;
   finalConvictionGrade:
     | 'A+ (CORE CONVICTION)'
+    | 'A (CORE CONVICTION)'
+    | 'A- (SOLID VALUE)'
     | 'A (SOLID VALUE)'
     | 'B (WATCHLIST / HOLD)'
     | 'C (SEED CAPPED)'

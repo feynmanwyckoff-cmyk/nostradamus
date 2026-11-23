@@ -637,13 +637,13 @@ export function validateFundamentalSanity(raw: RawTickerData): SanityReport {
     catalystConfirmationNote =
       'CATALYST BLOCKED: Pertumbuhan laba/EBIT berasal dari HARDCODED_SEED, bukan laporan keuangan aktual.';
   } else if (isDualCatalystConfirmed) {
-    catalystConfirmationNote = `CATALYST ACTIVE (Dual-Confirmed): Laba Bersih YoY +${(niYoYDecimal * 100).toFixed(1)}% (≥15%) terkonfirmasi searah oleh Laba Usaha (Operating Profit) YoY +${(opProfitYoYDecimal * 100).toFixed(1)}% (≥10%).`;
+    catalystConfirmationNote = `CATALYST ACTIVE (Dual-Confirmed): Laba Bersih YoY +${(niYoYDecimal * 100).toFixed(1)}% (Min. 15%) terkonfirmasi searah oleh Laba Usaha (Operating Profit) YoY +${(opProfitYoYDecimal * 100).toFixed(1)}% (Min. 10%).`;
   } else if (isNiSurge && !isOpProfitConfirmed) {
     flags.push('CATALYST_UNCONFIRMED_NON_OP');
-    catalystConfirmationNote = `CATALYST REJECTED (Non-Operating Spike): Laba Bersih YoY +${(niYoYDecimal * 100).toFixed(1)}% (≥15%) TIDAK terkonfirmasi oleh Laba Usaha YoY (${(opProfitYoYDecimal * 100).toFixed(1)}% < +10%). Sinyal Catalyst Active diblokir untuk mencegah distorsi laba non-operasional.`;
-    reasons.push(`[CATALYST_UNCONFIRMED_NON_OP] ${catalystConfirmationNote}`);
+    catalystConfirmationNote = `[Guardrail Kualitas Laba — Katalis Non-Operasional Ditolak] Laba Bersih YoY +${(niYoYDecimal * 100).toFixed(1)}% (Min. 15%) TIDAK terkonfirmasi oleh Laba Usaha YoY (${(opProfitYoYDecimal * 100).toFixed(1)}% < +10%). Sinyal Catalyst Active diblokir untuk mencegah distorsi laba non-operasional.`;
+    reasons.push(catalystConfirmationNote);
   } else {
-    catalystConfirmationNote = `Basis TTM Standar: Pertumbuhan Laba Bersih YoY ${(niYoYDecimal * 100).toFixed(1)}% & Laba Usaha YoY ${(opProfitYoYDecimal * 100).toFixed(1)}% berada di bawah ambang Dual-Confirmation Catalyst (NI ≥15% & EBIT ≥10%).`;
+    catalystConfirmationNote = `Basis TTM Standar: Pertumbuhan Laba Bersih YoY ${(niYoYDecimal * 100).toFixed(1)}% & Laba Usaha YoY ${(opProfitYoYDecimal * 100).toFixed(1)}% berada di bawah ambang Dual-Confirmation Catalyst (NI Min. 15% & EBIT Min. 10%).`;
   }
 
   // -------------------------------------------------------------------------
@@ -1236,7 +1236,7 @@ export function applyDispersionPenalty(
       isDispersionPenalized: false,
       dispersionPenaltyPts: 0,
       adjustedConvictionScore: input.rawConvictionScore,
-      tranche1ScalingFactor: 0.55
+      tranche1ScalingFactor: 0.60
     };
   }
 
@@ -1281,8 +1281,146 @@ export function applyDispersionPenalty(
     isDispersionPenalized,
     dispersionPenaltyPts,
     adjustedConvictionScore,
-    tranche1ScalingFactor: isDispersionPenalized ? 0.35 : 0.55,
+    tranche1ScalingFactor: isDispersionPenalized ? 0.35 : 0.60,
     penaltyReason
+  };
+}
+
+/**
+ * Single Source of Truth for Conviction Grade string across Header Badges, Banner, Risk Sizing & Narrative.
+ */
+export function resolveConvictionGrade(
+  score: number,
+  options?: {
+    isHscFlagged?: boolean;
+    maxAllowedStatus?: SanityReport['maxAllowedStatus'];
+    sanityStatus?: SanityReport['status'];
+    isRfStale?: boolean;
+    preserveLegacySolidValueForStaleRf?: boolean;
+  }
+): RiskSizingResult['finalConvictionGrade'] {
+  if (options?.isHscFlagged) {
+    return 'D (AVOID / HSC)';
+  }
+  if (options?.maxAllowedStatus === 'DATA_AUDIT_REQUIRED' || options?.sanityStatus === 'FAIL') {
+    return 'DATA_AUDIT_REQUIRED';
+  }
+  if (
+    options?.maxAllowedStatus === 'WATCHLIST_SEED_CAPPED' ||
+    options?.sanityStatus === 'SEED_WARN'
+  ) {
+    return 'C (SEED CAPPED)';
+  }
+  if (score >= 85 && !options?.isRfStale) {
+    return 'A+ (CORE CONVICTION)';
+  }
+  if (score >= 80 && !options?.isRfStale) {
+    return 'A (CORE CONVICTION)';
+  }
+  if (score >= 75) {
+    return options?.isRfStale || options?.preserveLegacySolidValueForStaleRf
+      ? 'A (SOLID VALUE)'
+      : 'A- (SOLID VALUE)';
+  }
+  if (score >= 65) {
+    return 'B (WATCHLIST / HOLD)';
+  }
+  return 'C (SPECULATIVE)';
+}
+
+/**
+ * Single Source of Truth for Primary Execution Recommendation Thesis (Header vs Narrative vs StatArb Overlay).
+ */
+export function resolveExecutionThesis(params: {
+  score: number;
+  convictionGrade: RiskSizingResult['finalConvictionGrade'];
+  sanityStatus?: SanityReport['status'];
+  isWeakMoat?: boolean;
+  isHscPenaltyActive?: boolean;
+  isDispersionPenalized?: boolean;
+  isNonOpCatalystRejected?: boolean;
+  marginOfSafetyPct?: number;
+}): {
+  primaryActionLabel: string;
+  holdingFactorsExplanation: string;
+  narrativeExecutionSentence: string;
+} {
+  const {
+    score,
+    convictionGrade,
+    sanityStatus,
+    isWeakMoat,
+    isHscPenaltyActive,
+    isDispersionPenalized,
+    isNonOpCatalystRejected
+  } = params;
+
+  if (convictionGrade === 'D (AVOID / HSC)') {
+    return {
+      primaryActionLabel: 'HINDARI / JANGAN AKUMULASI (HARD BLOCK HSC)',
+      holdingFactorsExplanation: 'Terdeteksi risiko tata kelola / konsentrasi kepemilikan ekstrem KSEI (High Shareholder Concentration).',
+      narrativeExecutionSentence: 'HINDARI / JANGAN AKUMULASI (HARD BLOCK HSC) — terdeteksi risiko konsentrasi kepemilikan ekstrem KSEI.'
+    };
+  }
+
+  if (convictionGrade === 'DATA_AUDIT_REQUIRED' || sanityStatus === 'FAIL') {
+    return {
+      primaryActionLabel: 'TUNDA EKSEKUSI — WAJIB AUDIT DATA FUNDAMENTAL',
+      holdingFactorsExplanation: 'Ditemukan anomali rekonsiliasi data fundamental (CRITICAL_DATA_MISMATCH / YTD_CUMULATIVE_SUM_SUSPECT).',
+      narrativeExecutionSentence: 'TUNDA EKSEKUSI — WAJIB AUDIT DATA FUNDAMENTAL sebelum alokasi modal.'
+    };
+  }
+
+  if (
+    convictionGrade === 'C (SEED CAPPED)' ||
+    convictionGrade === 'C (SPECULATIVE)' ||
+    sanityStatus === 'SEED_WARN' ||
+    score < 65
+  ) {
+    return {
+      primaryActionLabel: 'SPECULATIVE WATCHLIST / TUNGGU AUDIT DATA',
+      holdingFactorsExplanation:
+        sanityStatus === 'SEED_WARN' || convictionGrade === 'C (SEED CAPPED)'
+          ? 'Data fundamental masih berstatus fallback katalog statis (SEED_WARN) atau skor konviksi di bawah ambang 65/100.'
+          : 'Skor konviksi di bawah ambang institusional 65/100 atau bantalan Margin of Safety belum memadai.',
+      narrativeExecutionSentence:
+        'SPECULATIVE WATCHLIST / TUNGGU AUDIT DATA — tahan alokasi modal baru hingga kualitas fundamental dan diskon valuasi terkonfirmasi.'
+    };
+  }
+
+  if (convictionGrade === 'B (WATCHLIST / HOLD)' || (score >= 65 && score < 75)) {
+    const factors: string[] = [];
+    if (isWeakMoat) factors.push('Weak Moat Penalty (ROE/ROIC di bawah Cost of Equity)');
+    if (isHscPenaltyActive) factors.push('HSC Concentration Penalty');
+    if (isDispersionPenalized) factors.push('Epistemic Dispersion (>40% antar-model valuasi)');
+    if (isNonOpCatalystRejected) factors.push('Guardrail Kualitas Laba (Katalis Non-Operasional Ditolak)');
+    if (factors.length === 0) {
+      factors.push('Skor konviksi berada di pita transisi 65-74/100 atau Margin of Safety moderat');
+    }
+    const factorStr = factors.join(', ');
+    return {
+      primaryActionLabel: 'WATCHLIST / HOLD — TUNGGU KONFIRMASI SKOR ATAU DISKON LEBIH DALAM',
+      holdingFactorsExplanation: `Faktor penahan utama: ${factorStr}.`,
+      narrativeExecutionSentence: `WATCHLIST / HOLD — TUNGGU KONFIRMASI SKOR ATAU DISKON LEBIH DALAM (Faktor penahan: ${factorStr}).`
+    };
+  }
+
+  if (
+    convictionGrade === 'A- (SOLID VALUE)' ||
+    convictionGrade === 'A (SOLID VALUE)' ||
+    (score >= 75 && score < 80)
+  ) {
+    return {
+      primaryActionLabel: 'AKUMULASI SELEKTIF DI ZONA DISKON',
+      holdingFactorsExplanation: 'Fundamental solid (Skor 75-79/100, Grade A-) dengan disiplin masuk ketat di rentang harga diskon.',
+      narrativeExecutionSentence: 'AKUMULASI SELEKTIF DI ZONA DISKON melalui pembagian Tranche 1 (60%) dan Tranche 2 (40%).'
+    };
+  }
+
+  return {
+    primaryActionLabel: 'LAYAK AKUMULASI BERTAHAP (CORE CONVICTION)',
+    holdingFactorsExplanation: 'Kualitas bisnis, neraca, dan Margin of Safety memenuhi standar tertinggi Core Conviction (Skor Min. 80/100).',
+    narrativeExecutionSentence: 'LAYAK AKUMULASI BERTAHAP (CORE CONVICTION) dengan disiplin pembagian Tranche 1 (60%) dan Tranche 2 (40%).'
   };
 }
 
@@ -1445,31 +1583,18 @@ export function calculateVolatilityTargetedSizingAndStop(
     )
   );
 
-  let finalConvictionGrade: RiskSizingResult['finalConvictionGrade'];
-  if (input.isHscFlagged) {
-    finalConvictionGrade = 'D (AVOID / HSC)';
-  } else if (input.sanityReport.maxAllowedStatus === 'DATA_AUDIT_REQUIRED') {
-    // P0.1 & Hotfix 1 Guardrail: Block Grade A / Core Conviction if CRITICAL_DATA_MISMATCH or YTD_CUMULATIVE_SUM_SUSPECT
-    finalConvictionGrade = 'DATA_AUDIT_REQUIRED';
-  } else if (
-    input.sanityReport.maxAllowedStatus === 'WATCHLIST_SEED_CAPPED' ||
-    input.sanityReport.status === 'SEED_WARN'
-  ) {
-    // MODUL 2.2 Guardrail: Hardcoded seed fundamentals uniformly display C (SEED CAPPED)
-    finalConvictionGrade = 'C (SEED CAPPED)';
-  } else if (adjustedConvictionScore >= 82 && !input.sanityReport.isRfStale) {
-    finalConvictionGrade = 'A+ (CORE CONVICTION)';
-  } else if (adjustedConvictionScore >= 75) {
-    // Grade A requires finalScore >= 75 per Modul 2 Action Lock specification
-    finalConvictionGrade = 'A (SOLID VALUE)';
-  } else if (adjustedConvictionScore >= 58) {
-    finalConvictionGrade = 'B (WATCHLIST / HOLD)';
-  } else {
-    finalConvictionGrade = 'C (SPECULATIVE)';
-  }
+  const finalConvictionGrade = resolveConvictionGrade(adjustedConvictionScore, {
+    isHscFlagged: input.isHscFlagged,
+    maxAllowedStatus: input.sanityReport.maxAllowedStatus,
+    sanityStatus: input.sanityReport.status,
+    isRfStale: input.sanityReport.isRfStale,
+    preserveLegacySolidValueForStaleRf: true
+  });
 
   const isCoreOrSolidGrade =
     finalConvictionGrade === 'A+ (CORE CONVICTION)' ||
+    finalConvictionGrade === 'A (CORE CONVICTION)' ||
+    finalConvictionGrade === 'A- (SOLID VALUE)' ||
     finalConvictionGrade === 'A (SOLID VALUE)';
 
   const stopLossMode: RiskSizingResult['stopLossMode'] = isCoreOrSolidGrade
@@ -1483,13 +1608,13 @@ export function calculateVolatilityTargetedSizingAndStop(
     `Invalidasi Integritas Data: Status SANITY_CHECK berubah menjadi FAIL (CRITICAL_DATA_MISMATCH / YTD_CUMULATIVE_SUM_SUSPECT) atau muncul indikasi distribusi tidak wajar KSEI.`
   ];
 
-  const trancheExecutionGuide = `Tranche 1 (Inisiasi): ${tranche1AllocationPct.toFixed(
-    1
+  const trancheExecutionGuide = `Tranche 1 (Inisiasi ${input.dispersionPenalty.isDispersionPenalized ? '35%' : '60%'}): ${tranche1AllocationPct.toFixed(
+    2
   )}% ekuitas${
     input.dispersionPenalty.isDispersionPenalized ? ' [Dibatasi Penalti Dispersi >40%]' : ''
-  } · Tranche 2 (Konfirmasi Laba/Support): +${tranche2AllocationPct.toFixed(
-    1
-  )}% (Total Plafon Maks ${finalMaxAllocationPct.toFixed(1)}%).`;
+  } · Tranche 2 (Konfirmasi Laba/Support ${input.dispersionPenalty.isDispersionPenalized ? '65%' : '40%'}): +${tranche2AllocationPct.toFixed(
+    2
+  )}% (Total Plafon Maks. ${finalMaxAllocationPct.toFixed(2)}%).`;
 
   return {
     beta1Y: Number(beta1Y.toFixed(2)),

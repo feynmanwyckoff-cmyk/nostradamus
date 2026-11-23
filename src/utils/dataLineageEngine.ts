@@ -589,10 +589,15 @@ export function resolveUiNotificationBadgeMeta(rawMessage: string): UiNotificati
     };
   }
 
-  if (upper.includes('CATALYST_UNCONFIRMED_NON_OP') || upper.includes('CATALYST REJECTED')) {
+  if (
+    upper.includes('CATALYST_UNCONFIRMED_NON_OP') ||
+    upper.includes('CATALYST REJECTED') ||
+    upper.includes('GUARDRAIL KUALITAS LABA') ||
+    upper.includes('KATALIS NON-OPERASIONAL DITOLAK')
+  ) {
     return {
-      badgeLabel: 'CATALYST GUARD',
-      cleanMessage: msg,
+      badgeLabel: 'GUARDRAIL KUALITAS LABA',
+      cleanMessage: msg.replace(/^IPO\s+Guardrail\s*\/\s*/i, '').trim(),
       pillBgHex: '#6D28D9',
       pillTextHex: '#FFFFFF',
       boxBgHex: '#F5F3FF',
@@ -677,10 +682,10 @@ export function resolveCalibratorFieldProvenanceBadge(
   }
   if (field?.source === 'LIVE_YAHOO_API') {
     return {
-      label: 'LIVE REALTIME',
+      label: 'LIVE CLOUDFLARE WORKER',
       isRealtimeOrFresh: true,
       className: 'bg-sky-950/90 text-sky-300 border-sky-500/50',
-      tooltip: field?.note || 'Data real-time langsung dari Yahoo Finance API (status FRESH)',
+      tooltip: field?.note || 'Data real-time langsung dari Cloudflare Worker / Yahoo Finance API (status FRESH)',
     };
   }
   if (field?.source === 'FUNDAMENTALS_JSON' || field?.source === 'SNAPSHOT_JSON') {

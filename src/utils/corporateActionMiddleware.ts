@@ -739,9 +739,20 @@ export function interceptCorporateActionAndAnnualize(params: {
   );
 
   // Resolve Share Buyback, Official IDX Shares Outstanding & Live Market Cap (IDR)
+  // FIX 1.2: Eliminate Ghost Buyback when data originates from LIVE_REALTIME_WORKER (LIVE_YAHOO_API) or FUNDAMENTALS_JSON
+  // unless the user explicitly inputs a buyback override in the Calibration Modal (custom?.hasActiveBuyback).
+  const isLiveOrSnapshotSource =
+    stock.fundamentalsSource === 'LIVE_YAHOO_API' ||
+    stock.fundamentalsSource === 'FUNDAMENTALS_JSON';
+  const hasExplicitUserBuybackOverride =
+    custom?.hasActiveBuyback !== undefined ||
+    (typeof custom?.buybackNominalBillionIdr === 'number' && custom.buybackNominalBillionIdr > 0);
+
   const hasActiveBuyback = Boolean(
-    custom?.hasActiveBuyback !== undefined
-      ? custom.hasActiveBuyback
+    hasExplicitUserBuybackOverride
+      ? (custom?.hasActiveBuyback ?? true)
+      : isLiveOrSnapshotSource
+      ? false
       : builtIn?.hasActiveBuyback ?? stock.hasActiveBuyback ?? false
   );
 
@@ -749,9 +760,10 @@ export function interceptCorporateActionAndAnnualize(params: {
     ? Math.max(
         0,
         Number(
-          custom?.buybackNominalBillionIdr ??
-            builtIn?.buybackNominalBillionIdr ??
-            (stock.buybackNominalIdr ? stock.buybackNominalIdr / 1_000_000_000 : 0)
+          hasExplicitUserBuybackOverride
+            ? custom?.buybackNominalBillionIdr ?? 0
+            : builtIn?.buybackNominalBillionIdr ??
+              (stock.buybackNominalIdr ? stock.buybackNominalIdr / 1_000_000_000 : 0)
         )
       )
     : 0;
@@ -1043,11 +1055,11 @@ export function evaluateDynamicDecisionTree(params: {
   if (isSeedCapped || finalConvictionGrade === 'C (SEED CAPPED)') {
     return {
       decisionState: 'WAIT_FOR_PULLBACK',
-      decisionActionLabel: 'Hold / Watchlist (C · SEED CAPPED)',
-      recommendedActionText: `Hold / Watchlist (C · SEED CAPPED — SANITY: SEED_WARN) — Aksi agresif dikunci hingga laporan keuangan TTM terverifikasi live atau dikalibrasi manual; akumulasi bertahap hanya jika harga terkoreksi memenuhi syarat MoS Dinamis ≥ ${dynamicRequiredMosPct.toFixed(1)}%.`,
+      decisionActionLabel: 'SPECULATIVE WATCHLIST / TUNGGU AUDIT DATA',
+      recommendedActionText: `SPECULATIVE WATCHLIST / TUNGGU AUDIT DATA (C · SEED CAPPED — SANITY: SEED_WARN) — Aksi agresif dikunci hingga laporan keuangan TTM terverifikasi live atau dikalibrasi manual; akumulasi bertahap hanya jika harga terkoreksi memenuhi syarat MoS Dinamis Min. ${dynamicRequiredMosPct.toFixed(1)}%.`,
       idealBuyLowIdr: pullbackLow,
       idealBuyHighIdr: pullbackHigh,
-      formattedAccumulationZone: `Rentang Akumulasi Konservatif (Syarat MoS ≥ ${dynamicRequiredMosPct.toFixed(1)}%): Rp ${pullbackLow.toLocaleString('id-ID')} – Rp ${pullbackHigh.toLocaleString('id-ID')} | Nilai Wajar Ensemble (TTM): Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): WATCHLIST / SEED CAPPED (MoS ${marginOfSafetyPct >= 0 ? '+' : ''}${marginOfSafetyPct.toFixed(1)}%, Syarat MoS ≥ ${dynamicRequiredMosPct.toFixed(1)}%)`,
+      formattedAccumulationZone: `Rentang Akumulasi Konservatif (Syarat MoS Min. ${dynamicRequiredMosPct.toFixed(1)}%): Rp ${pullbackLow.toLocaleString('id-ID')} - Rp ${pullbackHigh.toLocaleString('id-ID')} | Nilai Wajar Ensemble (TTM): Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): WATCHLIST / SEED CAPPED (MoS ${marginOfSafetyPct >= 0 ? '+' : ''}${marginOfSafetyPct.toFixed(1)}%, Syarat MoS Min. ${dynamicRequiredMosPct.toFixed(1)}%)`,
       dynamicRequiredMosPct,
       excessReturnSpreadPct
     };
@@ -1065,11 +1077,11 @@ export function evaluateDynamicDecisionTree(params: {
     const high = tickRounder(Math.max(lastPriceIdr * 1.03, Math.min(intrinsicValueIdr * 0.90, lastPriceIdr * 1.08)));
     return {
       decisionState: 'STRONG_BUY_CYCLICAL_ZSCORE',
-      decisionActionLabel: 'STRONG BUY // CYCLICAL PBV Z-SCORE ≤ -1.5σ',
-      recommendedActionText: `Strong Buy Siklikal (PBV Z-Score ${pbvZScore?.toFixed(2) ?? '-1.50'}σ ≤ -1.5σ dari rata-rata 10 tahun) — Emiten komoditas/siklikal berbiaya rendah dengan neraca sehat (DER ≤ 1x) berada di dasar siklus valuasi buku.`,
+      decisionActionLabel: 'LAYAK AKUMULASI BERTAHAP (CORE CONVICTION)',
+      recommendedActionText: `LAYAK AKUMULASI BERTAHAP (CORE CONVICTION) — Siklikal di dasar siklus valuasi buku (PBV Z-Score ${pbvZScore?.toFixed(2) ?? '-1.50'} SD Maks. -1.5 SD dari rata-rata 10 tahun) dengan neraca sehat (DER Maks. 1.0x).`,
       idealBuyLowIdr: Math.min(low, high),
       idealBuyHighIdr: Math.max(low, high),
-      formattedAccumulationZone: `Rentang Beli Siklikal (Z ≤ -1.5σ): Rp ${Math.min(low, high).toLocaleString('id-ID')} – Rp ${Math.max(low, high).toLocaleString('id-ID')} | Nilai Wajar Siklus: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): STRONG BUY DASAR SIKLUS (MoS ${marginOfSafetyPct >= 0 ? '+' : ''}${marginOfSafetyPct.toFixed(1)}%)`,
+      formattedAccumulationZone: `Rentang Beli Siklikal (Z Maks. -1.5 SD): Rp ${Math.min(low, high).toLocaleString('id-ID')} - Rp ${Math.max(low, high).toLocaleString('id-ID')} | Nilai Wajar Siklus: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): LAYAK AKUMULASI BERTAHAP (MoS ${marginOfSafetyPct >= 0 ? '+' : ''}${marginOfSafetyPct.toFixed(1)}%)`,
       dynamicRequiredMosPct,
       excessReturnSpreadPct
     };
@@ -1133,11 +1145,14 @@ export function evaluateDynamicDecisionTree(params: {
     const high = tickRounder(Math.max(lastPriceIdr * 1.02, intrinsicValueIdr));
     return {
       decisionState: 'ACCUMULATE_QUALITY_FAIR_VALUE',
-      decisionActionLabel: 'ACCUMULATE // PREMIUM FAIR VALUE (EXCESS RETURN > 10%)',
+      decisionActionLabel:
+        finalConvictionGrade === 'A- (SOLID VALUE)' || finalConvictionGrade === 'A (SOLID VALUE)'
+          ? 'AKUMULASI SELEKTIF DI ZONA DISKON'
+          : 'LAYAK AKUMULASI BERTAHAP (CORE CONVICTION)',
       recommendedActionText: `Akumulasi Rasional di Nilai Wajar — Excess Return tinggi (+${excessReturnSpreadPct.toFixed(1)}% di atas Ke ${costOfEquityPct.toFixed(2)}%) mengompresi syarat batas aman MoS menjadi ${dynamicRequiredMosPct.toFixed(1)}%. Emiten compounder premium pada Fair Value adalah sinyal akumulasi rasional.`,
       idealBuyLowIdr: Math.min(low, high),
       idealBuyHighIdr: Math.max(low, high),
-      formattedAccumulationZone: `Rentang Akumulasi Fair Value (Syarat MoS ≥ ${dynamicRequiredMosPct.toFixed(1)}%): Rp ${Math.min(low, high).toLocaleString('id-ID')} – Rp ${Math.max(low, high).toLocaleString('id-ID')} | Nilai Wajar: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): AKUMULASI RASIONAL (Excess Return +${excessReturnSpreadPct.toFixed(1)}%, MoS ${marginOfSafetyPct >= 0 ? '+' : ''}${marginOfSafetyPct.toFixed(1)}%)`,
+      formattedAccumulationZone: `Rentang Akumulasi Fair Value (Syarat MoS Min. ${dynamicRequiredMosPct.toFixed(1)}%): Rp ${Math.min(low, high).toLocaleString('id-ID')} - Rp ${Math.max(low, high).toLocaleString('id-ID')} | Nilai Wajar: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): AKUMULASI RASIONAL (Excess Return +${excessReturnSpreadPct.toFixed(1)}%, MoS ${marginOfSafetyPct >= 0 ? '+' : ''}${marginOfSafetyPct.toFixed(1)}%)`,
       dynamicRequiredMosPct,
       excessReturnSpreadPct
     };
@@ -1152,39 +1167,52 @@ export function evaluateDynamicDecisionTree(params: {
       ? Math.max(low, intrinsicAccumulationCeiling)
       : Math.max(low, tickRounder(Math.min(lastPriceIdr, intrinsicAccumulationCeiling)));
 
+    const isSpeculativeGrade = finalConvictionGrade === 'C (SPECULATIVE)';
     const isWatchlistGrade =
       !isHighConvictionActionEligible ||
       finalConvictionGrade === 'B (WATCHLIST / HOLD)' ||
-      finalConvictionGrade === 'C (SPECULATIVE)';
+      isSpeculativeGrade;
 
     return {
-      decisionState: 'ACCUMULATE_DEEP_MOS',
-      decisionActionLabel: isWatchlistGrade
-        ? 'Watchlist / Cicil Konservatif (MoS Terpenuhi)'
-        : 'ACCUMULATE // DEEP MARGIN OF SAFETY',
-      recommendedActionText: isWatchlistGrade
-        ? `Watchlist / Akumulasi Bertahap Konservatif (Buy on Weakness) — Harga spot berada ${marginOfSafetyPct.toFixed(1)}% di bawah Nilai Wajar (melampaui syarat MoS dinamis ${dynamicRequiredMosPct.toFixed(1)}%), namun peringkat ${finalConvictionGrade || 'B (WATCHLIST / HOLD)'} mewajibkan disiplin ukuran posisi.`
-        : 'Akumulasi Bertahap (Buy on Weakness / Cicil 2–3 Tahap) di area diskon nilai wajar.',
+      decisionState: isWatchlistGrade ? 'WAIT_FOR_PULLBACK' : 'ACCUMULATE_DEEP_MOS',
+      decisionActionLabel: isSpeculativeGrade
+        ? 'SPECULATIVE WATCHLIST / TUNGGU AUDIT DATA'
+        : isWatchlistGrade
+        ? 'WATCHLIST / HOLD — TUNGGU KONFIRMASI SKOR ATAU DISKON LEBIH DALAM'
+        : finalConvictionGrade === 'A- (SOLID VALUE)' || finalConvictionGrade === 'A (SOLID VALUE)'
+        ? 'AKUMULASI SELEKTIF DI ZONA DISKON'
+        : 'LAYAK AKUMULASI BERTAHAP (CORE CONVICTION)',
+      recommendedActionText: isSpeculativeGrade
+        ? `SPECULATIVE WATCHLIST / TUNGGU AUDIT DATA — Skor konviksi masih di bawah ambang institusional 65/100; tahan alokasi modal baru.`
+        : isWatchlistGrade
+        ? `WATCHLIST / HOLD — TUNGGU KONFIRMASI SKOR ATAU DISKON LEBIH DALAM — Harga spot berada ${marginOfSafetyPct.toFixed(1)}% di bawah Nilai Wajar (melampaui syarat MoS dinamis ${dynamicRequiredMosPct.toFixed(1)}%), namun peringkat ${finalConvictionGrade || 'B (WATCHLIST / HOLD)'} menahan sinyal akumulasi penuh.`
+        : finalConvictionGrade === 'A- (SOLID VALUE)' || finalConvictionGrade === 'A (SOLID VALUE)'
+        ? 'AKUMULASI SELEKTIF DI ZONA DISKON — Akumulasi bertahap (Tranche 1: 60% / Tranche 2: 40%) di area diskon nilai wajar.'
+        : 'LAYAK AKUMULASI BERTAHAP (CORE CONVICTION) — Akumulasi bertahap (Tranche 1: 60% / Tranche 2: 40%) di area diskon nilai wajar.',
       idealBuyLowIdr: low,
       idealBuyHighIdr: high,
-      formattedAccumulationZone: `Rentang Beli Ideal: Rp ${low.toLocaleString('id-ID')} – Rp ${high.toLocaleString('id-ID')} | Nilai Wajar: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): TERDISKON / MURAH (Harga saat ini ${marginOfSafetyPct.toFixed(1)}% di bawah Nilai Wajar, melampaui syarat MoS ${dynamicRequiredMosPct.toFixed(1)}%)`,
+      formattedAccumulationZone: `Rentang Beli Ideal: Rp ${low.toLocaleString('id-ID')} - Rp ${high.toLocaleString('id-ID')} | Nilai Wajar: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): ${isWatchlistGrade ? 'WATCHLIST / HOLD' : 'TERDISKON / MURAH'} (Harga saat ini ${marginOfSafetyPct.toFixed(1)}% di bawah Nilai Wajar, syarat MoS Min. ${dynamicRequiredMosPct.toFixed(1)}%)`,
       dynamicRequiredMosPct,
       excessReturnSpreadPct
     };
   }
 
   // Branch 6: Wait for Pullback / Hold Watchlist (No Active High-Conviction Catalyst or MoS below dynamic threshold)
+  const isSpeculativeFallback = finalConvictionGrade === 'C (SPECULATIVE)';
   return {
     decisionState: 'WAIT_FOR_PULLBACK',
-    decisionActionLabel: 'Hold / Tunggu Koreksi Wajar',
-    recommendedActionText:
-      'Hold / Tunggu Koreksi Wajar (Buy on Pullback) agar mendapatkan ruang Margin of Safety yang memenuhi syarat MoS Dinamis.',
+    decisionActionLabel: isSpeculativeFallback
+      ? 'SPECULATIVE WATCHLIST / TUNGGU AUDIT DATA'
+      : 'WATCHLIST / HOLD — TUNGGU KONFIRMASI SKOR ATAU DISKON LEBIH DALAM',
+    recommendedActionText: isSpeculativeFallback
+      ? 'SPECULATIVE WATCHLIST / TUNGGU AUDIT DATA — Tahan alokasi modal baru hingga kualitas fundamental dan diskon valuasi terkonfirmasi.'
+      : 'WATCHLIST / HOLD — TUNGGU KONFIRMASI SKOR ATAU DISKON LEBIH DALAM agar mendapatkan ruang Margin of Safety yang memenuhi syarat MoS Dinamis.',
     idealBuyLowIdr: pullbackLow,
     idealBuyHighIdr: pullbackHigh,
     formattedAccumulationZone:
       marginOfSafetyPct >= 0
-        ? `Rentang Beli Ideal: Rp ${pullbackLow.toLocaleString('id-ID')} – Rp ${pullbackHigh.toLocaleString('id-ID')} | Nilai Wajar: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): HOLD / WATCHLIST (MoS +${marginOfSafetyPct.toFixed(1)}% < syarat MoS dinamis ${dynamicRequiredMosPct.toFixed(1)}%, tunggu koreksi ke rentang akumulasi)`
-        : `Rentang Beli Ideal: Rp ${pullbackLow.toLocaleString('id-ID')} – Rp ${pullbackHigh.toLocaleString('id-ID')} | Nilai Wajar: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): MAHAL / PREMIUM (Harga saat ini ${Math.abs(marginOfSafetyPct).toFixed(1)}% di atas Nilai Wajar, tunggu koreksi ke rentang beli ideal)`,
+        ? `Rentang Beli Ideal: Rp ${pullbackLow.toLocaleString('id-ID')} - Rp ${pullbackHigh.toLocaleString('id-ID')} | Nilai Wajar: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): WATCHLIST / HOLD (MoS +${marginOfSafetyPct.toFixed(1)}% < syarat MoS dinamis Min. ${dynamicRequiredMosPct.toFixed(1)}%, tunggu koreksi ke rentang akumulasi)`
+        : `Rentang Beli Ideal: Rp ${pullbackLow.toLocaleString('id-ID')} - Rp ${pullbackHigh.toLocaleString('id-ID')} | Nilai Wajar: Rp ${intrinsicValueIdr.toLocaleString('id-ID')} — Status Harga Spot (Rp ${lastPriceIdr.toLocaleString('id-ID')}): MAHAL / PREMIUM (Harga saat ini ${Math.abs(marginOfSafetyPct).toFixed(1)}% di atas Nilai Wajar, tunggu koreksi ke rentang beli ideal)`,
     dynamicRequiredMosPct,
     excessReturnSpreadPct
   };

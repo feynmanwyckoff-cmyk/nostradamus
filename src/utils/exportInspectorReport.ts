@@ -29,6 +29,11 @@ interface RichWordToken {
 }
 
 const VERDICT_TERMS = [
+  'LAYAK AKUMULASI BERTAHAP (CORE CONVICTION)',
+  'AKUMULASI SELEKTIF DI ZONA DISKON',
+  'WATCHLIST / HOLD — TUNGGU KONFIRMASI SKOR ATAU DISKON LEBIH DALAM',
+  'WATCHLIST / HOLD - TUNGGU KONFIRMASI SKOR ATAU DISKON LEBIH DALAM',
+  'SPECULATIVE WATCHLIST / TUNGGU AUDIT DATA',
   'STRONG BUY: ANOMALI ASET DEFENSIF TERDISKON',
   'BUY ON STRENGTH // CATALYST ACTIVE',
   'BUY ON STRENGTH / CATALYST',
@@ -62,6 +67,30 @@ const VERDICT_TERMS = [
   'BLOKIR HSC',
   'ROTATE OUT'
 ];
+
+/**
+ * Sanitizes fragile Unicode characters (≤, ≥, ×, →, −, ↔, σ, ρ, ω, β) into standard ASCII
+ * so no PDF/canvas font fallback ever renders "≤ 8.5%" as "58.5%" or "18.5%" or "≥ 25.0%" as "2 25.0%".
+ */
+export function sanitizePdfAsciiText(raw: string): string {
+  if (!raw) return '';
+  return String(raw)
+    .replace(/IPO\s+Guardrail\s*\/\s*/gi, '')
+    .replace(/≤\s*/g, 'Maks. ')
+    .replace(/≥\s*/g, 'Min. ')
+    .replace(/×/g, 'x')
+    .replace(/→/g, '->')
+    .replace(/↔/g, '<->')
+    .replace(/−/g, '-')
+    .replace(/1\/β/g, '1/Beta')
+    .replace(/β/g, 'Beta ')
+    .replace(/ω=/g, 'omega=')
+    .replace(/ρ=/g, 'rho=')
+    .replace(/\(ρ\)/g, '(rho)')
+    .replace(/([+-]?\d+(?:[.,]\d+)?)σ/g, '$1 SD')
+    .replace(/σ_m(?:onthly)?/g, 'Vol_m')
+    .replace(/\s{2,}/g, ' ');
+}
 
 const METRIC_LABELS = [
   'Ohlson-Penman RIM',
@@ -200,13 +229,14 @@ function drawTextAutoFit(
   minFontSize = 8.0,
   fontFamily = 'Montserrat, sans-serif'
 ): void {
+  const safeText = sanitizePdfAsciiText(text);
   let fontSize = initialFontSize;
   ctx.font = `${weight} ${fontSize}px ${fontFamily}`;
-  while (ctx.measureText(text).width > maxWidth && fontSize > minFontSize) {
+  while (ctx.measureText(safeText).width > maxWidth && fontSize > minFontSize) {
     fontSize = Number((fontSize - 0.25).toFixed(2));
     ctx.font = `${weight} ${fontSize}px ${fontFamily}`;
   }
-  ctx.fillText(text, x, y, Math.max(10, maxWidth));
+  ctx.fillText(safeText, x, y, Math.max(10, maxWidth));
 }
 
 function getExportNewsCategoryStyle(cat?: EmitenNewsCategory): {
@@ -246,7 +276,7 @@ function getExportNewsCategoryStyle(cat?: EmitenNewsCategory): {
       };
     default:
       return {
-        label: 'BERITA EMITEN (≤ 3 BULAN)',
+        label: 'BERITA EMITEN (MAKS. 3 BULAN)',
         textColor: '#D1D5DB',
         bgColor: 'rgba(156, 163, 175, 0.12)',
         borderColor: 'rgba(156, 163, 175, 0.35)'
@@ -300,7 +330,7 @@ function getExportSentimentToneStyle(
 }
 
 function tokenizeFinancialNarrative(text: string, ticker?: string): RichWordToken[] {
-  const cleanedText = String(text || '')
+  const cleanedText = sanitizePdfAsciiText(String(text || ''))
     .replace(/\s+/g, ' ')
     .trim();
   if (!cleanedText) return [];
@@ -444,7 +474,7 @@ function splitExportTitledStep(
   body: string;
   conclusion: string | null;
 } {
-  const cleaned = String(stepText || '').trim();
+  const cleaned = sanitizePdfAsciiText(String(stepText || '')).trim();
   const colonIdx = cleaned.indexOf(':');
   let header: string | null = null;
   let remainder = cleaned;
@@ -453,14 +483,14 @@ function splitExportTitledStep(
     header = cleaned.slice(0, colonIdx + 1).trim();
     remainder = cleaned.slice(colonIdx + 1).trim();
   } else if (typeof fallbackIndex === 'number' && DEFAULT_COT_TITLES[fallbackIndex]) {
-    header = DEFAULT_COT_TITLES[fallbackIndex];
+    header = sanitizePdfAsciiText(DEFAULT_COT_TITLES[fallbackIndex]);
   }
 
   const arrowParts = remainder.split(/\s*(?:->|→)\s*/);
   if (arrowParts.length > 1) {
     return {
       header,
-      body: arrowParts.slice(0, -1).join(' → ').trim(),
+      body: arrowParts.slice(0, -1).join(' -> ').trim(),
       conclusion: arrowParts[arrowParts.length - 1].trim() || null
     };
   }
@@ -476,7 +506,7 @@ function wrapCanvasText(
   text: string,
   maxWidth: number
 ): string[] {
-  const words = String(text || '')
+  const words = sanitizePdfAsciiText(String(text || ''))
     .replace(/\s+/g, ' ')
     .trim()
     .split(' ');
@@ -752,11 +782,27 @@ export function renderInspectorReportCanvas(
   const sbn10Y = joeliardiEval.sbnSpot10YPct ?? 6.75;
   const sbnBlended = joeliardiEval.sbnBlendedSpotRfPct ?? 6.64;
   const dynKe = joeliardiEval.dynamicCostOfEquityPct ?? 12.64;
-  const justPbv = joeliardiEval.joeliardiFairPbv;
+  const justPbvNum = Number(joeliardiEval.joeliardiFairPbv);
+  const justPbv = justPbvNum.toFixed(2);
+  const secFairMultStr = Number(
+    joeliardiEval.sectorPrimaryFairMultiple ?? joeliardiEval.joeliardiFairPbv
+  ).toFixed(2);
+  const secImpMultStr = Number(
+    joeliardiEval.sectorPrimaryImpliedMultiple ?? joeliardiEval.impliedPbv
+  ).toFixed(2);
   const sustGrowth = joeliardiEval.sustainableGrowthRatePct ?? 5.5;
   const betaPropensity =
     stock.betaWeightedPropensity ?? 1 / Math.max(0.45, stock.beta1Y);
-  const betaCap = joeliardiEval.betaWeightedSizingCapPct ?? 14.0;
+  const betaCap =
+    joeliardiEval.maxBarbellCapPct ?? joeliardiEval.betaWeightedSizingCapPct ?? 14.0;
+  const tranche1Pct =
+    joeliardiEval.tranche1Pct ??
+    joeliardiEval.riskSizingResult?.tranche1AllocationPct ??
+    Number((betaCap * 0.6).toFixed(2));
+  const tranche2Pct =
+    joeliardiEval.tranche2Pct ??
+    joeliardiEval.riskSizingResult?.tranche2AllocationPct ??
+    Number((betaCap - tranche1Pct).toFixed(2));
   const secProfile = joeliardiEval.sectorMethodologyProfile;
   const hasSectorNoticeBanner = Boolean(joeliardiEval.sectorMethodologyNotice);
   const sectorNoticeBannerTotalH = hasSectorNoticeBanner ? 44 : 0;
@@ -770,7 +816,10 @@ export function renderInspectorReportCanvas(
   const hscBannerTotalH = hasHscBanner ? hscBannerBoxH + 14 : 0;
 
   // 2. Pre-measure Optional Active Catalyst & Corporate Action Middleware Telemetry Banner
-  const hasCatalystBanner = Boolean(joeliardiEval.isCatalystActive);
+  const hasCatalystBanner = Boolean(
+    joeliardiEval.isCatalystActive &&
+      joeliardiEval.sanityReport?.isDualCatalystConfirmed !== false
+  );
   const catalystLeftMaxW = LOGICAL_WIDTH - 76 - 290;
   sCtx.font = '500 10.5px Montserrat, sans-serif';
   const catalystNarrativeLines = hasCatalystBanner
@@ -1033,8 +1082,7 @@ export function renderInspectorReportCanvas(
   const stopMatch = ex?.InvalidationOrRiskLimit?.match(/Rp\s*[\d.,]+/i);
   const extractedStop = stopMatch ? stopMatch[0] : `Rp ${formatIdrPriceDisplay(stopPriceIdr)}`;
   const betaProp = stock.betaWeightedPropensity ?? 1 / Math.max(0.45, stock.beta1Y);
-  const betaCapPct = joeliardiEval.betaWeightedSizingCapPct ?? 14.0;
-  const minAllocPct = Number(Math.max(2.0, betaCapPct * 0.5).toFixed(1));
+  const betaCapPct = betaCap;
   const basketLabel =
     stock.beta1Y <= 0.85 ? 'Keranjang 1 (Core Defensif)' : 'Keranjang 2 (Tactical Alpha)';
 
@@ -1065,12 +1113,12 @@ export function renderInspectorReportCanvas(
             : '#FBBF24',
           kvRows: [] as Array<{ k: string; v: string; vColor: string }>,
           lines: [
-            ex.recommendedAction.replace(/^Strong\s+Buy\s*[:—-]\s*/i, ''),
+            (joeliardiEval.primaryExecutionActionLabel || ex.recommendedAction).replace(/^Strong\s+Buy\s*[:—-]\s*/i, ''),
             stock.isHscFlagged
               ? '▸ Jangan alokasikan modal inti pada saham berstatus konsentrasi HSC.'
               : joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST'
               ? '▸ Momentum laba/buyback aktif memvalidasi akumulasi bertahap tanpa menunggu diskon dalam.'
-              : '▸ Bagi order beli dalam 2–3 termin untuk mengoptimalkan harga rata-rata (average cost).'
+              : '▸ Bagi order beli dalam 2 termin (60% Tranche 1 / 40% Tranche 2) untuk mengoptimalkan harga rata-rata.'
           ],
           color: '#F3F4F6'
         },
@@ -1114,31 +1162,33 @@ export function renderInspectorReportCanvas(
           badgeColor: '#FB7185',
           kvRows: [] as Array<{ k: string; v: string; vColor: string }>,
           lines: [
-            `▸ ATR/Vol Stop: Rp ${formatIdrPriceDisplay(joeliardiEval.riskSizingResult?.stopLossPriceIDR ?? stopPriceIdr)} (-${joeliardiEval.riskSizingResult?.stopLossPct ?? 12}%, max[2.5×ATR20, 1.5×σ_m]).`,
-            `▸ Tranche & Floor: T1 (${joeliardiEval.riskSizingResult?.tranche1AllocationPct ?? 3.5}%) · T2 (${joeliardiEval.riskSizingResult?.tranche2AllocationPct ?? 2.8}%) · Floor Stop Rp ${formatIdrPriceDisplay(joeliardiEval.grahamJoeliardiBenchmarkIdr ?? stopPriceIdr)}.`,
+            `▸ ATR/Vol Stop: Rp ${formatIdrPriceDisplay(joeliardiEval.riskSizingResult?.stopLossPriceIDR ?? stopPriceIdr)} (-${joeliardiEval.riskSizingResult?.stopLossPct ?? 12}%, max[2.5xATR20, 1.5xVol_m]).`,
+            `▸ Tranche & Floor: T1 (${tranche1Pct.toFixed(2)}%) · T2 (${tranche2Pct.toFixed(2)}%) · Floor Stop Rp ${formatIdrPriceDisplay(joeliardiEval.grahamJoeliardiBenchmarkIdr ?? stopPriceIdr)}.`,
             `▸ Trigger Moat & Kas: Cut jika GP/A < 10% atau OCF/NI < 0,65x (${extractedStop}).`
           ],
           color: '#F3F4F6'
         },
         {
           label: '4. VOL-TARGETED BARBELL & ADTV',
-          badge: `Max Cap ≤${betaCapPct.toFixed(1)}%`,
+          badge: `Maks. ${betaCapPct.toFixed(2)}%`,
           badgeColor: '#38BDF8',
           kvRows: [
             { k: 'Alokasi:', v: basketLabel, vColor: '#F9FAFB' },
             {
-              k: 'min(1/β,1/Vol,Reg):',
-              v: `${minAllocPct}% – ${betaCapPct.toFixed(1)}% (1/β ${betaProp.toFixed(2)}x)`,
+              k: 'T1 (60%) + T2 (40%):',
+              v: `${tranche1Pct.toFixed(2)}% + ${tranche2Pct.toFixed(2)}% = ${betaCapPct.toFixed(2)}% (1/Beta ${betaProp.toFixed(2)}x)`,
               vColor: '#38BDF8'
             },
             {
               k: '5% ADTV 20D:',
-              v: `≤ Rp ${safeAdtvMillionsExportStr} Jt/hr`,
+              v: `Maks. Rp ${safeAdtvMillionsExportStr} Jt/hr`,
               vColor: '#34D399'
             }
           ],
           lines: [
-            ex.liquidityWarningBadge || '✓ LIQUIDITY VERIFIED: Kapasitas 5% ADTV Aman'
+            sanitizePdfAsciiText(
+              ex.liquidityWarningBadge || '✓ LIQUIDITY VERIFIED: Kapasitas 5% ADTV Aman'
+            )
           ],
           color: ex.isLiquidityCapped ? '#FBBF24' : '#34D399'
         }
@@ -1313,9 +1363,7 @@ export function renderInspectorReportCanvas(
   // Strict 1-Line Compact Header Badges next to Kicker (Grade, Data Status, Catalyst, Split)
   let kickerBadgeX = headerTextX + ctx.measureText('NOSTRADAMUS').width + 10;
 
-  const compactGradeStr =
-    joeliardiEval.compactHeaderGradeBadge ||
-    `${joeliardiEval.convictionGrade} · ${joeliardiEval.totalConvictionScore}/100`;
+  const compactGradeStr = `${joeliardiEval.convictionGrade} · SKOR ${joeliardiEval.totalConvictionScore}/100`;
   ctx.font = '700 9.0px "Fira Code", monospace';
   const cgW = ctx.measureText(compactGradeStr).width + 14;
   drawRoundedRect(ctx, kickerBadgeX, 29, cgW, 18, 3);
@@ -1347,40 +1395,40 @@ export function renderInspectorReportCanvas(
   ctx.fillText(compactGradeStr, kickerBadgeX + 7, 41);
   kickerBadgeX += cgW + 6;
 
+  const isWorkerOrFreshData =
+    joeliardiEval.compactHeaderDataStatus === 'FRESH' ||
+    joeliardiEval.compactHeaderDataStatus === 'WORKER';
   const compactDataStr = joeliardiEval.compactHeaderDataBadge || 'DATA: FRESH';
   const cdW = ctx.measureText(compactDataStr).width + 14;
   drawRoundedRect(ctx, kickerBadgeX, 29, cdW, 18, 3);
-  ctx.fillStyle =
-    joeliardiEval.compactHeaderDataStatus === 'FRESH'
-      ? 'rgba(16, 185, 129, 0.20)'
-      : joeliardiEval.compactHeaderDataStatus === 'OVERRIDE'
-      ? 'rgba(99, 102, 241, 0.22)'
-      : joeliardiEval.compactHeaderDataStatus === 'SEED_WARN'
-      ? 'rgba(225, 29, 72, 0.22)'
-      : 'rgba(245, 158, 11, 0.22)';
+  ctx.fillStyle = isWorkerOrFreshData
+    ? 'rgba(16, 185, 129, 0.20)'
+    : joeliardiEval.compactHeaderDataStatus === 'OVERRIDE'
+    ? 'rgba(99, 102, 241, 0.22)'
+    : joeliardiEval.compactHeaderDataStatus === 'SEED_WARN'
+    ? 'rgba(225, 29, 72, 0.22)'
+    : 'rgba(245, 158, 11, 0.22)';
   ctx.fill();
-  ctx.strokeStyle =
-    joeliardiEval.compactHeaderDataStatus === 'FRESH'
-      ? '#10B981'
-      : joeliardiEval.compactHeaderDataStatus === 'OVERRIDE'
-      ? '#818CF8'
-      : joeliardiEval.compactHeaderDataStatus === 'SEED_WARN'
-      ? '#F43F5E'
-      : '#F59E0B';
+  ctx.strokeStyle = isWorkerOrFreshData
+    ? '#10B981'
+    : joeliardiEval.compactHeaderDataStatus === 'OVERRIDE'
+    ? '#818CF8'
+    : joeliardiEval.compactHeaderDataStatus === 'SEED_WARN'
+    ? '#F43F5E'
+    : '#F59E0B';
   ctx.stroke();
-  ctx.fillStyle =
-    joeliardiEval.compactHeaderDataStatus === 'FRESH'
-      ? '#34D399'
-      : joeliardiEval.compactHeaderDataStatus === 'OVERRIDE'
-      ? '#A5B4FC'
-      : joeliardiEval.compactHeaderDataStatus === 'SEED_WARN'
-      ? '#FDA4AF'
-      : '#FCD34D';
+  ctx.fillStyle = isWorkerOrFreshData
+    ? '#34D399'
+    : joeliardiEval.compactHeaderDataStatus === 'OVERRIDE'
+    ? '#A5B4FC'
+    : joeliardiEval.compactHeaderDataStatus === 'SEED_WARN'
+    ? '#FDA4AF'
+    : '#FCD34D';
   ctx.fillText(compactDataStr, kickerBadgeX + 7, 41);
   kickerBadgeX += cdW + 6;
 
-  if (joeliardiEval.isCatalystActive) {
-    const catLabel = `✦ ${joeliardiEval.catalystBadgeLabel || 'CATALYST ACTIVE'}`;
+  if (hasCatalystBanner && joeliardiEval.catalystBadgeLabel) {
+    const catLabel = `✦ ${joeliardiEval.catalystBadgeLabel}`;
     ctx.font = '700 9.0px "Fira Code", monospace';
     const catW = ctx.measureText(catLabel).width + 14;
     drawRoundedRect(ctx, kickerBadgeX, 29, catW, 18, 3);
@@ -1773,11 +1821,9 @@ export function renderInspectorReportCanvas(
     {
       label: `MATRIKS SEKTOR (${joeliardiEval.sectorPrimaryMetricShort ?? 'PBV'}) & PBV`,
       labelColor: '#9CA3AF',
-      main: `${joeliardiEval.sectorPrimaryMetricShort ?? 'PBV'} ${
-        joeliardiEval.sectorPrimaryImpliedMultiple ?? joeliardiEval.impliedPbv
-      }x (Wajar ${joeliardiEval.sectorPrimaryFairMultiple ?? justPbv}x)`,
+      main: `${joeliardiEval.sectorPrimaryMetricShort ?? 'PBV'} ${secImpMultStr}x (Wajar ${secFairMultStr}x)`,
       mainColor: '#F9FAFB',
-      sub: `PBV ${joeliardiEval.impliedPbv}x (Wajar ${justPbv}x) · PER ${joeliardiEval.impliedPer}x`,
+      sub: `PBV ${joeliardiEval.impliedPbv.toFixed(2)}x (Wajar ${justPbv}x) · PER ${joeliardiEval.impliedPer.toFixed(2)}x`,
       subColor: '#38BDF8'
     }
   ];
@@ -1923,7 +1969,7 @@ export function renderInspectorReportCanvas(
       color: '#F59E0B',
       lines: [
         `Justified PBV: ${justPbv}x (g ${sustGrowth.toFixed(1)}%)`,
-        `Spot SBN Blended: ${sbnBlended.toFixed(2)}% → Ke ${dynKe.toFixed(2)}%`,
+        `Spot SBN Blended: ${sbnBlended.toFixed(2)}% -> Ke ${dynKe.toFixed(2)}%`,
         `State: ${
           joeliardiEval.isHighConvictionActionEligible &&
           joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST'
@@ -1935,13 +1981,13 @@ export function renderInspectorReportCanvas(
       ]
     },
     {
-      title: secProfile?.pillar4Title || '4. 1/β Barbell Position Sizing',
+      title: secProfile?.pillar4Title || '4. 1/Beta Barbell Position Sizing',
       score: joeliardiEval.oosQuantRobustnessScore,
       color: '#10B981',
       lines: [
         `Komposit: ${stock.dmuCompositeScore.toFixed(2)}/10 (Top ${stock.dmuRankPct}%)`,
-        `Propensitas 1/β: ${betaPropensity.toFixed(2)}x (β ${stock.beta1Y.toFixed(2)}x)`,
-        `Batas Alokasi Maks (1/β Cap): ≤${betaCap.toFixed(1)}%`
+        `Propensitas 1/Beta: ${betaPropensity.toFixed(2)}x (Beta ${stock.beta1Y.toFixed(2)}x)`,
+        `Batas Alokasi Maks: Maks. ${betaCap.toFixed(2)}% (T1 ${tranche1Pct.toFixed(2)}% + T2 ${tranche2Pct.toFixed(2)}%)`
       ]
     }
   ];
@@ -2940,9 +2986,9 @@ export function renderInspectorReportCanvas(
       color: accrualPen === 0 ? '#34D399' : '#FBBF24'
     },
     {
-      label: 'JUSTIFIED PBV & SIZING 1/β',
+      label: 'JUSTIFIED PBV & SIZING 1/BETA',
       mainVal: `PBV Wajar ${justPbv}x`,
-      subVal: `(MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct.toFixed(1)}% · Cap 1/β ≤${betaCap.toFixed(1)}%)`,
+      subVal: `(MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct.toFixed(1)}% · Cap Maks. ${betaCap.toFixed(2)}%)`,
       color: '#38BDF8'
     }
   ];
@@ -3521,7 +3567,7 @@ export function renderInspectorReportCanvas(
     ctx.fillText(countStr, LOGICAL_WIDTH - 38, curY + 17);
     ctx.textAlign = 'left';
 
-    const filterPillStr = '✓ Filter Aktif: Maks. 3 Bulan Terakhir (≤ 90 Hari)';
+    const filterPillStr = '✓ Filter Aktif: Maks. 3 Bulan Terakhir (Maks. 90 Hari)';
     ctx.font = '700 9.0px "Fira Code", monospace';
     const fPillW = ctx.measureText(filterPillStr).width + 16;
     const fPillX = LOGICAL_WIDTH - 38 - countW - 12 - fPillW;
@@ -3650,22 +3696,28 @@ export function renderInspectorReportCanvas(
     ctx.lineWidth = 1.3;
     ctx.stroke();
 
-    // Header Row
+    const fmtCompactIdr = (v: number): string => {
+      const a = Math.abs(v);
+      if (a >= 1e12) return `Rp ${(v / 1e12).toFixed(2)} T`;
+      if (a >= 1e9) return `Rp ${(v / 1e9).toFixed(2)} M`;
+      if (a >= 1e6) return `Rp ${(v / 1e6).toFixed(1)} Jt`;
+      return `Rp ${Math.round(v).toLocaleString('id-ID')}`;
+    };
+
+    // Header Row with explicit · separators: MktCap Rp XX T · Rev Rp XX T · NI Rp XX T · ADTV Rp XX M/hr
     const dl = joeliardiEval.dataLineage;
-    const dlTag = dl
-      ? ` · LINEAGE: ${dl.overallIntegrityStatus} (FRESH:${dl.freshFieldCount} STALE:${dl.staleFieldCount} SEED:${dl.seedFieldCount})`
-      : '';
+    const coreSummaryStrip = `MktCap ${fmtCompactIdr(raw.marketCap)} · Rev ${fmtCompactIdr(raw.revenueTTM)} · NI ${fmtCompactIdr(raw.netIncomeTTM)} · ADTV ${fmtCompactIdr(sanity.normalizedAdtv20dIDR)}/hr`;
     ctx.fillStyle = '#F59E0B';
-    ctx.font = '700 10px "Fira Code", monospace';
+    ctx.font = '700 9.6px "Fira Code", monospace';
     drawTextAutoFit(
       ctx,
-      `RAW DATA AUDIT STRIP (P0–P3 PROVENANCE) · ${raw.ticker} · BASIS: TTM_DEFAULT${dlTag}`,
+      `RAW DATA AUDIT STRIP (${raw.ticker}) · ${coreSummaryStrip}`,
       stripX + 14,
       stripY + 20,
-      stripW - 470,
+      stripW - 460,
       700,
-      10,
-      7.5,
+      9.6,
+      7.4,
       '"Fira Code", monospace'
     );
 
@@ -3685,8 +3737,8 @@ export function renderInspectorReportCanvas(
     const statusBadgeText = `SANITY: ${sanity.status}${
       allFlags.length > 0 ? ` [${allFlags.join(', ')}]` : ''
     }`;
-    ctx.font = '700 9.5px "Fira Code", monospace';
-    const sbW = Math.min(440, ctx.measureText(statusBadgeText).width + 18);
+    ctx.font = '700 9.2px "Fira Code", monospace';
+    const sbW = Math.min(435, ctx.measureText(statusBadgeText).width + 18);
     const sbX = stripX + stripW - 14 - sbW;
     drawRoundedRect(ctx, sbX, stripY + 6, sbW, 20, 3);
     const isWarnOrSeed =
@@ -3710,8 +3762,8 @@ export function renderInspectorReportCanvas(
       stripY + 19,
       sbW - 18,
       700,
-      9.5,
-      7.5,
+      9.2,
+      7.2,
       '"Fira Code", monospace'
     );
 
@@ -3721,55 +3773,54 @@ export function renderInspectorReportCanvas(
     ctx.lineTo(stripX + stripW - 14, stripY + 30);
     ctx.stroke();
 
-    const fmtCompactIdr = (v: number): string => {
-      const a = Math.abs(v);
-      if (a >= 1e12) return `Rp ${(v / 1e12).toFixed(2)} T`;
-      if (a >= 1e9) return `Rp ${(v / 1e9).toFixed(2)} M`;
-      if (a >= 1e6) return `Rp ${(v / 1e6).toFixed(1)} Jt`;
-      return `Rp ${Math.round(v).toLocaleString('id-ID')}`;
-    };
-
     const spotRf10YPct = raw.spotRf10Y <= 1 ? raw.spotRf10Y * 100 : raw.spotRf10Y;
     const rawRoic = raw.roicTTM ?? 0.14;
     const roicPct = rawRoic <= 1 ? rawRoic * 100 : rawRoic;
 
+    const resolveAuditTag = (src?: string, st?: string) =>
+      src === 'USER_OVERRIDE'
+        ? 'OVERRIDE'
+        : src === 'LIVE_YAHOO_API'
+        ? 'WORKER'
+        : st ?? 'RAW';
+
     const auditCells = [
       {
-        label: `SHARES [${dl?.fields.sharesOutstanding.source === 'USER_OVERRIDE' ? 'OVERRIDE' : dl?.fields.sharesOutstanding.status ?? 'RAW'}]`,
+        label: `SHARES [${resolveAuditTag(dl?.fields.sharesOutstanding.source, dl?.fields.sharesOutstanding.status)}]`,
         val:
           raw.sharesOutstanding >= 1e9
             ? `${(raw.sharesOutstanding / 1e9).toFixed(2)} M lbr`
             : `${Math.round(raw.sharesOutstanding).toLocaleString('id-ID')} lbr`,
-        sub: `Δ Implied: ${(sanity.sharesMismatchPct * 100).toFixed(2)}%`
+        sub: `Delta: ${(sanity.sharesMismatchPct * 100).toFixed(2)}%`
       },
       {
-        label: `MARKETCAP [${dl?.fields.lastPrice.source === 'LIVE_YAHOO_API' ? 'LIVE' : 'SNAP'}]`,
+        label: `MKTCAP [${dl?.fields.lastPrice.source === 'LIVE_YAHOO_API' ? 'WORKER' : 'SNAP'}]`,
         val: fmtCompactIdr(raw.marketCap),
         sub: `Px: Rp ${raw.price.toLocaleString('id-ID')}`
       },
       {
-        label: `REV_TTM [${dl?.fields.revenueTTMIdr.source === 'USER_OVERRIDE' ? 'OVERRIDE' : dl?.fields.revenueTTMIdr.status ?? 'RAW'}]`,
+        label: `REV_TTM [${resolveAuditTag(dl?.fields.revenueTTMIdr.source, dl?.fields.revenueTTMIdr.status)}]`,
         val: fmtCompactIdr(raw.revenueTTM),
         sub: `OP YoY: ${(raw.operatingProfitYoYPct ?? 0) >= 0 ? '+' : ''}${(raw.operatingProfitYoYPct ?? 0).toFixed(1)}%`
       },
       {
-        label: `NI_TTM [${dl?.fields.netIncomeTTMIdr.source === 'USER_OVERRIDE' ? 'OVERRIDE' : dl?.fields.netIncomeTTMIdr.status ?? 'RAW'}]`,
+        label: `NI_TTM [${resolveAuditTag(dl?.fields.netIncomeTTMIdr.source, dl?.fields.netIncomeTTMIdr.status)}]`,
         val: fmtCompactIdr(raw.netIncomeTTM),
-        sub: `Δ EPS×Shr: ${(sanity.netIncomeMismatchPct * 100).toFixed(2)}%`
+        sub: `Delta EPS: ${(sanity.netIncomeMismatchPct * 100).toFixed(2)}%`
       },
       {
-        label: `EQUITY [${dl?.fields.equityAttributableIdr.source === 'USER_OVERRIDE' ? 'OVERRIDE' : dl?.fields.equityAttributableIdr.status ?? 'RAW'}]`,
+        label: `EQUITY [${resolveAuditTag(dl?.fields.equityAttributableIdr.source, dl?.fields.equityAttributableIdr.status)}]`,
         val: fmtCompactIdr(raw.equityAttributable),
-        sub: `Δ BVPS×Shr: ${(sanity.equityMismatchPct * 100).toFixed(2)}%`
+        sub: `Delta BVPS: ${(sanity.equityMismatchPct * 100).toFixed(2)}%`
       },
       {
-        label: `CAPEX_TTM [${dl?.fields.capexTTMIdr.status ?? 'RAW'}]`,
+        label: `CAPEX_TTM [${resolveAuditTag(dl?.fields.capexTTMIdr.source, dl?.fields.capexTTMIdr.status)}]`,
         val: fmtCompactIdr(raw.capexTTM),
         sub: `ROIC: ${roicPct.toFixed(1)}%`
       },
       {
-        label: `ADTV_20D [${dl?.fields.adtv20dIdr.source === 'LIVE_YAHOO_API' ? 'LIVE_VOL' : dl?.fields.adtv20dIdr.status ?? 'RAW'}]`,
-        val: fmtCompactIdr(sanity.normalizedAdtv20dIDR),
+        label: `ADTV_20D [${dl?.fields.adtv20dIdr.source === 'LIVE_YAHOO_API' ? 'WORKER' : dl?.fields.adtv20dIdr.status ?? 'RAW'}]`,
+        val: `${fmtCompactIdr(sanity.normalizedAdtv20dIDR)}/hr`,
         sub: `5% Cap: ${fmtCompactIdr(sanity.maxDailyAbsorption5PctIDR)}`
       },
       {
@@ -3837,13 +3888,13 @@ export function renderInspectorReportCanvas(
 
     // Bottom P1 & P2 Summary Telemetry Line inside RawDataAuditStrip
     const p1Summary = valRes
-      ? `P1: Ensemble Rp ${valRes.ensembleFairValue.toLocaleString('id-ID')} | Floor 3-5Y Rp ${valRes.standaloneFloor.toLocaleString('id-ID')} (${valRes.isFloorClamped ? 'CLAMPED ≤90%' : 'INVARIANT OK'}) | 2-Stage RI g1=${(valRes.stage1GrowthRate * 100).toFixed(1)}%·gT=${(valRes.terminalGrowthRate * 100).toFixed(1)}%`
+      ? `P1: Ensemble Rp ${valRes.ensembleFairValue.toLocaleString('id-ID')} · Floor 3-5Y Rp ${valRes.standaloneFloor.toLocaleString('id-ID')} (${valRes.isFloorClamped ? 'CLAMPED Maks. 90%' : 'INVARIANT OK'}) · 2-Stage RI g1=${(valRes.stage1GrowthRate * 100).toFixed(1)}% · gT=${(valRes.terminalGrowthRate * 100).toFixed(1)}%`
       : '';
     const p2Summary = risk
-      ? `P2: MaxCap ${risk.finalMaxAllocationPct}% (1/β ${risk.inverseBetaCapPct}%·1/Vol ${risk.inverseVolatilityCapPct}%·Reg ${risk.regimeCapPct}%) | ATR/Vol Stop Rp ${risk.stopLossPriceIDR.toLocaleString('id-ID')} (-${risk.stopLossPct}%) | T1 ${risk.tranche1AllocationPct}% · T2 ${risk.tranche2AllocationPct}%${valRes ? ` | Dispersi ${(valRes.modelDispersion * 100).toFixed(1)}%` : ''}${risk.dispersionPenaltyPts > 0 ? ` (-${risk.dispersionPenaltyPts}pts)` : ''}`
+      ? `P2: MaxCap ${betaCap.toFixed(2)}% (1/Beta ${risk.inverseBetaCapPct.toFixed(2)}% · 1/Vol ${risk.inverseVolatilityCapPct.toFixed(2)}% · Reg ${risk.regimeCapPct.toFixed(2)}%) · ATR/Vol Stop Rp ${risk.stopLossPriceIDR.toLocaleString('id-ID')} (-${risk.stopLossPct}%) · T1 ${tranche1Pct.toFixed(2)}% + T2 ${tranche2Pct.toFixed(2)}% = ${betaCap.toFixed(2)}%${valRes ? ` · Dispersi ${(valRes.modelDispersion * 100).toFixed(1)}%` : ''}${risk.dispersionPenaltyPts > 0 ? ` (-${risk.dispersionPenaltyPts}pts)` : ''}`
       : '';
     const tacSummary = tac
-      ? `Tactical Overlay: ${tac.pairTicker} (Z=${tac.zScore >= 0 ? '+' : ''}${tac.zScore}σ · ${tac.action})`
+      ? `Tactical Overlay: ${tac.pairTicker} (Z=${tac.zScore >= 0 ? '+' : ''}${tac.zScore} SD · ${tac.action})`
       : '';
 
     ctx.fillStyle = '#D1D5DB';

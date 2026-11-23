@@ -150,16 +150,29 @@ export function calculateHybridShareholderYield(params: {
     Number(liveMarketCapIdr) || Number(stock.liveMarketCapIdr) || 1_000_000_000_000
   );
 
+  const isLiveOrSnapshotSource =
+    stock.fundamentalsSource === 'LIVE_YAHOO_API' ||
+    stock.fundamentalsSource === 'FUNDAMENTALS_JSON';
+
   // Step 1: Sanitize Dividend Yield against Special Dividend Traps (> 5% spread vs TTM)
+  // When data originates from LIVE_REALTIME_WORKER (LIVE_YAHOO_API) or FUNDAMENTALS_JSON,
+  // lock Dividend Yield to actual TTM Dividend Yield so Net Payout Yield === Dividend Yield TTM.
   const sanitizedDiv = sanitizeDividendYieldOutlier({
     trailingTtmYieldPct: stock.dividendYieldPct ?? projectedForwardDividendYieldPct,
-    projectedForwardYieldPct: projectedForwardDividendYieldPct,
+    projectedForwardYieldPct:
+      isLiveOrSnapshotSource && typeof stock.dividendYieldPct === 'number' && stock.dividendYieldPct > 0
+        ? stock.dividendYieldPct
+        : projectedForwardDividendYieldPct,
     normalDprPct
   });
-  const forwardDividendYieldPct = stock.isHscFlagged ? 0 : sanitizedDiv.effectiveDividendYieldPct;
+  const forwardDividendYieldPct = stock.isHscFlagged
+    ? 0
+    : isLiveOrSnapshotSource && typeof stock.dividendYieldPct === 'number' && stock.dividendYieldPct >= 0
+    ? Number(stock.dividendYieldPct.toFixed(2))
+    : sanitizedDiv.effectiveDividendYieldPct;
 
   // Step 2: Strict Buyback Yield = (Nominal Rupiah Buyback / Live Market Cap Aktual) * 100%
-  const cleanBuybackIdr = Math.max(0, Number(buybackNominalIdr) || Number(stock.buybackNominalIdr) || 0);
+  const cleanBuybackIdr = Math.max(0, Number(buybackNominalIdr) || 0);
   const dynamicBuybackYieldPct =
     !stock.isHscFlagged && cleanBuybackIdr > 0 && marketCapIdr > 0
       ? Number(Math.min(14.5, (cleanBuybackIdr / marketCapIdr) * 100).toFixed(2))
@@ -169,11 +182,13 @@ export function calculateHybridShareholderYield(params: {
   const netPayoutYieldPct = Number((forwardDividendYieldPct + dynamicBuybackYieldPct).toFixed(2));
 
   // Step 4: Sectoral Hybrid Filter for Net Debt Paydown Yield (No EPS overlap!)
+  // When data originates from LIVE_YAHOO_API or FUNDAMENTALS_JSON without explicit buyback override,
+  // lock Net Debt Paydown Yield to 0% so Net Payout Yield / Total Shareholder Yield === Dividend Yield TTM actual.
   const isFinancialSector = stock.sector === 'Financials';
   let netDebtPaydownIdr = 0;
   let netDebtPaydownYieldPct = 0;
 
-  if (!isFinancialSector && !stock.isHscFlagged) {
+  if (!isFinancialSector && !stock.isHscFlagged && !isLiveOrSnapshotSource) {
     const calibratedDebt = CALIBRATED_LONG_TERM_DEBT_B_IDR_MAP[cleanTicker];
     const prevDebtIdr =
       typeof stock.longTermDebtPrevYearIdr === 'number'

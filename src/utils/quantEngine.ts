@@ -56,6 +56,10 @@ import {
   ValuationEngine
 } from './valuationEngine';
 import {
+  resolveConvictionGrade,
+  resolveExecutionThesis
+} from './institutionalGuardrailsEngine';
+import {
   createTrackedField,
   DataSourceType,
   evaluateSbnMacroFreshness,
@@ -1647,13 +1651,19 @@ export function calculateForwardDividend(
     (hybridTsy.dynamicBuybackYieldPct + hybridTsy.netDebtPaydownYieldPct).toFixed(2)
   );
   const totalShareholderYieldPct = hybridTsy.totalShareholderYieldPct;
+  const syncedForwardDpsIdr =
+    (stock.fundamentalsSource === 'LIVE_YAHOO_API' ||
+      stock.fundamentalsSource === 'FUNDAMENTALS_JSON') &&
+    forwardDividendYieldPct > 0
+      ? Number(((price * forwardDividendYieldPct) / 100).toFixed(2))
+      : estimatedForwardDpsIdr;
 
   void estimatedBvpsIdr;
 
   return {
     annualizedEpsQ3Idr,
     historicalDpr3YPct,
-    estimatedForwardDpsIdr,
+    estimatedForwardDpsIdr: syncedForwardDpsIdr,
     forwardDividendYieldPct,
     netPayoutYieldPct,
     netDebtPaydownYieldPct,
@@ -2588,7 +2598,7 @@ export function evaluateJoeliardiOosFundamental(
     stock.dividendYieldPct ?? 0,
     effectiveModule
   );
-  const grossProfitabilityToAssets =
+  let grossProfitabilityToAssets =
     stock.grossProfitabilityToAssets ?? gpAccrual.grossProfitabilityToAssets;
   let ocfToNetIncomeRatio = stock.ocfToNetIncomeRatio ?? gpAccrual.ocfToNetIncomeRatio;
   const accrualRatioToAssets = stock.accrualRatioToAssets ?? gpAccrual.accrualRatioToAssets;
@@ -2619,7 +2629,32 @@ export function evaluateJoeliardiOosFundamental(
 
   // Fundamental BVPS & EPS: Use real/overridden Equity & Net Income per Share when available;
   // otherwise fallback to split-adjusted baseline via applyDynamicCorporateActionDivisor
-  const userFundOverride = getFundamentalUserOverride(stock.ticker);
+  const rawUserFundOverride = getFundamentalUserOverride(stock.ticker);
+  const isGenuineUserStatementOverride =
+    rawUserFundOverride &&
+    !rawUserFundOverride.overrideNote?.startsWith('Auto-Sync P0') &&
+    (stock.fundamentalsSource === 'USER_OVERRIDE' ||
+      !stock.fundamentalsSource ||
+      stock.fundamentalsSource === 'HARDCODED_SEED' ||
+      (typeof rawUserFundOverride.revenueTTMIdr === 'number' &&
+        rawUserFundOverride.revenueTTMIdr > 0 &&
+        typeof stock.revenueTTMIdr === 'number' &&
+        Math.abs(rawUserFundOverride.revenueTTMIdr - stock.revenueTTMIdr) /
+          Math.max(1, stock.revenueTTMIdr) >
+          0.005) ||
+      (typeof rawUserFundOverride.netIncomeTTMIdr === 'number' &&
+        rawUserFundOverride.netIncomeTTMIdr !== 0 &&
+        typeof stock.netIncomeTTMIdr === 'number' &&
+        Math.abs(rawUserFundOverride.netIncomeTTMIdr - stock.netIncomeTTMIdr) /
+          Math.max(1, Math.abs(stock.netIncomeTTMIdr)) >
+          0.005) ||
+      (typeof rawUserFundOverride.equityAttributableIdr === 'number' &&
+        rawUserFundOverride.equityAttributableIdr > 0 &&
+        typeof stock.equityAttributableIdr === 'number' &&
+        Math.abs(rawUserFundOverride.equityAttributableIdr - stock.equityAttributableIdr) /
+          Math.max(1, stock.equityAttributableIdr) >
+          0.005));
+  const userFundOverride = isGenuineUserStatementOverride ? rawUserFundOverride : null;
   const resolvedRealEquityIdr =
     userFundOverride?.equityAttributableIdr && userFundOverride.equityAttributableIdr > 0
       ? userFundOverride.equityAttributableIdr
@@ -2768,8 +2803,33 @@ export function evaluateJoeliardiOosFundamental(
     isSbnMacroProxy
   });
 
-  // Single Source of Truth Synchronization: Re-derive OCF/NI, CapEx/D&A, and DER directly from rawTickerData
+  // Single Source of Truth Synchronization: Re-derive OCF/NI, CapEx/D&A, DER, and GP/A (Novy-Marx) directly from rawTickerData
   // so top cards, bottom financial statement table, PNG export, and PDF report never contradict each other.
+  if (
+    stock.sector !== 'Financials' &&
+    typeof rawTickerData.totalAssets === 'number' &&
+    rawTickerData.totalAssets > 0 &&
+    rawTickerData.revenueTTM > 0
+  ) {
+    // FIX 1.3: Denominator of GP/A MUST use actual rawTickerData.totalAssets from Worker/Snapshot,
+    // and enforce invariant cap: grossProfitTTM <= revenueTTM -> GP/A MUST NEVER exceed revenueTTM / totalAssets.
+    const maxRevenueToAssetsPct = (rawTickerData.revenueTTM / rawTickerData.totalAssets) * 100;
+    const rawGrossProfitIdr = Math.min(
+      rawTickerData.revenueTTM,
+      Math.max(
+        rawTickerData.operatingProfitTTM,
+        (rawTickerData.ebitdaTTM ?? rawTickerData.operatingProfitTTM * 1.15) * 1.05
+      )
+    );
+    const computedGpaPct = (rawGrossProfitIdr / rawTickerData.totalAssets) * 100;
+    const cappedGpaPct = Math.min(
+      maxRevenueToAssetsPct * 0.96,
+      grossProfitabilityToAssets > maxRevenueToAssetsPct
+        ? computedGpaPct
+        : Math.min(grossProfitabilityToAssets, maxRevenueToAssetsPct * 0.96)
+    );
+    grossProfitabilityToAssets = Number(Math.max(1.5, cappedGpaPct).toFixed(1));
+  }
   if (
     typeof rawTickerData.ocfTTM === 'number' &&
     typeof rawTickerData.netIncomeTTM === 'number' &&
@@ -2925,31 +2985,24 @@ export function evaluateJoeliardiOosFundamental(
         )
       : ttmRoeBasisPct;
 
-  // Damodaran (2012) TTM Default Sustainable Valuation: Justified PBV = (ROE_TTM_sustainable - g) / (Ke - g)
-  const sustainableRoe = Math.min(
-    30.5,
-    valuationRoeBasisPct *
-      (sectorProfile.isGpaBypassed
-        ? 1.02
-        : grossProfitabilityToAssets >= 20
-        ? 1.04
-        : 0.99)
-  );
+  // FIX 1.1: Single Source of Truth Damodaran/Gordon Equilibrium Justified PBV
+  // justifiedPbv = (sustainableRoe - g) / (ke - g), clamped to [0.35x, 6.50x].
+  // Mathematical Invariant: If sustainableRoe < dynamicCostOfEquityPct, justifiedPbv MUST be < 1.00x.
+  const sustainableRoe = Math.min(30.5, valuationRoeBasisPct);
   const retentionRatio = Math.max(0.15, 1 - historicalDpr3YPct / 100);
   const rawGrowth = sustainableRoe * retentionRatio * 0.48;
   const sustainableGrowthRatePct = Number(
-    Math.max(2.0, Math.min(6.0, Math.min(rawGrowth, dynamicCostOfEquityPct - 4.0))).toFixed(2)
+    Math.max(2.0, Math.min(5.5, Math.min(rawGrowth, dynamicCostOfEquityPct - 4.0))).toFixed(2)
   );
 
+  const rawEquilibriumJustifiedPbv =
+    (sustainableRoe - sustainableGrowthRatePct) /
+    Math.max(2.0, dynamicCostOfEquityPct - sustainableGrowthRatePct);
+  const justifiedPbvUpperClamp = sustainableRoe < dynamicCostOfEquityPct ? 0.99 : 6.50;
   const rawDamodaranJustifiedPbv = Number(
     Math.max(
-      0.45,
-      Math.min(
-        5.5,
-        ((sustainableRoe - sustainableGrowthRatePct) /
-          Math.max(4.0, dynamicCostOfEquityPct - sustainableGrowthRatePct)) *
-          effectiveCatalystMultiplier
-      )
+      0.35,
+      Math.min(justifiedPbvUpperClamp, rawEquilibriumJustifiedPbv)
     ).toFixed(2)
   );
 
@@ -2976,19 +3029,7 @@ export function evaluateJoeliardiOosFundamental(
     : contextualOcfPolicy.accrualQualityMultiplier;
   const hscDiscountMultiplier = stock.isHscFlagged ? 0.55 : 1.0;
 
-  const standaloneFairPbv = Number(
-    Math.max(
-      0.5,
-      Math.min(
-        5.2,
-        rawDamodaranJustifiedPbv *
-          derPenaltyMultiplier *
-          divQualityMultiplier *
-          accrualQualityMultiplier *
-          hscDiscountMultiplier
-      )
-    ).toFixed(2)
-  );
+  const standaloneFairPbv = rawDamodaranJustifiedPbv;
   const standaloneFairPer = Number(
     Math.max(
       5.5,
@@ -3251,18 +3292,30 @@ export function evaluateJoeliardiOosFundamental(
       : dynamicEnsemble.ensembleAntiJunkMultiplier
   });
 
-  // MODUL 2.2: Single Source of Truth Fair Multiples — Unify joeliardiFairPbv and damodaranJustifiedPbv
-  // so two different fair PBV numbers (e.g. "Wajar 2.28x" vs "Just. 2.13x") NEVER appear on the same card!
+  // FIX 1.1: Single Source of Truth Justified PBV across KPI Card 4, Primary Narrative, and Module 2
+  // Compute justifiedPbv once using Gordon/Damodaran equilibrium: (sustainableRoe - g) / (ke - g), clamped [0.35x, 6.50x].
+  // Mathematical Invariant: If sustainableRoe < dynamicCostOfEquityPct (e.g., Cyclical Normalized ROE < Ke), justifiedPbv MUST be < 1.00x.
+  const effectiveSustainableRoeForPbv =
+    valuationModuleRoute === 'PURE_CYCLICAL' ? normalizedRoePct : sustainableRoe;
+  const rawFinalJustifiedPbv =
+    (effectiveSustainableRoeForPbv - sustainableGrowthRatePct) /
+    Math.max(2.0, dynamicCostOfEquityPct - sustainableGrowthRatePct);
+  const finalJustifiedPbvUpperClamp =
+    effectiveSustainableRoeForPbv < dynamicCostOfEquityPct ? 0.99 : 6.50;
+  const singleSourceJustifiedPbv = Number(
+    Math.max(0.35, Math.min(finalJustifiedPbvUpperClamp, rawFinalJustifiedPbv)).toFixed(2)
+  );
+
   const joeliardiFairPer = Number((intrinsicValueIdr / Math.max(1, estimatedEpsIdr)).toFixed(2));
-  const joeliardiFairPbv = Number((intrinsicValueIdr / Math.max(1, estimatedBvpsIdr)).toFixed(2));
-  const damodaranJustifiedPbv = joeliardiFairPbv;
+  const joeliardiFairPbv = singleSourceJustifiedPbv;
+  const damodaranJustifiedPbv = singleSourceJustifiedPbv;
   const isSectorPrimaryPbvBased =
     (sectorPrimaryMetricShort || '').toUpperCase().includes('PBV');
   const sectorPrimaryImpliedMultiple = isSectorPrimaryPbvBased
     ? impliedPbv
     : rawSectorPrimaryImpliedMultiple;
   const sectorPrimaryFairMultiple = isSectorPrimaryPbvBased
-    ? joeliardiFairPbv
+    ? singleSourceJustifiedPbv
     : rawSectorPrimaryFairMultiple;
 
   const marginOfSafetyPct = Number(
@@ -3924,9 +3977,17 @@ export function evaluateJoeliardiOosFundamental(
 
   registerLineageReportForDebugger(dataLineage);
 
-  const rawGrade = riskSizingResult.finalConvictionGrade;
+  const rawGrade = resolveConvictionGrade(riskSizingResult.adjustedConvictionScore, {
+    isHscFlagged: Boolean(stock.isHscFlagged),
+    maxAllowedStatus: sanityReport.maxAllowedStatus,
+    sanityStatus: sanityReport.status,
+    isRfStale: sanityReport.isRfStale,
+    preserveLegacySolidValueForStaleRf: false
+  });
   const isGradeAboveC =
     rawGrade === 'A+ (CORE CONVICTION)' ||
+    rawGrade === 'A (CORE CONVICTION)' ||
+    rawGrade === 'A- (SOLID VALUE)' ||
     rawGrade === 'A (SOLID VALUE)' ||
     rawGrade === 'B (WATCHLIST / HOLD)';
 
@@ -3959,16 +4020,29 @@ export function evaluateJoeliardiOosFundamental(
   const totalConvictionScore = riskSizingResult.adjustedConvictionScore;
 
   // ============================================================================
-  // MODUL 2.2: CONFLICT-FREE ACTION LOCK (SINGLE SOURCE OF TRUTH DECISION TREE)
-  // Strong Buy / Buy on Strength ONLY allowed when:
-  // sanityReport.status === 'PASS' && !convictionCappedByLineage && finalScore >= 75 (Grade A/A+)
+  // FIX 3.1: SINGLE SOURCE OF TRUTH EXECUTION THESIS & GRADE-LOCKED RECOMMENDATION
   // ============================================================================
   const isHighConvictionActionEligible =
     sanityReport.status === 'PASS' &&
     !convictionCappedByLineage &&
     !sectorProfile.isGradeCappedAtCByUnprofitableTech &&
     totalConvictionScore >= 75 &&
-    (convictionGrade === 'A+ (CORE CONVICTION)' || convictionGrade === 'A (SOLID VALUE)');
+    (convictionGrade === 'A+ (CORE CONVICTION)' ||
+      convictionGrade === 'A (CORE CONVICTION)' ||
+      convictionGrade === 'A- (SOLID VALUE)' ||
+      convictionGrade === 'A (SOLID VALUE)');
+
+  const executionThesis = resolveExecutionThesis({
+    score: totalConvictionScore,
+    convictionGrade,
+    sanityStatus: sanityReport.status,
+    isWeakMoat: effectiveSustainableRoeForPbv < dynamicCostOfEquityPct || grahamBenchmark.isMoatHaircutApplied,
+    isHscPenaltyActive: stock.hscTier === 'KSEI_DIVIDEND_PENALTY' || Boolean(stock.isHscFlagged),
+    isDispersionPenalized: dispersionPenalty.isDispersionPenalized,
+    isNonOpCatalystRejected: sanityReport.flags.includes('CATALYST_UNCONFIRMED_NON_OP'),
+    marginOfSafetyPct
+  });
+  const primaryExecutionActionLabel = executionThesis.primaryActionLabel;
 
   const isDefensiveDiscountAnomaly =
     isHighConvictionActionEligible &&
@@ -4004,9 +4078,28 @@ export function evaluateJoeliardiOosFundamental(
       ? {
           ...rawDecisionTree,
           decisionState: 'DATA_AUDIT_REQUIRED' as const,
-          decisionActionLabel: 'DATA AUDIT REQUIRED (BLOKIR GRADE A / MISMATCH DATA PRIMER)'
+          decisionActionLabel: primaryExecutionActionLabel,
+          recommendedActionText: executionThesis.narrativeExecutionSentence
         }
-      : rawDecisionTree;
+      : {
+          ...rawDecisionTree,
+          decisionActionLabel: primaryExecutionActionLabel
+        };
+
+  // FIX 3.2: Subordinate Tactical Overlay StatArb so it NEVER contradicts the primary fundamental signal
+  const subordinatedStatArbFollowUp =
+    Math.abs(statArbZScore) > 2.0
+      ? `Langkah Follow-Up: Catatan Tactical Pair Overlay (0% Bobot Intrinsik): pasangan ${statArbPeerTicker} relatif lebih terdiskon secara statistik bagi trader pair, namun keputusan alokasi inti tetap mengacu pada sinyal fundamental utama (${primaryExecutionActionLabel}).`
+      : `Langkah Follow-Up: Sinyal StatArb Netral — ikuti disiplin eksekusi fundamental utama (${primaryExecutionActionLabel}).`;
+
+  const updatedStatArbRationale = statArbRationale.includes('Langkah Follow-Up:')
+    ? `${statArbRationale.split('Langkah Follow-Up:')[0].trim()} ${subordinatedStatArbFollowUp}`
+    : `${statArbRationale} ${subordinatedStatArbFollowUp}`;
+  tacticalOverlay.rationale = updatedStatArbRationale;
+  tacticalOverlay.actionLabel =
+    Math.abs(statArbZScore) > 2.0
+      ? `TACTICAL PAIR OVERLAY (0% BOBOT INTRINSIK) · IKUTI AKSI UTAMA`
+      : `SINYAL STAT-ARB NETRAL · IKUTI AKSI UTAMA (${primaryExecutionActionLabel})`;
 
   const intrinsicAccumCeiling = roundToIdxTick(
     intrinsicValueIdr * (1 - decisionTree.dynamicRequiredMosPct / 100)
@@ -4019,27 +4112,28 @@ export function evaluateJoeliardiOosFundamental(
       decisionTree.decisionState === 'STRONG_BUY_CYCLICAL_ZSCORE' ||
       decisionTree.decisionState === 'ACCUMULATE_QUALITY_FAIR_VALUE');
 
-  // MODUL 3A: Precompute Strict 1-Line Compact Header Badges (<= 12 chars for Grade, Combined DATA badge)
-  const gradePrefix = convictionGrade.split(' ')[0];
-  const compactHeaderGradeBadge =
-    convictionGrade === 'C (SEED CAPPED)'
-      ? 'C · SEED CAP'
-      : convictionGrade === 'DATA_AUDIT_REQUIRED'
-      ? 'AUDIT · FAIL'
-      : convictionGrade === 'D (AVOID / HSC)'
-      ? 'D · HSC BLK'
-      : `${gradePrefix} · ${totalConvictionScore}/100`;
+  // FIX 4.1: Uniform Grade Badge across Top-Left, Top-Right Header, Banner, and Narrative
+  const compactHeaderGradeBadge = `${convictionGrade} · SKOR ${totalConvictionScore}/100`;
 
   const hasUserFundamentalOverride =
     Boolean(userFundOverride) ||
     lineageFields.netIncomeTTMIdr.source === 'USER_OVERRIDE' ||
     lineageFields.equityAttributableIdr.source === 'USER_OVERRIDE';
 
+  // FIX 4.3: Accurate Provenance Badge (DATA: WORKER when data originates from Cloudflare Worker LIVE_YAHOO_API)
+  const isLiveWorkerSource =
+    !hasUserFundamentalOverride &&
+    (stock.fundamentalsSource === 'LIVE_YAHOO_API' ||
+      lineageFields.revenueTTMIdr.source === 'LIVE_YAHOO_API' ||
+      lineageFields.netIncomeTTMIdr.source === 'LIVE_YAHOO_API');
+
   const compactHeaderDataStatus: JoeliardiOosEvaluation['compactHeaderDataStatus'] =
     isSeedWarnActive || sanityReport.status === 'FAIL'
       ? 'SEED_WARN'
       : hasUserFundamentalOverride
       ? 'OVERRIDE'
+      : isLiveWorkerSource
+      ? 'WORKER'
       : isSbnMacroProxy || isSbnMacroStale || sanityReport.status === 'WARN'
       ? 'PROXY'
       : 'FRESH';
@@ -4049,11 +4143,17 @@ export function evaluateJoeliardiOosFundamental(
       ? 'DATA: SEED WARN'
       : compactHeaderDataStatus === 'OVERRIDE'
       ? 'DATA: OVERRIDE'
+      : compactHeaderDataStatus === 'WORKER'
+      ? 'DATA: WORKER'
       : compactHeaderDataStatus === 'PROXY'
       ? 'DATA: PROXY'
       : 'DATA: FRESH';
 
-  const betaWeightedSizingCapPct = riskSizingResult.finalMaxAllocationPct;
+  // FIX 2.2: Single Source of Truth for Barbell Cap & Tranche Sizing (60% T1 / 40% T2, rounded 2 decimals)
+  const maxBarbellCapPct = Number(riskSizingResult.finalMaxAllocationPct.toFixed(2));
+  const tranche1Pct = Number(riskSizingResult.tranche1AllocationPct.toFixed(2));
+  const tranche2Pct = Number(riskSizingResult.tranche2AllocationPct.toFixed(2));
+  const betaWeightedSizingCapPct = maxBarbellCapPct;
   const maxSafeAllocationIdr = sanityReport.maxDailyAbsorption5PctIDR;
   const realCashCappedAllocationIdr =
     typeof availablePortfolioCashIdr === 'number' && availablePortfolioCashIdr > 0
@@ -4245,7 +4345,11 @@ export function evaluateJoeliardiOosFundamental(
   }
 
   for (const reason of sanityReport.reasons) {
-    keyRisks.push(`[P0 Guardrail] ${reason}`);
+    if (reason.startsWith('[Guardrail Kualitas Laba')) {
+      keyRisks.push(reason);
+    } else {
+      keyRisks.push(`[P0 Guardrail] ${reason}`);
+    }
   }
   if (grahamBenchmark.isFloorClamped && grahamBenchmark.floorClampDiagnosticLog) {
     keyRisks.push(`[P1.2 Invariant Floor] ${grahamBenchmark.floorClampDiagnosticLog}`);
@@ -4421,7 +4525,7 @@ export function evaluateJoeliardiOosFundamental(
     statArbSignal,
     statArbSignalLabel,
     statArbImpliedTargetIdr,
-    statArbRationale,
+    statArbRationale: updatedStatArbRationale,
     quantedgeSystematicScore,
     quantedgeCompositeYieldPct,
     quantedgeAlphaVerdict,
@@ -4437,23 +4541,17 @@ export function evaluateJoeliardiOosFundamental(
     liveMarketCapIdr: corpIntercept.liveMarketCapIdr,
     dynamicBuybackYieldPct: corpIntercept.dynamicBuybackYieldPct,
     splitRatioDivisor: corpIntercept.splitRatioDivisor,
-    catalystValuationBoostPct: isDualConfirmedCatalystActive
+    catalystValuationBoostPct: sanityReport.isDualCatalystConfirmed
       ? corpIntercept.catalystValuationBoostPct
       : 0,
-    isCatalystActive: isDualConfirmedCatalystActive,
-    catalystBadgeLabel: isDualConfirmedCatalystActive
-      ? isHighConvictionActionEligible
-        ? `CATALYST +${rawTickerData.netIncomeYoYPct.toFixed(1)}%`
-        : `CATALYST +${rawTickerData.netIncomeYoYPct.toFixed(1)}% · HOLD`
-      : 'TTM DEFAULT (KATALIS TUNGGAL DITOLAK)',
-    catalystNarrative: isDualConfirmedCatalystActive
-      ? isHighConvictionActionEligible
-        ? sanityReport.catalystConfirmationNote
-        : `${sanityReport.catalystConfirmationNote} [Action Lock: Peringkat ${convictionGrade} mengunci rekomendasi pada Hold / Watchlist hingga memenuhi syarat MoS Dinamis ≥ ${decisionTree.dynamicRequiredMosPct.toFixed(1)}%].`
-      : sanityReport.catalystConfirmationNote,
+    isCatalystActive: Boolean(sanityReport.isDualCatalystConfirmed),
+    catalystBadgeLabel: sanityReport.isDualCatalystConfirmed
+      ? `CATALYST +${rawTickerData.netIncomeYoYPct.toFixed(1)}%`
+      : undefined,
+    catalystNarrative: sanityReport.catalystConfirmationNote,
     ensembleFormulaAudit,
     decisionState: decisionTree.decisionState,
-    decisionActionLabel: decisionTree.decisionActionLabel,
+    decisionActionLabel: primaryExecutionActionLabel,
     recommendedActionText: decisionTree.recommendedActionText,
     formattedAccumulationZone: decisionTree.formattedAccumulationZone,
     hscTier: stock.hscTier,
@@ -4476,6 +4574,10 @@ export function evaluateJoeliardiOosFundamental(
     compactHeaderGradeBadge,
     compactHeaderDataBadge,
     compactHeaderDataStatus,
+    primaryExecutionActionLabel,
+    tranche1Pct,
+    tranche2Pct,
+    maxBarbellCapPct,
     isHighConvictionActionEligible,
     trueRoaPct: sectorProfile.trueRoaPct,
     assetLeverageRatio: sectorProfile.assetLeverageRatio,

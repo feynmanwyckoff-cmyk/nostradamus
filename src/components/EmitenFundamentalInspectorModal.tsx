@@ -1393,12 +1393,15 @@ export function EmitenFundamentalInspectorModal({
           if (isMounted) setIsSyncingOnDemand(false);
         });
 
-      // 2. Pull emiten-specific news & corporate actions (filtered to <= 3 months)
-      const newsPromise = fetchLiveEmitenSpecificNews(
-        stock.ticker,
-        stock.name,
-        stock.sector,
-        stock
+      await quotePromise;
+      if (!isMounted) return;
+
+      // 2. Pull emiten-specific news & corporate actions after live quote/worker overlay resolves
+      const fetchedNews = await fetchLiveEmitenSpecificNews(
+        currentStock.ticker,
+        currentStock.name,
+        currentStock.sector,
+        currentStock
       )
         .then((items) => {
           if (isMounted) {
@@ -1413,8 +1416,6 @@ export function EmitenFundamentalInspectorModal({
           }
           return [] as NewsSentimentItem[];
         });
-
-      const [, fetchedNews] = await Promise.all([quotePromise, newsPromise]);
       if (!isMounted) return;
 
       // 3. Run multi-stage thinking animation then progressive typing AI conviction analysis
@@ -1744,7 +1745,8 @@ export function EmitenFundamentalInspectorModal({
                           }`
                     }
                     className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-xs border shrink-0 ${
-                      joeliardiEval.compactHeaderDataStatus === 'FRESH'
+                      joeliardiEval.compactHeaderDataStatus === 'FRESH' ||
+                      joeliardiEval.compactHeaderDataStatus === 'WORKER'
                         ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500/50'
                         : joeliardiEval.compactHeaderDataStatus === 'OVERRIDE'
                         ? 'bg-indigo-950/90 text-indigo-300 border-indigo-500/50'
@@ -1755,20 +1757,20 @@ export function EmitenFundamentalInspectorModal({
                   >
                     {joeliardiEval.compactHeaderDataBadge || 'DATA: FRESH'}
                   </span>
-                  {joeliardiEval.isCatalystActive && (
-                    <span
-                      title={
-                        joeliardiEval.catalystNarrative ||
-                        'Katalis Aktif Terdeteksi (Momentum Laba Kuartalan >20% YoY / Injeksi Buyback Aktif)'
-                      }
-                      className="inline-flex items-center gap-1 text-[10px] font-mono font-extrabold text-[#FFFFFF] bg-[#0D5C46] border border-[#059669] px-2 py-0.5 rounded-xs shadow-2xs shrink-0"
-                    >
-                      <Sparkles className="w-2.5 h-2.5 shrink-0" />
-                      <span>
-                        {joeliardiEval.catalystBadgeLabel || 'CATALYST ACTIVE'}
+                  {joeliardiEval.isCatalystActive &&
+                    joeliardiEval.sanityReport?.isDualCatalystConfirmed !== false &&
+                    joeliardiEval.catalystBadgeLabel && (
+                      <span
+                        title={
+                          joeliardiEval.catalystNarrative ||
+                          'Katalis Aktif Terdeteksi (Momentum Laba Kuartalan >20% YoY / Injeksi Buyback Aktif)'
+                        }
+                        className="inline-flex items-center gap-1 text-[10px] font-mono font-extrabold text-[#FFFFFF] bg-[#0D5C46] border border-[#059669] px-2 py-0.5 rounded-xs shadow-2xs shrink-0"
+                      >
+                        <Sparkles className="w-2.5 h-2.5 shrink-0" />
+                        <span>{joeliardiEval.catalystBadgeLabel}</span>
                       </span>
-                    </span>
-                  )}
+                    )}
                   {(activeStock.splitRatioDivisor ?? 1) > 1 && (
                     <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-[#0284C7] bg-[#0284C7]/10 border border-[#0284C7]/40 px-2 py-0.5 rounded-xs shrink-0">
                       <span>SPLIT 1:{activeStock.splitRatioDivisor}</span>
@@ -2971,7 +2973,8 @@ export function EmitenFundamentalInspectorModal({
           )}
 
           {/* Active Catalyst & Corporate Action Middleware Telemetry Banner */}
-          {joeliardiEval.isCatalystActive && (
+          {joeliardiEval.isCatalystActive &&
+            joeliardiEval.sanityReport?.isDualCatalystConfirmed !== false && (
             <div className="p-3.5 rounded-xs bg-[#059669]/10 border border-[#059669]/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="space-y-1">
                 <div className="flex flex-wrap items-center gap-2">
@@ -3213,21 +3216,23 @@ export function EmitenFundamentalInspectorModal({
                     {joeliardiEval.dataLineage.fields.netIncomeTTMIdr.source === 'HARDCODED_SEED'
                       ? 'SEED_WARN'
                       : joeliardiEval.dataLineage.fields.netIncomeTTMIdr.source === 'USER_OVERRIDE'
-                      ? 'OVERRIDE'
-                      : 'VERIFIED'}
+                      ? '[USER OVERRIDE]'
+                      : joeliardiEval.dataLineage.fields.netIncomeTTMIdr.source === 'LIVE_YAHOO_API'
+                      ? '[LIVE CLOUDFLARE WORKER]'
+                      : '[VERIFIED SNAPSHOT]'}
                   </span>
                 )}
               </div>
               <div className="text-base font-bold font-mono tabular-nums text-[#111315] my-1 whitespace-nowrap overflow-hidden truncate">
                 {joeliardiEval.sectorPrimaryMetricShort ?? 'PBV'}{' '}
-                {joeliardiEval.sectorPrimaryImpliedMultiple ?? joeliardiEval.impliedPbv}x{' '}
+                {Number(joeliardiEval.sectorPrimaryImpliedMultiple ?? joeliardiEval.impliedPbv).toFixed(2)}x{' '}
                 <span className="text-xs font-normal text-[#0D5C46]">
-                  (Wajar {joeliardiEval.sectorPrimaryFairMultiple ?? joeliardiEval.joeliardiFairPbv}x)
+                  (Wajar {Number(joeliardiEval.sectorPrimaryFairMultiple ?? joeliardiEval.joeliardiFairPbv).toFixed(2)}x)
                 </span>
               </div>
               <span className="text-[10.5px] font-bold font-mono tabular-nums text-[#0284C7] bb-cyan block whitespace-nowrap overflow-hidden truncate">
-                PBV {joeliardiEval.impliedPbv}x (Wajar {joeliardiEval.joeliardiFairPbv}x) · PER{' '}
-                {joeliardiEval.impliedPer}x
+                PBV {joeliardiEval.impliedPbv.toFixed(2)}x (Wajar {Number(joeliardiEval.joeliardiFairPbv).toFixed(2)}x) · PER{' '}
+                {joeliardiEval.impliedPer.toFixed(2)}x
               </span>
             </div>
           </div>
@@ -3419,11 +3424,11 @@ export function EmitenFundamentalInspectorModal({
               </div>
               <div className="text-[11px] text-neutral-600 font-mono tabular-nums space-y-1">
                 <div className="truncate">
-                  Justified PBV: {joeliardiEval.joeliardiFairPbv}x (g{' '}
+                  Justified PBV: {Number(joeliardiEval.joeliardiFairPbv).toFixed(2)}x (g{' '}
                   {(joeliardiEval.sustainableGrowthRatePct ?? 5.5).toFixed(1)}%)
                 </div>
                 <div className="truncate">
-                  Spot SBN Blended: {(joeliardiEval.sbnBlendedSpotRfPct ?? 6.64).toFixed(2)}% → Ke{' '}
+                  Spot SBN Blended: {(joeliardiEval.sbnBlendedSpotRfPct ?? 6.64).toFixed(2)}% -&gt; Ke{' '}
                   {(joeliardiEval.dynamicCostOfEquityPct ?? 12.64).toFixed(2)}%
                 </div>
                 <div className="truncate" title={joeliardiEval.valuationLabel}>
@@ -3489,7 +3494,7 @@ export function EmitenFundamentalInspectorModal({
                 <div className="truncate">
                   Batas Alokasi Maks (1/β Cap):{' '}
                   <strong className="text-[#0284C7]">
-                    ≤{(joeliardiEval.betaWeightedSizingCapPct ?? 14).toFixed(1)}%
+                    Maks. {(joeliardiEval.maxBarbellCapPct ?? joeliardiEval.betaWeightedSizingCapPct ?? 14).toFixed(2)}% (T1 {(joeliardiEval.tranche1Pct ?? 8.4).toFixed(2)}% + T2 {(joeliardiEval.tranche2Pct ?? 5.6).toFixed(2)}%)
                   </strong>
                 </div>
               </div>
@@ -4182,10 +4187,10 @@ export function EmitenFundamentalInspectorModal({
                         />
                       </div>
                       <div className="text-xs sm:text-sm font-mono tabular-nums font-bold text-[#0284C7] bb-cyan mt-1">
-                        <div>PBV Wajar {justPbv}x</div>
+                        <div>PBV Wajar {Number(justPbv).toFixed(2)}x</div>
                         <span className="block text-[10px] font-normal text-neutral-500 mt-0.5 leading-snug truncate">
                           (MoS {joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}
-                          {joeliardiEval.marginOfSafetyPct.toFixed(1)}% · Cap 1/β ≤{betaCap.toFixed(1)}%)
+                          {joeliardiEval.marginOfSafetyPct.toFixed(1)}% · Cap 1/β Maks. {(joeliardiEval.maxBarbellCapPct ?? betaCap).toFixed(2)}%)
                         </span>
                       </div>
                     </div>
@@ -4516,8 +4521,18 @@ export function EmitenFundamentalInspectorModal({
                         const betaProp =
                           activeStock.betaWeightedPropensity ??
                           1 / Math.max(0.45, activeStock.beta1Y);
-                        const betaCapPct = joeliardiEval.betaWeightedSizingCapPct ?? 14.0;
-                        const minAllocPct = Number(Math.max(2.0, betaCapPct * 0.5).toFixed(1));
+                        const betaCapPct =
+                          joeliardiEval.maxBarbellCapPct ??
+                          joeliardiEval.betaWeightedSizingCapPct ??
+                          14.0;
+                        const t1AllocPct =
+                          joeliardiEval.tranche1Pct ??
+                          joeliardiEval.riskSizingResult?.tranche1AllocationPct ??
+                          Number((betaCapPct * 0.6).toFixed(2));
+                        const t2AllocPct =
+                          joeliardiEval.tranche2Pct ??
+                          joeliardiEval.riskSizingResult?.tranche2AllocationPct ??
+                          Number((betaCapPct - t1AllocPct).toFixed(2));
                         const basketLabel =
                           activeStock.beta1Y <= 0.85 ? 'Keranjang 1 (Core Defensif)' : 'Keranjang 2 (Tactical Alpha)';
                         const actionBadge = activeStock.isHscFlagged
@@ -4559,7 +4574,7 @@ export function EmitenFundamentalInspectorModal({
                                   </span>
                                 </div>
                                 <div className="font-bold text-[#111315] leading-snug text-[11.5px]">
-                                  {ex.recommendedAction.replace(/^Strong\s+Buy\s*[:—-]\s*/i, '')}
+                                  {(joeliardiEval.primaryExecutionActionLabel || ex.recommendedAction).replace(/^Strong\s+Buy\s*[:—-]\s*/i, '')}
                                 </div>
                               </div>
                               <ul className="pt-2 border-t border-[#E4E2DD]/70 space-y-1 text-[10.5px] text-neutral-600">
@@ -4570,7 +4585,7 @@ export function EmitenFundamentalInspectorModal({
                                       ? 'Jangan alokasikan modal inti pada saham berstatus konsentrasi HSC.'
                                       : joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST'
                                       ? 'Momentum laba/buyback aktif memvalidasi akumulasi bertahap tanpa menunggu diskon dalam.'
-                                      : 'Bagi order beli dalam 2–3 termin untuk mengoptimalkan harga rata-rata (average cost).'}
+                                      : 'Bagi order beli dalam 2 termin (60% Tranche 1 / 40% Tranche 2) untuk mengoptimalkan harga rata-rata.'}
                                   </span>
                                 </li>
                               </ul>
@@ -4635,14 +4650,14 @@ export function EmitenFundamentalInspectorModal({
                                       <strong className="font-mono text-[#9E2A2B]">
                                         Rp {formatIdrPriceDisplay(joeliardiEval.riskSizingResult?.stopLossPriceIDR ?? stopPriceIdr)} (-{joeliardiEval.riskSizingResult?.stopLossPct ?? 12}%)
                                       </strong>{' '}
-                                      (max[2.5×ATR20, 1.5×σ_monthly]).
+                                      (max[2.5xATR20, 1.5xVol_m]).
                                     </span>
                                   </li>
                                   <li className="flex items-start gap-1.5">
                                     <span className="text-[#9E2A2B] font-bold">▸</span>
                                     <span>
                                       <strong className="text-[#111315]">Tranche &amp; Invalidation Stop:</strong>{' '}
-                                      T1 ({joeliardiEval.riskSizingResult?.tranche1AllocationPct ?? 3.5}%) · T2 ({joeliardiEval.riskSizingResult?.tranche2AllocationPct ?? 2.8}%) · Floor G-J Stop:{' '}
+                                      T1 ({t1AllocPct.toFixed(2)}%) · T2 ({t2AllocPct.toFixed(2)}%) · Floor G-J Stop:{' '}
                                       <strong className="font-mono text-[#9E2A2B]">
                                         Rp {formatIdrPriceDisplay(joeliardiEval.grahamJoeliardiBenchmarkIdr ?? stopPriceIdr)}
                                       </strong>
@@ -4669,7 +4684,7 @@ export function EmitenFundamentalInspectorModal({
                                     4. Vol-Targeted Barbell &amp; ADTV
                                   </span>
                                   <span className="px-1 py-0.5 text-[7.5px] tracking-tighter font-mono font-bold uppercase bg-[#0284C7]/15 text-[#0284C7] bb-cyan border border-[#0284C7]/40 rounded-xs whitespace-nowrap shrink-0">
-                                    Max Cap ≤{betaCapPct.toFixed(1)}%
+                                    Maks. {betaCapPct.toFixed(2)}%
                                   </span>
                                 </div>
 
@@ -4679,15 +4694,15 @@ export function EmitenFundamentalInspectorModal({
                                     <strong className="text-[#111315] text-[9px] tracking-tight shrink-0">{basketLabel}</strong>
                                   </div>
                                   <div className="flex items-center justify-between gap-1 whitespace-nowrap">
-                                    <span className="text-neutral-500 text-[9px] shrink-0">min(1/β,1/Vol,Reg):</span>
+                                    <span className="text-neutral-500 text-[9px] shrink-0">T1 (60%) + T2 (40%):</span>
                                     <strong className="text-[#0284C7] bb-cyan text-[9px] tracking-tight shrink-0">
-                                      {minAllocPct}% – {betaCapPct.toFixed(1)}% (1/β {betaProp.toFixed(2)}x)
+                                      {t1AllocPct.toFixed(2)}% + {t2AllocPct.toFixed(2)}% = {betaCapPct.toFixed(2)}%
                                     </strong>
                                   </div>
                                   <div className="flex items-center justify-between gap-1 whitespace-nowrap">
                                     <span className="text-neutral-500 text-[9px] shrink-0">5% ADTV 20D:</span>
                                     <strong className="text-[#0D5C46] text-[9.5px] shrink-0">
-                                      ≤ Rp {safeAdtvMillionsStr} Jt/hr
+                                      Maks. Rp {safeAdtvMillionsStr} Jt/hr
                                     </strong>
                                   </div>
                                 </div>

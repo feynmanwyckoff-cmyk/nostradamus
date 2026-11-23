@@ -88,7 +88,7 @@ const renderMiniProvenanceBadge = (
   if (source === 'LIVE_YAHOO_API') {
     return (
       <span className="rounded border border-emerald-500/50 bg-emerald-500/15 px-1 py-0.2 font-mono text-[8.5px] font-bold text-emerald-300">
-        LIVE_API
+        LIVE WORKER
       </span>
     );
   }
@@ -162,8 +162,8 @@ export const RawDataAuditStrip: React.FC<RawDataAuditStripProps> = ({
           <span className="font-mono text-[11px] font-bold tracking-wider text-amber-400 uppercase">
             RAW DATA AUDIT STRIP (P0–P3 PROVENANCE &amp; FRESHNESS TELEMETRY)
           </span>
-          <span className="font-mono text-[10px] text-slate-400">
-            · Ticker: {rawTickerData.ticker} · Basis: {sanityReport.valuationBasis}
+          <span className="font-mono text-[10px] text-slate-300 font-semibold">
+            · Ticker: {rawTickerData.ticker} · Basis: {sanityReport.valuationBasis} · MktCap {fmtIdrCompact(rawTickerData.marketCap)} · Rev {fmtIdrCompact(rawTickerData.revenueTTM)} · NI {fmtIdrCompact(rawTickerData.netIncomeTTM)} · ADTV {fmtIdrCompact(sanityReport.normalizedAdtv20dIDR)}/hr
           </span>
           {dataLineage && (
             <button
@@ -419,10 +419,10 @@ export const RawDataAuditStrip: React.FC<RawDataAuditStripProps> = ({
                 P2 Risk Sizing, Stop Loss &amp; Dispersion
               </div>
               <div className="mt-0.5 text-slate-200 tabular-nums">
-                Max Cap: {riskSizingResult.finalMaxAllocationPct}% (1/β:{' '}
-                {riskSizingResult.inverseBetaCapPct}% · 1/Vol:{' '}
-                {riskSizingResult.inverseVolatilityCapPct}% · Reg:{' '}
-                {riskSizingResult.regimeCapPct}%)
+                Max Cap: {riskSizingResult.finalMaxAllocationPct.toFixed(2)}% (1/β:{' '}
+                {riskSizingResult.inverseBetaCapPct.toFixed(2)}% · 1/Vol:{' '}
+                {riskSizingResult.inverseVolatilityCapPct.toFixed(2)}% · Reg:{' '}
+                {riskSizingResult.regimeCapPct.toFixed(2)}%)
                 {valuationResult
                   ? ` | Dispersi: ${(valuationResult.modelDispersion * 100).toFixed(1)}%`
                   : ''}
@@ -432,8 +432,8 @@ export const RawDataAuditStrip: React.FC<RawDataAuditStripProps> = ({
               </div>
               <div className="text-slate-400 tabular-nums">
                 ATR/Vol Stop: Rp {riskSizingResult.stopLossPriceIDR.toLocaleString('id-ID')} (-
-                {riskSizingResult.stopLossPct}%) | T1: {riskSizingResult.tranche1AllocationPct}% · T2:{' '}
-                {riskSizingResult.tranche2AllocationPct}%
+                {riskSizingResult.stopLossPct}%) | T1: {riskSizingResult.tranche1AllocationPct.toFixed(2)}% · T2:{' '}
+                {riskSizingResult.tranche2AllocationPct.toFixed(2)}%
               </div>
             </div>
           )}
