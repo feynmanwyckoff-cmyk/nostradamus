@@ -1,6 +1,6 @@
 {
   "schemaVersion": "3.0-DEMIGUEL-MF24",
-  "updatedAt": "2026-11-23T10:48:11.873Z",
+  "updatedAt": "2026-11-23T10:48:23.416Z",
   "strategyName": "Vol-Managed Multifactor + 40% Buffer",
   "rebalanceBufferPct": 40,
   "thresholdAnnVol": 18,
@@ -99,7 +99,7 @@
       "isLiveFetched": true,
       "isLiquid": true,
       "dividendYieldPct": 8.82,
-      "lastSyncedAt": "17.48.10",
+      "lastSyncedAt": "17.48.22",
       "trailingRoePct": 24.45,
       "forwardAnnualizedRoePct": 24.45,
       "hasActiveBuyback": false,
