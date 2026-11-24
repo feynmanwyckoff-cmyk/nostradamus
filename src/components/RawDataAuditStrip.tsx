@@ -157,12 +157,12 @@ export const RawDataAuditStrip: React.FC<RawDataAuditStripProps> = ({
   return (
     <div className="mt-5 rounded-xs border border-[#222C3C] bg-[#0D131C] p-3.5 text-slate-200 shadow-lg">
       {/* Header Row: Audit Strip Title + Provenance Summary + SANITY_CHECK Badge */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#222C3C] pb-2.5">
-        <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2.5 border-b border-[#222C3C] pb-2.5">
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
           <span className="font-mono text-[11px] font-bold tracking-wider text-amber-400 uppercase">
             RAW DATA AUDIT STRIP (P0–P3 PROVENANCE &amp; FRESHNESS TELEMETRY)
           </span>
-          <span className="font-mono text-[10px] text-slate-300 font-semibold">
+          <span className="font-mono text-[10px] text-slate-300 font-semibold pr-2">
             · Ticker: {rawTickerData.ticker} · Basis: {sanityReport.valuationBasis} · MktCap {fmtIdrCompact(rawTickerData.marketCap)} · Rev {fmtIdrCompact(rawTickerData.revenueTTM)} · NI {fmtIdrCompact(rawTickerData.netIncomeTTM)} · ADTV {fmtIdrCompact(sanityReport.normalizedAdtv20dIDR)}/hr
           </span>
           {dataLineage && (
@@ -195,14 +195,28 @@ export const RawDataAuditStrip: React.FC<RawDataAuditStripProps> = ({
               ⚠ {dataLineage.sbnMacroStatus.warningBadgeText || 'SBN 10Y STALE / PROXY'}
             </span>
           )}
-          {sanityReport.flags.map((flag) => (
-            <span
-              key={flag}
-              className="rounded-xs border border-amber-500/50 bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-amber-300"
-            >
-              {flag}
-            </span>
-          ))}
+          {sanityReport.flags.map((flag) => {
+            const compactFlagMap: Record<string, string> = {
+              LINEAR_ANNUALIZATION_BLOCKED: 'LIN_ANN_BLOCKED',
+              YTD_CUMULATIVE_SUM_SUSPECT: 'YTD_SUM_SUSPECT',
+              CATALYST_UNCONFIRMED_NON_OP: 'CAT_NON_OP_BLOCK',
+              CRITICAL_DATA_MISMATCH: 'DATA_MISMATCH',
+              BALANCE_SHEET_ANOMALY: 'BS_ANOMALY',
+              ADTV_UNIT_ANOMALY: 'ADTV_UNIT_WARN',
+              SBN_PROXY_OR_STALE: 'SBN_PROXY_STALE',
+              STALE_RF_DATA: 'RF_STALE'
+            };
+            const shortLabel = compactFlagMap[flag] || flag;
+            return (
+              <span
+                key={flag}
+                title={flag}
+                className="rounded-xs border border-amber-500/50 bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-amber-300"
+              >
+                {shortLabel}
+              </span>
+            );
+          })}
           <span
             className={`inline-flex items-center gap-1.5 rounded-xs border px-2.5 py-0.5 font-mono text-[11px] font-bold tracking-tight ${badgeColor}`}
           >

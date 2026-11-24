@@ -1689,13 +1689,21 @@ export function EmitenFundamentalInspectorModal({
     }
   };
 
+  const finalConvictionScore =
+    joeliardiEval.finalConvictionScore ??
+    joeliardiEval.riskSizingResult?.adjustedConvictionScore ??
+    joeliardiEval.totalConvictionScore;
+  const finalConvictionGrade =
+    joeliardiEval.riskSizingResult?.finalConvictionGrade ??
+    joeliardiEval.convictionGrade;
+
   const isGradeBlockedModal =
     activeStock.isHscFlagged || Boolean(joeliardiEval.sanityReport?.isGradeABlocked);
   const gradeBadgeCls = isGradeBlockedModal
     ? 'bg-[#E11D48]/15 text-[#9E2A2B] border-[#E11D48]/50'
-    : joeliardiEval.totalConvictionScore >= 75
+    : finalConvictionScore >= 75
     ? 'bg-[#059669]/15 text-[#0D5C46] border-[#059669]/50'
-    : joeliardiEval.totalConvictionScore >= 58
+    : finalConvictionScore >= 58
     ? 'bg-[#F59E0B]/15 text-[#D97706] border-[#F59E0B]/50'
     : 'bg-[#E11D48]/15 text-[#9E2A2B] border-[#E11D48]/50';
 
@@ -1723,10 +1731,9 @@ export function EmitenFundamentalInspectorModal({
                   </span>
                   <span
                     className={`text-[10px] font-mono tabular-nums font-bold px-2 py-0.5 rounded-xs border shrink-0 ${gradeBadgeCls}`}
-                    title={`Grade ${joeliardiEval.convictionGrade} · Skor Komposit ${joeliardiEval.totalConvictionScore}/100`}
+                    title={`Grade ${finalConvictionGrade} · Skor Komposit Final ${finalConvictionScore}/100`}
                   >
-                    {joeliardiEval.compactHeaderGradeBadge ||
-                      `${joeliardiEval.convictionGrade} · ${joeliardiEval.totalConvictionScore}/100`}
+                    {`${finalConvictionGrade} · SKOR ${finalConvictionScore}/100`}
                   </span>
                   <span
                     title={
@@ -4330,7 +4337,7 @@ export function EmitenFundamentalInspectorModal({
                         </button>
                       )}
                       <span className="text-xs font-mono tabular-nums font-bold text-[#D97706] bb-amber">
-                        AI Conviction Score: {structuredReport.convictionScore}/100
+                        AI Conviction Score: {finalConvictionScore}/100
                       </span>
                     </div>
                   </div>

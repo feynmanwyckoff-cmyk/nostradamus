@@ -762,6 +762,14 @@ export function renderInspectorReportCanvas(
   const sCtx = scratch.getContext('2d')!;
 
   // Extract core academic & valuation metrics (Single Source of Truth from rawTickerData)
+  const finalConvictionScore =
+    joeliardiEval.finalConvictionScore ??
+    joeliardiEval.riskSizingResult?.adjustedConvictionScore ??
+    joeliardiEval.totalConvictionScore;
+  const finalConvictionGrade =
+    joeliardiEval.riskSizingResult?.finalConvictionGrade ??
+    joeliardiEval.convictionGrade;
+
   const rawTd = joeliardiEval.rawTickerData;
   const safeDer = Math.max(0, rawTd?.debtToEquity ?? stock.debtToEquity);
   const eqMult = 1 + safeDer;
@@ -900,9 +908,19 @@ export function renderInspectorReportCanvas(
     16;
 
   // 4. Pre-measure AI Investment Committee Section (Header + 4-Col Academic Strip + Verdict/CoT + 2x2 Deep Sections + 4 Execution Cards + Bullish/Bearish Checklist)
-  const rawSummaryText =
+  const rawSummaryCandidate =
     structuredReport?.directAnswerSummary ||
-    `Hasil Analisis Nostradamus: Di harga Rp ${formatIdrPriceDisplay(stock.lastPrice)}, ${stock.ticker} memiliki Nilai Intrinsik Wajar Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct.toFixed(1)}%) dengan Skor Keyakinan ${joeliardiEval.totalConvictionScore}/100.`;
+    `Hasil Analisis Nostradamus: Di harga Rp ${formatIdrPriceDisplay(stock.lastPrice)}, ${stock.ticker} memiliki Nilai Intrinsik Wajar Rp ${formatIdrPriceDisplay(joeliardiEval.intrinsicValueIdr)} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct.toFixed(1)}%) dengan Skor Keyakinan ${finalConvictionScore}/100.`;
+  const rawSummaryText = rawSummaryCandidate
+    .replace(/\bSkor(?:\s+Keyakinan)?\s+\d{1,3}\/100\b/gi, (m) =>
+      /Keyakinan/i.test(m)
+        ? `Skor Keyakinan ${finalConvictionScore}/100`
+        : `Skor ${finalConvictionScore}/100`
+    )
+    .replace(
+      /\bGrade\s+(?:A\+|A-|A|B|C|D)\s*\([^)]+\)/gi,
+      `Grade ${finalConvictionGrade}`
+    );
 
   const summaryHeaderMatch = rawSummaryText.match(
     /^((?:Hasil|Kesimpulan|Keputusan|Evaluasi|Audit)\s+[^:]{3,75}):\s*([\s\S]*)$/i
@@ -966,11 +984,22 @@ export function renderInspectorReportCanvas(
     cotRowHeights.reduce((acc, h) => acc + h, 0) +
     Math.max(0, cotRowHeights.length - 1) * 12;
 
-  const verdictBadge = structuredReport?.verdictBadge || joeliardiEval.convictionGrade;
+  const rawVerdictActionPart = structuredReport?.verdictBadge?.includes('//')
+    ? structuredReport.verdictBadge.split('//')[1]?.trim()
+    : joeliardiEval.primaryExecutionActionLabel;
+  const verdictBadge = rawVerdictActionPart
+    ? `${finalConvictionGrade} · SKOR ${finalConvictionScore}/100 // ${rawVerdictActionPart}`
+    : `${finalConvictionGrade} · SKOR ${finalConvictionScore}/100`;
   const verdictTitle = (
     structuredReport?.verdictTitle ||
     `Evaluasi Fundamental & Kuantitatif OOS untuk ${stock.ticker}`
-  ).replace(/^Strong\s+Buy\s*[:—-]\s*/i, '');
+  )
+    .replace(/^Strong\s+Buy\s*[:—-]\s*/i, '')
+    .replace(/\bSkor\s+\d{1,3}\/100\b/gi, `Skor ${finalConvictionScore}/100`)
+    .replace(
+      /\b(?:A\+|A-|A|B|C|D)\s*\((?:CORE CONVICTION|SOLID VALUE|WATCHLIST \/ HOLD|SEED CAPPED|SPECULATIVE|AVOID \/ HSC)\)/g,
+      finalConvictionGrade
+    );
   sCtx.font = '800 14.5px Montserrat, sans-serif';
   const verdictTitleLines = wrapCanvasText(sCtx, verdictTitle, LOGICAL_WIDTH - 136);
 
@@ -1297,7 +1326,27 @@ export function renderInspectorReportCanvas(
         14
       : 0;
 
-  const rawAuditStripH = joeliardiEval.rawTickerData && joeliardiEval.sanityReport ? 146 : 0;
+  const preSanity = joeliardiEval.sanityReport;
+  const preDl = joeliardiEval.dataLineage;
+  const preSbnFlag = preDl?.sbnMacroStatus.isStaleOrProxy
+    ? preDl.sbnMacroStatus.source === 'PROXY_FORMULA'
+      ? 'SBN_PROXY_TNX'
+      : `SBN_STALE_${preDl.sbnMacroStatus.ageDays}D`
+    : null;
+  const preAuditFlags: string[] = preSanity ? [...preSanity.flags] : [];
+  if (preSbnFlag && !preAuditFlags.includes(preSbnFlag)) {
+    preAuditFlags.push(preSbnFlag);
+  }
+  if (preDl?.convictionCappedByLineage && !preAuditFlags.includes('GRADE_C_CAP_SEED')) {
+    preAuditFlags.push('GRADE_C_CAP_SEED');
+  }
+  const hasWrappedAuditFlagsRow = preAuditFlags.length > 0;
+  const rawAuditStripH =
+    joeliardiEval.rawTickerData && joeliardiEval.sanityReport
+      ? hasWrappedAuditFlagsRow
+        ? 168
+        : 146
+      : 0;
 
   const LOGICAL_HEIGHT =
     124 + // Top Header + initial gap
@@ -1363,7 +1412,7 @@ export function renderInspectorReportCanvas(
   // Strict 1-Line Compact Header Badges next to Kicker (Grade, Data Status, Catalyst, Split)
   let kickerBadgeX = headerTextX + ctx.measureText('NOSTRADAMUS').width + 10;
 
-  const compactGradeStr = `${joeliardiEval.convictionGrade} · SKOR ${joeliardiEval.totalConvictionScore}/100`;
+  const compactGradeStr = `${finalConvictionGrade} · SKOR ${finalConvictionScore}/100`;
   ctx.font = '700 9.0px "Fira Code", monospace';
   const cgW = ctx.measureText(compactGradeStr).width + 14;
   drawRoundedRect(ctx, kickerBadgeX, 29, cgW, 18, 3);
@@ -1371,25 +1420,25 @@ export function renderInspectorReportCanvas(
     stock.isHscFlagged || Boolean(joeliardiEval.sanityReport?.isGradeABlocked);
   ctx.fillStyle = isGradeBlockedKicker
     ? 'rgba(225, 29, 72, 0.22)'
-    : joeliardiEval.totalConvictionScore >= 75
+    : finalConvictionScore >= 75
     ? 'rgba(16, 185, 129, 0.22)'
-    : joeliardiEval.totalConvictionScore >= 58
+    : finalConvictionScore >= 58
     ? 'rgba(245, 158, 11, 0.22)'
     : 'rgba(225, 29, 72, 0.22)';
   ctx.fill();
   ctx.strokeStyle = isGradeBlockedKicker
     ? '#F43F5E'
-    : joeliardiEval.totalConvictionScore >= 75
+    : finalConvictionScore >= 75
     ? '#10B981'
-    : joeliardiEval.totalConvictionScore >= 58
+    : finalConvictionScore >= 58
     ? '#F59E0B'
     : '#F43F5E';
   ctx.stroke();
   ctx.fillStyle = isGradeBlockedKicker
     ? '#FB7185'
-    : joeliardiEval.totalConvictionScore >= 75
+    : finalConvictionScore >= 75
     ? '#34D399'
-    : joeliardiEval.totalConvictionScore >= 58
+    : finalConvictionScore >= 58
     ? '#FBBF24'
     : '#FB7185';
   ctx.fillText(compactGradeStr, kickerBadgeX + 7, 41);
@@ -1453,7 +1502,16 @@ export function renderInspectorReportCanvas(
     ctx.fillText(splitLabel, kickerBadgeX + 7, 41);
   }
 
-  // Main Emiten Title
+  // Pre-measure Right Grade Badge in Header (Synchronized with Post-Penalty finalConvictionScore)
+  const isGradeBlockedExport =
+    stock.isHscFlagged || Boolean(joeliardiEval.sanityReport?.isGradeABlocked);
+  const gradeText = `${finalConvictionGrade} · SKOR ${finalConvictionScore}/100`;
+  ctx.font = '700 11.5px Montserrat, sans-serif';
+  const gradeW = ctx.measureText(gradeText).width + 26;
+  const gradeX = LOGICAL_WIDTH - 38 - gradeW;
+  const gradeY = 47;
+
+  // Main Emiten Title (Dynamically bounded by gradeW + 56px gap so title never collides with top-right Grade badge)
   ctx.fillStyle = '#F9FAFB';
   ctx.font = '800 21px Montserrat, sans-serif';
   drawTextAutoFit(
@@ -1461,10 +1519,10 @@ export function renderInspectorReportCanvas(
     `${stock.ticker} · ${stock.name}`,
     headerTextX,
     68,
-    LOGICAL_WIDTH - headerTextX - 310,
+    Math.max(320, LOGICAL_WIDTH - headerTextX - gradeW - 56),
     800,
     21,
-    14
+    13
   );
 
   // Subtitle with "Tren IHSG" and full Indonesian print date
@@ -1472,36 +1530,30 @@ export function renderInspectorReportCanvas(
   const subtitleText = `Sektor IDX-IC: ${stock.sector}   |   Tren IHSG: ${regimeStatus}   |   Dicetak: ${formatIndonesianPrintTimestamp()}`;
   drawTextAutoFit(ctx, subtitleText, headerTextX, 91, LOGICAL_WIDTH - headerTextX - 40, 600, 11.2, 8.8);
 
-  // Right Grade Badge in Header (Synchronized with Post-Penalty Score & Sanity Audit Block)
-  const isGradeBlockedExport =
-    stock.isHscFlagged || Boolean(joeliardiEval.sanityReport?.isGradeABlocked);
-  const gradeText = `${joeliardiEval.convictionGrade} · SKOR ${joeliardiEval.totalConvictionScore}/100`;
+  // Render Right Grade Badge in Header
   ctx.font = '700 11.5px Montserrat, sans-serif';
-  const gradeW = ctx.measureText(gradeText).width + 26;
-  const gradeX = LOGICAL_WIDTH - 38 - gradeW;
-  const gradeY = 47;
   drawRoundedRect(ctx, gradeX, gradeY, gradeW, 32, 4);
   ctx.fillStyle = isGradeBlockedExport
     ? 'rgba(225, 29, 72, 0.2)'
-    : joeliardiEval.totalConvictionScore >= 75
+    : finalConvictionScore >= 75
     ? 'rgba(16, 185, 129, 0.18)'
-    : joeliardiEval.totalConvictionScore >= 58
+    : finalConvictionScore >= 58
     ? 'rgba(245, 158, 11, 0.18)'
     : 'rgba(225, 29, 72, 0.2)';
   ctx.fill();
   ctx.strokeStyle = isGradeBlockedExport
     ? '#F43F5E'
-    : joeliardiEval.totalConvictionScore >= 75
+    : finalConvictionScore >= 75
     ? '#10B981'
-    : joeliardiEval.totalConvictionScore >= 58
+    : finalConvictionScore >= 58
     ? '#F59E0B'
     : '#F43F5E';
   ctx.stroke();
   ctx.fillStyle = isGradeBlockedExport
     ? '#FB7185'
-    : joeliardiEval.totalConvictionScore >= 75
+    : finalConvictionScore >= 75
     ? '#34D399'
-    : joeliardiEval.totalConvictionScore >= 58
+    : finalConvictionScore >= 58
     ? '#FBBF24'
     : '#FB7185';
   ctx.fillText(gradeText, gradeX + 13, gradeY + 20);
@@ -3068,8 +3120,8 @@ export function renderInspectorReportCanvas(
   ctx.fillStyle = isDangerBadge ? '#FB7185' : isPositiveBadge ? '#34D399' : '#FBBF24';
   ctx.fillText(verdictBadge, 78, vY + 15);
 
-  // Right-aligned AI Conviction Score
-  const convScore = structuredReport?.convictionScore ?? joeliardiEval.totalConvictionScore;
+  // Right-aligned AI Conviction Score (Strictly locked to post-penalty finalConvictionScore)
+  const convScore = finalConvictionScore;
   ctx.fillStyle = '#F59E0B';
   ctx.font = '700 11.5px "Fira Code", monospace';
   ctx.textAlign = 'right';
@@ -3704,45 +3756,47 @@ export function renderInspectorReportCanvas(
       return `Rp ${Math.round(v).toLocaleString('id-ID')}`;
     };
 
-    // Header Row with explicit · separators: MktCap Rp XX T · Rev Rp XX T · NI Rp XX T · ADTV Rp XX M/hr
-    const dl = joeliardiEval.dataLineage;
-    const coreSummaryStrip = `MktCap ${fmtCompactIdr(raw.marketCap)} · Rev ${fmtCompactIdr(raw.revenueTTM)} · NI ${fmtCompactIdr(raw.netIncomeTTM)} · ADTV ${fmtCompactIdr(sanity.normalizedAdtv20dIDR)}/hr`;
-    ctx.fillStyle = '#F59E0B';
-    ctx.font = '700 9.6px "Fira Code", monospace';
-    drawTextAutoFit(
-      ctx,
-      `RAW DATA AUDIT STRIP (${raw.ticker}) · ${coreSummaryStrip}`,
-      stripX + 14,
-      stripY + 20,
-      stripW - 460,
-      700,
-      9.6,
-      7.4,
-      '"Fira Code", monospace'
-    );
+    const formatCompactAuditSanityFlag = (flag: string): string => {
+      const compactMap: Record<string, string> = {
+        LINEAR_ANNUALIZATION_BLOCKED: 'LIN_ANN_BLOCKED',
+        YTD_CUMULATIVE_SUM_SUSPECT: 'YTD_SUM_SUSPECT',
+        CATALYST_UNCONFIRMED_NON_OP: 'CAT_NON_OP_BLOCK',
+        CRITICAL_DATA_MISMATCH: 'DATA_MISMATCH',
+        BALANCE_SHEET_ANOMALY: 'BS_ANOMALY',
+        ADTV_UNIT_ANOMALY: 'ADTV_UNIT_WARN',
+        SBN_PROXY_OR_STALE: 'SBN_PROXY_STALE',
+        STALE_RF_DATA: 'RF_STALE',
+        SEED_DATA_ACTIVE: 'SEED_ACTIVE',
+        GRADE_C_CAP_SEED: 'SEED_CAP_C'
+      };
+      return compactMap[flag] || flag;
+    };
 
+    const dl = joeliardiEval.dataLineage;
     const sbnWarnFlag = dl?.sbnMacroStatus.isStaleOrProxy
       ? dl.sbnMacroStatus.source === 'PROXY_FORMULA'
         ? 'SBN_PROXY_TNX'
         : `SBN_STALE_${dl.sbnMacroStatus.ageDays}D`
       : null;
-    const allFlags = [...sanity.flags];
-    if (sbnWarnFlag && !allFlags.includes(sbnWarnFlag as never)) {
-      allFlags.push(sbnWarnFlag as never);
+    const allFlags: string[] = [...sanity.flags];
+    if (sbnWarnFlag && !allFlags.includes(sbnWarnFlag)) {
+      allFlags.push(sbnWarnFlag);
     }
-    if (dl?.convictionCappedByLineage) {
-      allFlags.push('GRADE_C_CAP_SEED' as never);
+    if (dl?.convictionCappedByLineage && !allFlags.includes('GRADE_C_CAP_SEED')) {
+      allFlags.push('GRADE_C_CAP_SEED');
     }
 
-    const statusBadgeText = `SANITY: ${sanity.status}${
-      allFlags.length > 0 ? ` [${allFlags.join(', ')}]` : ''
-    }`;
-    ctx.font = '700 9.2px "Fira Code", monospace';
-    const sbW = Math.min(435, ctx.measureText(statusBadgeText).width + 18);
-    const sbX = stripX + stripW - 14 - sbW;
-    drawRoundedRect(ctx, sbX, stripY + 6, sbW, 20, 3);
     const isWarnOrSeed =
-      sanity.status === 'WARN' || Boolean(dl?.sbnMacroStatus.isStaleOrProxy) || Boolean(dl?.convictionCappedByLineage);
+      sanity.status === 'WARN' ||
+      Boolean(dl?.sbnMacroStatus.isStaleOrProxy) ||
+      Boolean(dl?.convictionCappedByLineage);
+
+    // Row 1: Right-aligned compact primary SANITY status pill + Left-aligned Core Summary with >=36px guaranteed clearance
+    const primarySanityBadgeText = `SANITY_CHECK: ${sanity.status}`;
+    ctx.font = '700 9.0px "Fira Code", monospace';
+    const sbW = Math.ceil(ctx.measureText(primarySanityBadgeText).width + 20);
+    const sbX = stripX + stripW - 14 - sbW;
+    drawRoundedRect(ctx, sbX, stripY + 6, sbW, 19, 3);
     ctx.fillStyle =
       sanity.status === 'FAIL'
         ? 'rgba(244, 63, 94, 0.2)'
@@ -3755,22 +3809,60 @@ export function renderInspectorReportCanvas(
     ctx.stroke();
     ctx.fillStyle =
       sanity.status === 'FAIL' ? '#FB7185' : isWarnOrSeed ? '#FBBF24' : '#34D399';
+    ctx.fillText(primarySanityBadgeText, sbX + 10, stripY + 18.5);
+
+    const coreSummaryStrip = `MktCap ${fmtCompactIdr(raw.marketCap)} · Rev ${fmtCompactIdr(raw.revenueTTM)} · NI ${fmtCompactIdr(raw.netIncomeTTM)} · ADTV ${fmtCompactIdr(sanity.normalizedAdtv20dIDR)}/hr`;
+    const leftSummaryMaxW = Math.max(420, sbX - (stripX + 14) - 36);
+    ctx.fillStyle = '#F59E0B';
+    ctx.font = '700 9.5px "Fira Code", monospace';
     drawTextAutoFit(
       ctx,
-      statusBadgeText,
-      sbX + 9,
+      `RAW DATA AUDIT STRIP (${raw.ticker}) · ${coreSummaryStrip}`,
+      stripX + 14,
       stripY + 19,
-      sbW - 18,
+      leftSummaryMaxW,
       700,
-      9.2,
-      7.2,
+      9.5,
+      7.4,
       '"Fira Code", monospace'
     );
 
+    // Row 2 (Adaptive Flex-Wrap Sub-Row): Render individual compact flag pills on dedicated row so ADTV never collides with flags
+    const headerDividerY = hasWrappedAuditFlagsRow ? stripY + 50 : stripY + 30;
+    if (hasWrappedAuditFlagsRow) {
+      ctx.font = '700 8.0px "Fira Code", monospace';
+      ctx.fillStyle = '#9CA3AF';
+      const flagPrefix = 'AUDIT FLAGS:';
+      ctx.fillText(flagPrefix, stripX + 14, stripY + 39);
+      let pillX = stripX + 14 + ctx.measureText(flagPrefix).width + 8;
+      const maxPillRightX = stripX + stripW - 14;
+
+      allFlags.forEach((rawFlag) => {
+        const compactLabel = formatCompactAuditSanityFlag(String(rawFlag));
+        ctx.font = '700 8.0px "Fira Code", monospace';
+        const pillW = Math.ceil(ctx.measureText(compactLabel).width + 14);
+        if (pillX + pillW > maxPillRightX) return;
+        drawRoundedRect(ctx, pillX, stripY + 27, pillW, 17, 3);
+        ctx.fillStyle =
+          sanity.status === 'FAIL'
+            ? 'rgba(244, 63, 94, 0.16)'
+            : 'rgba(245, 158, 11, 0.15)';
+        ctx.fill();
+        ctx.strokeStyle =
+          sanity.status === 'FAIL'
+            ? 'rgba(244, 63, 94, 0.55)'
+            : 'rgba(245, 158, 11, 0.50)';
+        ctx.stroke();
+        ctx.fillStyle = sanity.status === 'FAIL' ? '#FDA4AF' : '#FCD34D';
+        ctx.fillText(compactLabel, pillX + 7, stripY + 38.5);
+        pillX += pillW + 6;
+      });
+    }
+
     ctx.strokeStyle = '#1F2A3C';
     ctx.beginPath();
-    ctx.moveTo(stripX + 14, stripY + 30);
-    ctx.lineTo(stripX + stripW - 14, stripY + 30);
+    ctx.moveTo(stripX + 14, headerDividerY);
+    ctx.lineTo(stripX + stripW - 14, headerDividerY);
     ctx.stroke();
 
     const spotRf10YPct = raw.spotRf10Y <= 1 ? raw.spotRf10Y * 100 : raw.spotRf10Y;
@@ -3835,7 +3927,7 @@ export function renderInspectorReportCanvas(
 
     const cellGap = 8;
     const cellW = (stripW - 28 - cellGap * 7) / 8;
-    const cellY = stripY + 38;
+    const cellY = headerDividerY + 8;
     const cellH = 56;
 
     auditCells.forEach((cell, idx) => {
@@ -3897,12 +3989,15 @@ export function renderInspectorReportCanvas(
       ? `Tactical Overlay: ${tac.pairTicker} (Z=${tac.zScore >= 0 ? '+' : ''}${tac.zScore} SD · ${tac.action})`
       : '';
 
+    const p1LineY = cellY + cellH + 19;
+    const p2LineY = p1LineY + 18;
+
     ctx.fillStyle = '#D1D5DB';
     drawTextAutoFit(
       ctx,
       `${p1Summary}   ||   ${tacSummary}`,
       stripX + 14,
-      stripY + 113,
+      p1LineY,
       stripW - 28,
       600,
       8.6,
@@ -3915,7 +4010,7 @@ export function renderInspectorReportCanvas(
       ctx,
       p2Summary,
       stripX + 14,
-      stripY + 131,
+      p2LineY,
       stripW - 28,
       600,
       8.6,

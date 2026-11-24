@@ -415,7 +415,9 @@ export interface JoeliardiOosEvaluation {
   balanceSheetHealthScore: number; // 0 - 100 (Pillar 2: DER, OCF Conversion, Dividend Reality)
   valuationSafetyScore: number;   // 0 - 100 (Pillar 3: Multi-Method Ensemble MoS, Sector Matrix & SBN Spot Ke)
   oosQuantRobustnessScore: number; // 0 - 100 (Pillar 4: Quantedge StatArb, OOS Cross-Sectional Factor & 1/Beta)
-  totalConvictionScore: number;   // 0 - 100
+  totalConvictionScore: number;   // 0 - 100 (Post-Penalty Final Score)
+  rawConvictionScore?: number;    // 0 - 100 (Pre-Penalty Raw Weighted Pillar Score)
+  finalConvictionScore?: number;  // 0 - 100 (Explicit Post-Penalty Single Source of Truth Score)
   convictionGrade:
     | 'A+ (CORE CONVICTION)'
     | 'A (CORE CONVICTION)'

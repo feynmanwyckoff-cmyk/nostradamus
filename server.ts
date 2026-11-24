@@ -1076,6 +1076,7 @@ DATA FUNDAMENTAL & KUANTITATIF LIVE EMITEN:
           : 'BEBAS INDIKASI HSC (Kepemilikan Top-10 KSEI < 92,5% · Free Float Sehat)'
       }
 - Skor 4 Pilar Fundamental: (1) Gross Profit & Anti-Junk ${joeliardiEval?.businessQualityScore ?? 0}/100, (2) Kesehatan Neraca ${joeliardiEval?.balanceSheetHealthScore ?? 0}/100, (3) Justified PBV & Kurva SBN ${joeliardiEval?.valuationSafetyScore ?? 0}/100, (4) 1/β Barbell Position Sizing ${joeliardiEval?.oosQuantRobustnessScore ?? 0}/100
+- Skor Keyakinan Final Pasca-Penalti (finalConvictionScore Wajib Dikunci): ${joeliardiEval?.finalConvictionScore ?? joeliardiEval?.totalConvictionScore ?? 0}/100 | Grade Final: ${joeliardiEval?.convictionGrade ?? 'B (WATCHLIST / HOLD)'}
 - Tren IHSG Saat Ini: ${regimeStatus || 'WASPADA'}
 
 RADAR BERITA TERKINI & AKSI KORPORASI (${stock.ticker}):

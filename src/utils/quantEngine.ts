@@ -4017,7 +4017,8 @@ export function evaluateJoeliardiOosFundamental(
     }
   }
 
-  const totalConvictionScore = riskSizingResult.adjustedConvictionScore;
+  const finalConvictionScore = riskSizingResult.adjustedConvictionScore;
+  const totalConvictionScore = finalConvictionScore;
 
   // ============================================================================
   // FIX 3.1: SINGLE SOURCE OF TRUTH EXECUTION THESIS & GRADE-LOCKED RECOMMENDATION
@@ -4113,7 +4114,7 @@ export function evaluateJoeliardiOosFundamental(
       decisionTree.decisionState === 'ACCUMULATE_QUALITY_FAIR_VALUE');
 
   // FIX 4.1: Uniform Grade Badge across Top-Left, Top-Right Header, Banner, and Narrative
-  const compactHeaderGradeBadge = `${convictionGrade} · SKOR ${totalConvictionScore}/100`;
+  const compactHeaderGradeBadge = `${convictionGrade} · SKOR ${finalConvictionScore}/100`;
 
   const hasUserFundamentalOverride =
     Boolean(userFundOverride) ||
@@ -4570,6 +4571,8 @@ export function evaluateJoeliardiOosFundamental(
     valuationSafetyScore,
     oosQuantRobustnessScore,
     totalConvictionScore,
+    rawConvictionScore,
+    finalConvictionScore,
     convictionGrade,
     compactHeaderGradeBadge,
     compactHeaderDataBadge,

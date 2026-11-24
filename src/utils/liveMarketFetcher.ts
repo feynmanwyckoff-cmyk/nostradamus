@@ -4972,10 +4972,18 @@ function buildDeepAnalyticalConvictionReport(params: {
   const tranche1Str = tranche1Pct.toFixed(2);
   const tranche2Str = tranche2Pct.toFixed(2);
 
-  // FIX 3.1: Lock Grade & Primary Recommendation Thesis (resolveExecutionThesis)
+  // FIX 3.1: Lock Grade & Primary Recommendation Thesis (resolveExecutionThesis) to Post-Penalty finalConvictionScore
+  const finalConvictionScore =
+    joeliardiEval.finalConvictionScore ??
+    joeliardiEval.riskSizingResult?.adjustedConvictionScore ??
+    joeliardiEval.totalConvictionScore;
+  const finalConvictionGrade =
+    joeliardiEval.riskSizingResult?.finalConvictionGrade ??
+    joeliardiEval.convictionGrade;
+
   const executionThesis = resolveExecutionThesis({
-    score: joeliardiEval.totalConvictionScore,
-    convictionGrade: joeliardiEval.convictionGrade,
+    score: finalConvictionScore,
+    convictionGrade: finalConvictionGrade,
     sanityStatus: joeliardiEval.sanityReport?.status,
     isWeakMoat: roeTtmPct < dynKe || Boolean(joeliardiEval.isMoatHaircutApplied),
     isHscPenaltyActive: stock.hscTier === 'KSEI_DIVIDEND_PENALTY' || Boolean(stock.isHscFlagged),
@@ -4986,28 +4994,28 @@ function buildDeepAnalyticalConvictionReport(params: {
   const primaryActionLabel = joeliardiEval.primaryExecutionActionLabel ?? executionThesis.primaryActionLabel;
 
   // Verdict determination (100% Coherent with Header Grade Badge & Execution Thesis)
-  let verdictBadge = `${joeliardiEval.convictionGrade} · SKOR ${joeliardiEval.totalConvictionScore}/100 // ${primaryActionLabel}`;
-  let verdictTitle = `${stock.ticker} (${coreQualityMetricText}) — Grade ${joeliardiEval.convictionGrade} (Skor ${joeliardiEval.totalConvictionScore}/100): ${primaryActionLabel} (${executionThesis.holdingFactorsExplanation})`;
+  let verdictBadge = `${finalConvictionGrade} · SKOR ${finalConvictionScore}/100 // ${primaryActionLabel}`;
+  let verdictTitle = `${stock.ticker} (${coreQualityMetricText}) — Grade ${finalConvictionGrade} (Skor ${finalConvictionScore}/100): ${primaryActionLabel} (${executionThesis.holdingFactorsExplanation})`;
   if (stock.isHscFlagged) {
-    verdictBadge = `${joeliardiEval.convictionGrade} // ${primaryActionLabel}`;
+    verdictBadge = `${finalConvictionGrade} // ${primaryActionLabel}`;
     verdictTitle = `Komite Investasi tidak menyarankan pembelian ${stock.ticker} karena terdeteksi fluktuasi harga spekulatif (HSC) di luar kewajaran fundamental`;
   } else if (joeliardiEval.sanityReport?.status === 'FAIL') {
-    verdictBadge = `${joeliardiEval.convictionGrade} // ${primaryActionLabel}`;
+    verdictBadge = `${finalConvictionGrade} // ${primaryActionLabel}`;
     verdictTitle = `Audit Data Fundamental Wajib pada ${stock.ticker}: Terdeteksi flag [${joeliardiEval.sanityReport.flags.join(', ')}] sehingga status Grade A / Core Conviction diblokir`;
-  } else if (isSeedCapped || joeliardiEval.totalConvictionScore < 65) {
-    verdictBadge = `${joeliardiEval.convictionGrade} · SKOR ${joeliardiEval.totalConvictionScore}/100 // ${primaryActionLabel}`;
-    verdictTitle = `Status ${stock.ticker} berada pada ${joeliardiEval.convictionGrade} (Skor ${joeliardiEval.totalConvictionScore}/100): ${primaryActionLabel} (${executionThesis.holdingFactorsExplanation})`;
-  } else if (joeliardiEval.convictionGrade === 'B (WATCHLIST / HOLD)' || (joeliardiEval.totalConvictionScore >= 65 && joeliardiEval.totalConvictionScore < 75)) {
-    verdictBadge = `${joeliardiEval.convictionGrade} · SKOR ${joeliardiEval.totalConvictionScore}/100 // ${primaryActionLabel}`;
-    verdictTitle = `${stock.ticker} berstatus ${joeliardiEval.convictionGrade} (Skor ${joeliardiEval.totalConvictionScore}/100): ${primaryActionLabel}. ${executionThesis.holdingFactorsExplanation} Plafon Maks. ${maxBarbellCapStr}% (Tranche 1: ${tranche1Str}% + Tranche 2: ${tranche2Str}%).`;
+  } else if (isSeedCapped || finalConvictionScore < 65) {
+    verdictBadge = `${finalConvictionGrade} · SKOR ${finalConvictionScore}/100 // ${primaryActionLabel}`;
+    verdictTitle = `Status ${stock.ticker} berada pada ${finalConvictionGrade} (Skor ${finalConvictionScore}/100): ${primaryActionLabel} (${executionThesis.holdingFactorsExplanation})`;
+  } else if (finalConvictionGrade === 'B (WATCHLIST / HOLD)' || (finalConvictionScore >= 65 && finalConvictionScore < 75)) {
+    verdictBadge = `${finalConvictionGrade} · SKOR ${finalConvictionScore}/100 // ${primaryActionLabel}`;
+    verdictTitle = `${stock.ticker} berstatus ${finalConvictionGrade} (Skor ${finalConvictionScore}/100): ${primaryActionLabel}. ${executionThesis.holdingFactorsExplanation} Plafon Maks. ${maxBarbellCapStr}% (Tranche 1: ${tranche1Str}% + Tranche 2: ${tranche2Str}%).`;
   } else {
-    verdictBadge = `${joeliardiEval.convictionGrade} · SKOR ${joeliardiEval.totalConvictionScore}/100 // ${primaryActionLabel}`;
-    verdictTitle = `Peluang investasi pada ${stock.ticker} (${joeliardiEval.convictionGrade} · Skor ${joeliardiEval.totalConvictionScore}/100): ${primaryActionLabel} dengan profitabilitas (${coreQualityMetricText}), ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%, dan diskon MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct.toFixed(1)}% (Syarat MoS Min. ${dynamicRequiredMosPct.toFixed(1)}%, Plafon Maks. ${maxBarbellCapStr}%).`;
+    verdictBadge = `${finalConvictionGrade} · SKOR ${finalConvictionScore}/100 // ${primaryActionLabel}`;
+    verdictTitle = `Peluang investasi pada ${stock.ticker} (${finalConvictionGrade} · Skor ${finalConvictionScore}/100): ${primaryActionLabel} dengan profitabilitas (${coreQualityMetricText}), ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%, dan diskon MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct.toFixed(1)}% (Syarat MoS Min. ${dynamicRequiredMosPct.toFixed(1)}%, Plafon Maks. ${maxBarbellCapStr}%).`;
   }
 
   // Contextual Direct Analysis (Synchronized with Single Source of Truth ValuationLedger & Execution Thesis)
   const actionSummaryPhrase = `BERSTATUS ${primaryActionLabel}${
-    joeliardiEval.convictionGrade === 'B (WATCHLIST / HOLD)'
+    finalConvictionGrade === 'B (WATCHLIST / HOLD)'
       ? ` (${executionThesis.holdingFactorsExplanation})`
       : ''
   }`;
@@ -5018,7 +5026,7 @@ function buildDeepAnalyticalConvictionReport(params: {
   } else if (isAskingTrapOrHsc) {
     directAnswerSummary = isValueTrapCandidate && !isBuyOnStrengthCatalyst
       ? `Hasil Audit Value Trap & Anti-Junk QMJ: Meskipun ${stock.ticker} bersih dari indikasi saham gorengan (HSC) dan tampak murah di atas kertas (Implied PER ${joeliardiEval.impliedPer.toFixed(2)}x, Implied PBV ${joeliardiEval.impliedPbv.toFixed(2)}x vs Justified PBV ${justPbvStr}x, Margin of Safety +${joeliardiEval.marginOfSafetyPct.toFixed(1)}%), komite menetapkan status ${primaryActionLabel} karena ${isStructuralUnderperformer ? `ROE TTM (${roeTtmPct.toFixed(1)}%) berada di bawah Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}% (Spot Rf ${sbnBlended.toFixed(2)}%)` : `pergerakan harga 30 hari masih melemah (${stock.return30D}%)`}.`
-      : `Hasil Audit Value Trap & Kualitas Sektor (${secProfile?.regimeBadgeLabel || stock.sector}): Emiten ${stock.ticker} bersih dari indikasi spekulatif (HSC) dengan Grade ${joeliardiEval.convictionGrade} (Skor ${joeliardiEval.totalConvictionScore}/100) dan rekomendasi utama ${primaryActionLabel}. Selisih harga ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct.toFixed(1)}% terhadap Nilai Intrinsik Wajar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (Graham-Joeliardi Floor Rp ${gjFloorIdr.toLocaleString('id-ID')} · Justified PBV ${justPbvStr}x) ditopang oleh ${coreQualityMetricText} serta ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%.`;
+      : `Hasil Audit Value Trap & Kualitas Sektor (${secProfile?.regimeBadgeLabel || stock.sector}): Emiten ${stock.ticker} bersih dari indikasi spekulatif (HSC) dengan Grade ${finalConvictionGrade} (Skor ${finalConvictionScore}/100) dan rekomendasi utama ${primaryActionLabel}. Selisih harga ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct.toFixed(1)}% terhadap Nilai Intrinsik Wajar Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (Graham-Joeliardi Floor Rp ${gjFloorIdr.toLocaleString('id-ID')} · Justified PBV ${justPbvStr}x) ditopang oleh ${coreQualityMetricText} serta ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%.`;
   } else if (isAskingNews) {
     const topHeadlines = recentNews
       .slice(0, 2)
@@ -5028,7 +5036,7 @@ function buildDeepAnalyticalConvictionReport(params: {
   } else if (isAskingDividendOrCash) {
     directAnswerSummary = `Hasil Bedah Kualitas Dividen, Buyback & Neraca (${secProfile?.regimeBadgeLabel || stock.sector}): Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, Dividend Yield TTM ${stock.ticker} tercatat sebesar ${forwardDivYield.toFixed(2)}% ditambah Buyback Yield +${(joeliardiEval.dynamicBuybackYieldPct ?? 0).toFixed(2)}% (Net Payout Yield ${netPayoutYieldPct.toFixed(2)}%) menghasilkan ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%. Indikator fundamental inti mencatat ${coreQualityMetricText} dengan rekomendasi utama ${primaryActionLabel}.`;
   } else {
-    directAnswerSummary = `Hasil Analisis Nostradamus: Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, tim riset menilai ${stock.ticker} (${valModuleLabel} · Grade ${joeliardiEval.convictionGrade} · Skor ${joeliardiEval.totalConvictionScore}/100) ${actionSummaryPhrase}. Pasar menghargai ${stock.ticker} pada Implied PBV ${joeliardiEval.impliedPbv.toFixed(2)}x (vs Justified PBV ${justPbvStr}x) dan Implied PER ${joeliardiEval.impliedPer.toFixed(2)}x (Earnings Yield ${earningsYieldPct}% vs Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}%), dengan profil fundamental ${coreQualityMetricText} (Syarat MoS Dinamis Min. ${dynamicRequiredMosPct.toFixed(1)}%) serta ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%. Nilai Intrinsik Wajar Ensemble ditetapkan pada Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (${ledger?.formulaAudit || joeliardiEval.ensembleFormulaAudit || `MoS ${joeliardiEval.marginOfSafetyPct}%`}) dengan Graham-Joeliardi Floor Benchmark di Rp ${gjFloorIdr.toLocaleString('id-ID')} dan batas alokasi Barbell Maks. ${maxBarbellCapStr}% portofolio (Tranche 1: ${tranche1Str}% + Tranche 2: ${tranche2Str}%).`;
+    directAnswerSummary = `Hasil Analisis Nostradamus: Pada harga pasar Rp ${stock.lastPrice.toLocaleString('id-ID')}, tim riset menilai ${stock.ticker} (${valModuleLabel} · Grade ${finalConvictionGrade} · Skor ${finalConvictionScore}/100) ${actionSummaryPhrase}. Pasar menghargai ${stock.ticker} pada Implied PBV ${joeliardiEval.impliedPbv.toFixed(2)}x (vs Justified PBV ${justPbvStr}x) dan Implied PER ${joeliardiEval.impliedPer.toFixed(2)}x (Earnings Yield ${earningsYieldPct}% vs Dynamic Cost of Equity Ke ${dynKe.toFixed(2)}%), dengan profil fundamental ${coreQualityMetricText} (Syarat MoS Dinamis Min. ${dynamicRequiredMosPct.toFixed(1)}%) serta ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}%. Nilai Intrinsik Wajar Ensemble ditetapkan pada Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (${ledger?.formulaAudit || joeliardiEval.ensembleFormulaAudit || `MoS ${joeliardiEval.marginOfSafetyPct}%`}) dengan Graham-Joeliardi Floor Benchmark di Rp ${gjFloorIdr.toLocaleString('id-ID')} dan batas alokasi Barbell Maks. ${maxBarbellCapStr}% portofolio (Tranche 1: ${tranche1Str}% + Tranche 2: ${tranche2Str}%).`;
   }
 
   // HOTFIX 4: Unified ATR & Volatility-Calibrated Stop Loss Formula across UI, Narrative, PNG, and PDF
@@ -5096,7 +5104,7 @@ function buildDeepAnalyticalConvictionReport(params: {
     verdictBadge,
     verdictTitle,
     directAnswerSummary,
-    convictionScore: joeliardiEval.totalConvictionScore,
+    convictionScore: finalConvictionScore,
     chainOfThoughtSteps: [
       isFinancialsSector
         ? `01. Audit Profitabilitas Bank (ROE-Ke Spread & True ROA — Bypass GP/A & OCF/NI): ROE TTM ${roeTtmPct.toFixed(1)}% vs Dynamic Ke ${dynKe.toFixed(2)}% (Excess Spread ${excessReturnPct >= 0 ? '+' : ''}${excessReturnPct.toFixed(1)}%), True ROA (NI/Assets) ${trueRoaPct.toFixed(2)}%, dan Asset-to-Equity ${assetLeverageRatio.toFixed(2)}x -> ${excessReturnPct >= 2 ? 'Franchise Perbankan Berkualitas Tinggi.' : 'Spread ROE terhadap Cost of Equity Perlu Dipantau.'}`
@@ -5301,12 +5309,7 @@ export async function requestEmitenAiInspection(params: {
             joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST';
 
           const sanitizedReport: StructuredAiConvictionReport = {
-            verdictBadge:
-              joeliardiEval.isDefensiveDiscountAnomaly || isCatalystBuyOverride
-                ? fallbackReport.verdictBadge
-                : stripRawMarkdownArtifacts(
-                    sr.verdictBadge || fallbackReport.verdictBadge
-                  ),
+            verdictBadge: fallbackReport.verdictBadge,
             verdictTitle: (
               joeliardiEval.isDefensiveDiscountAnomaly || isCatalystBuyOverride
                 ? fallbackReport.verdictTitle
@@ -5315,10 +5318,7 @@ export async function requestEmitenAiInspection(params: {
                   )
             ).replace(/^Strong\s+Buy\s*[:—-]\s*/i, ''),
             directAnswerSummary: cleanedSummary || fallbackReport.directAnswerSummary,
-            convictionScore:
-              typeof sr.convictionScore === 'number'
-                ? sr.convictionScore
-                : fallbackReport.convictionScore,
+            convictionScore: fallbackReport.convictionScore,
             chainOfThoughtSteps: enforcedCotSteps,
             sections:
               Array.isArray(sr.sections) && sr.sections.length > 0
