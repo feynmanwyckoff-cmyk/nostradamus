@@ -4329,8 +4329,13 @@ export function evaluateJoeliardiOosFundamental(
   });
 
   // FASE 3: ROE-Fade Scenarios (Bear / Base / Bull persistence omega) & Ke +/- 1.0pp Sensitivity Matrix
-  const minOmegaProfile = activeProfile.omegaRange.min;
-  const maxOmegaProfile = activeProfile.omegaRange.max;
+  const rawOmegaRange = activeProfile?.omegaRange;
+  const minOmegaProfile = Array.isArray(rawOmegaRange)
+    ? rawOmegaRange[0]
+    : rawOmegaRange?.min ?? 0.5;
+  const maxOmegaProfile = Array.isArray(rawOmegaRange)
+    ? rawOmegaRange[1]
+    : rawOmegaRange?.max ?? 0.85;
   const bearOmega = Number(Math.min(rimPersistenceOmega, minOmegaProfile).toFixed(2));
   const baseOmega = Number(rimPersistenceOmega.toFixed(2));
   const bullOmega = Number(Math.max(rimPersistenceOmega, maxOmegaProfile).toFixed(2));
