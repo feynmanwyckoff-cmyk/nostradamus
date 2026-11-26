@@ -720,23 +720,26 @@ export default function App() {
     [githubConfig]
   );
 
-  // Keep instant local fallback synced with full Indonesian Date + Time (HH:MM:SS WIB)
+  // Keep instant local fallback synced with full Indonesian Date + Time (HH:MM:SS WIB), debounced off the critical render thread
   useEffect(() => {
     if (simRegimeMode !== 'LIVE') return;
-    try {
-      const nowFullStr = formatFullIndonesianDateTime(new Date());
-      const payload: ScreenerCachePayload = {
-        savedAt: nowFullStr,
-        fullDateTimeStr: lastFullSyncDateTime,
-        stocks,
-        macroIndicators,
-        liveIhsgQuote,
-        liveIhsgReturns
-      };
-      localStorage.setItem(SCREENER_CACHE_KEY, JSON.stringify(payload));
-    } catch {
-      // ignore
-    }
+    const timer = window.setTimeout(() => {
+      try {
+        const nowFullStr = formatFullIndonesianDateTime(new Date());
+        const payload: ScreenerCachePayload = {
+          savedAt: nowFullStr,
+          fullDateTimeStr: lastFullSyncDateTime,
+          stocks,
+          macroIndicators,
+          liveIhsgQuote,
+          liveIhsgReturns
+        };
+        localStorage.setItem(SCREENER_CACHE_KEY, JSON.stringify(payload));
+      } catch {
+        // ignore
+      }
+    }, 650);
+    return () => window.clearTimeout(timer);
   }, [stocks, macroIndicators, liveIhsgQuote, liveIhsgReturns, simRegimeMode, lastFullSyncDateTime]);
 
   useEffect(() => {
@@ -1243,6 +1246,21 @@ export default function App() {
 
   const handleAddStock = (newStock: StockMetrics) => {
     setStocks((prev) => {
+      const existing = prev.find((s) => s.ticker === newStock.ticker);
+      if (
+        existing &&
+        existing.lastPrice === newStock.lastPrice &&
+        existing.change1D === newStock.change1D &&
+        existing.roe === newStock.roe &&
+        existing.revenueTTMIdr === newStock.revenueTTMIdr &&
+        existing.netIncomeTTMIdr === newStock.netIncomeTTMIdr &&
+        existing.equityAttributableIdr === newStock.equityAttributableIdr &&
+        existing.adtv20dIdr === newStock.adtv20dIdr &&
+        existing.fundamentalsSource === newStock.fundamentalsSource &&
+        existing.isHscFlagged === newStock.isHscFlagged
+      ) {
+        return prev;
+      }
       const filtered = prev.filter((s) => s.ticker !== newStock.ticker);
       const next = rankUniverseWithBuffer([newStock, ...filtered], rebalanceBufferPct);
       if (isGitHubCloudConfigured(githubConfig) && githubConfig.autoSyncOnEdit) {

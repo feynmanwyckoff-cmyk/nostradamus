@@ -326,19 +326,30 @@ export const IDX_CORPORATE_ACTION_CATALYST_REGISTRY: Record<
 };
 
 const CUSTOM_CORP_ACTION_STORAGE_KEY = 'nostradamus_corp_action_overrides_v1';
+let cachedCustomCorpActionOverrides: Record<string, CorporateActionOverrideInput> | null = null;
 
 /**
- * Loads user-configured Corporate Action & Quarterly Catalyst overrides from localStorage.
+ * Loads user-configured Corporate Action & Quarterly Catalyst overrides from localStorage (with in-memory cache).
  */
 export function getCustomCorporateActionOverrides(): Record<string, CorporateActionOverrideInput> {
+  if (cachedCustomCorpActionOverrides !== null) {
+    return cachedCustomCorpActionOverrides;
+  }
   if (typeof window === 'undefined') return {};
   try {
     const raw = window.localStorage.getItem(CUSTOM_CORP_ACTION_STORAGE_KEY);
-    if (!raw) return {};
+    if (!raw) {
+      cachedCustomCorpActionOverrides = {};
+      return cachedCustomCorpActionOverrides;
+    }
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
+    const resolved: Record<string, CorporateActionOverrideInput> =
+      parsed && typeof parsed === 'object' ? parsed : {};
+    cachedCustomCorpActionOverrides = resolved;
+    return resolved;
   } catch {
-    return {};
+    cachedCustomCorpActionOverrides = {};
+    return cachedCustomCorpActionOverrides;
   }
 }
 
@@ -350,12 +361,13 @@ export function saveCustomCorporateActionOverride(input: CorporateActionOverride
   const clean = input.ticker.trim().toUpperCase().replace(/\.JK$/i, '');
   if (!clean) return;
   try {
-    const current = getCustomCorporateActionOverrides();
+    const current = { ...getCustomCorporateActionOverrides() };
     current[clean] = {
       ...current[clean],
       ...input,
       ticker: clean
     };
+    cachedCustomCorpActionOverrides = current;
     window.localStorage.setItem(CUSTOM_CORP_ACTION_STORAGE_KEY, JSON.stringify(current));
   } catch {
     // ignore storage quota errors
@@ -369,9 +381,10 @@ export function resetCorporateActionOverride(ticker: string): void {
   if (typeof window === 'undefined') return;
   const clean = ticker.trim().toUpperCase().replace(/\.JK$/i, '');
   try {
-    const current = getCustomCorporateActionOverrides();
+    const current = { ...getCustomCorporateActionOverrides() };
     if (current[clean]) {
       delete current[clean];
+      cachedCustomCorpActionOverrides = current;
       window.localStorage.setItem(CUSTOM_CORP_ACTION_STORAGE_KEY, JSON.stringify(current));
     }
   } catch {

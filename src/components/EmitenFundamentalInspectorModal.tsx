@@ -176,140 +176,153 @@ function parseTitledCardStep(
   };
 }
 
+const VERDICT_TERMS = [
+  'STRONG BUY: ANOMALI ASET DEFENSIF TERDISKON',
+  'BUY ON STRENGTH // CATALYST ACTIVE',
+  'BUY ON STRENGTH / CATALYST',
+  'CATALYST ACTIVE',
+  'TERDISKON / MURAH',
+  'MAHAL / PREMIUM',
+  'UNDERCUT / DEEP DISCOUNT',
+  'LAYAK DIAKUMULASI BERTAHAP',
+  'LAYAK KOLEKSI SELEKTIF SAAT KOREKSI',
+  'LEBIH TEPAT DITUNGGU PADA AREA PULLBACK',
+  'TIDAK LAYAK DIAKUMULASI',
+  'STRONG ACCUMULATE',
+  'SELECTIVE BUY',
+  'BUY ON WEAKNESS',
+  'BUKAN VALUE TRAP',
+  'VALUE TRAP',
+  'DIVIDEND TRAP',
+  'HIGH SHAREHOLDING CONCENTRATION',
+  'HIGH SPECULATIVE CONCENTRATION',
+  'EARLY WARNING SUSPECT HSC',
+  'SUSPECT HSC',
+  'CLEAN NON-HSC',
+  'BLOKIR HSC',
+  'ROTATE OUT'
+];
+const VERDICT_TERMS_SET = new Set(VERDICT_TERMS);
+
+const METRIC_LABELS = [
+  'Hist EV/EBITDA Band 5Y',
+  'Hist PBV Band 5Y',
+  'ValuationLedger',
+  'ROE TTM',
+  'EPS TTM',
+  'Dynamic Buyback Yield',
+  'Buyback Yield',
+  'Total Shareholder Yield',
+  'TSY',
+  'Implied Target Wajar PER',
+  'Implied PER',
+  'Wajar PER',
+  'Fair PER',
+  'Quality P/E',
+  'P/AFFO',
+  'EV/EBITDA',
+  'P/CF',
+  'PER',
+  'Justified PBV',
+  'PBV Wajar',
+  'Implied PBV',
+  'Wajar PBV',
+  'Fair PBV',
+  'PBV',
+  'StatArb Z-Score',
+  'Z-Score',
+  'Korelasi',
+  'Kepemilikan Top-10 KSEI',
+  'Top-10 KSEI',
+  'KSEI Top-10',
+  'Penalti Skor HSC',
+  'GP/A (Novy-Marx)',
+  'GP/A',
+  'OCF/NI',
+  'Penalti Akrual',
+  'Spot SBN Blended',
+  'Kurva Spot SBN',
+  'Spot Rf',
+  'SBN 1Y',
+  'SBN 5Y',
+  'SBN 10Y',
+  'Dynamic Cost of Equity',
+  'Ke',
+  'Propensitas 1/β',
+  'Cap 1/β',
+  '1/β Cap',
+  'Batas Alokasi Maks',
+  'Forward Dividend Yield (Est)',
+  'Forward Dividend Yield',
+  'Earnings Yield',
+  'Net ERP Spread',
+  'Raw Spread',
+  'ERP',
+  'ADTV 20D',
+  'ROA murni',
+  'ROA',
+  'ROE organik',
+  'ROE',
+  'Equity Multiplier',
+  'DER',
+  'Operating Margin',
+  'Op Margin',
+  'Margin of Safety',
+  'MoS',
+  'Equity Yield Spread',
+  'Skor Value',
+  'Skor Komposit',
+  'Skor Momentum',
+  'Low-Vol',
+  'Beta 1Y',
+  'Beta',
+  'BVPS',
+  'EPS',
+  'biaya modal',
+  'Cost of Equity',
+  'Nilai Intrinsik Wajar',
+  'Nilai Wajar',
+  'margin usaha'
+];
+
+const BASE_NARRATIVE_PATTERN_PARTS = [
+  `\\b(?:${VERDICT_TERMS.join('|')})\\b`,
+  `\\b(?:${METRIC_LABELS.join('|')})\\s*~?(?:Rp\\s*)?[+-]?\\d+(?:[.,]\\d+)?(?:%|x|\\/100|\\/10|\\/saham)?`,
+  `~?Rp\\s*\\d+(?:[.,]\\d+)*(?:\\/saham)?`,
+  `[+-]?\\d+(?:[.,]\\d+)?(?:%|x|\\b\\/100\\b|\\b\\/10\\b)`
+];
+
+const narrativeRegexByTickerCache = new Map<string, RegExp>();
+const narrativeHighlightNodeCache = new Map<string, React.ReactNode>();
+const quantRationaleNodeCache = new Map<string, React.ReactNode>();
+
 function renderHighlightedFinancialNarrative(
   text: string,
   ticker?: string
 ): React.ReactNode {
   if (!text) return null;
-  const cleanTicker = (ticker || '').trim().toUpperCase();
-  const escapedTicker = cleanTicker.replace(/[^A-Z0-9]/g, '');
-
-  const verdictTerms = [
-    'STRONG BUY: ANOMALI ASET DEFENSIF TERDISKON',
-    'BUY ON STRENGTH // CATALYST ACTIVE',
-    'BUY ON STRENGTH / CATALYST',
-    'CATALYST ACTIVE',
-    'TERDISKON / MURAH',
-    'MAHAL / PREMIUM',
-    'UNDERCUT / DEEP DISCOUNT',
-    'LAYAK DIAKUMULASI BERTAHAP',
-    'LAYAK KOLEKSI SELEKTIF SAAT KOREKSI',
-    'LEBIH TEPAT DITUNGGU PADA AREA PULLBACK',
-    'TIDAK LAYAK DIAKUMULASI',
-    'STRONG ACCUMULATE',
-    'SELECTIVE BUY',
-    'BUY ON WEAKNESS',
-    'BUKAN VALUE TRAP',
-    'VALUE TRAP',
-    'DIVIDEND TRAP',
-    'HIGH SHAREHOLDING CONCENTRATION',
-    'HIGH SPECULATIVE CONCENTRATION',
-    'EARLY WARNING SUSPECT HSC',
-    'SUSPECT HSC',
-    'CLEAN NON-HSC',
-    'BLOKIR HSC',
-    'ROTATE OUT'
-  ];
-
-  const metricLabels = [
-    'Hist EV/EBITDA Band 5Y',
-    'Hist PBV Band 5Y',
-    'ValuationLedger',
-    'ROE TTM',
-    'EPS TTM',
-    'Dynamic Buyback Yield',
-    'Buyback Yield',
-    'Total Shareholder Yield',
-    'TSY',
-    'Implied Target Wajar PER',
-    'Implied PER',
-    'Wajar PER',
-    'Fair PER',
-    'Quality P/E',
-    'P/AFFO',
-    'EV/EBITDA',
-    'P/CF',
-    'PER',
-    'Justified PBV',
-    'PBV Wajar',
-    'Implied PBV',
-    'Wajar PBV',
-    'Fair PBV',
-    'PBV',
-    'StatArb Z-Score',
-    'Z-Score',
-    'Korelasi',
-    'Kepemilikan Top-10 KSEI',
-    'Top-10 KSEI',
-    'KSEI Top-10',
-    'Penalti Skor HSC',
-    'GP/A (Novy-Marx)',
-    'GP/A',
-    'OCF/NI',
-    'Penalti Akrual',
-    'Spot SBN Blended',
-    'Kurva Spot SBN',
-    'Spot Rf',
-    'SBN 1Y',
-    'SBN 5Y',
-    'SBN 10Y',
-    'Dynamic Cost of Equity',
-    'Ke',
-    'Propensitas 1/β',
-    'Cap 1/β',
-    '1/β Cap',
-    'Batas Alokasi Maks',
-    'Forward Dividend Yield (Est)',
-    'Forward Dividend Yield',
-    'Earnings Yield',
-    'Net ERP Spread',
-    'Raw Spread',
-    'ERP',
-    'ADTV 20D',
-    'ROA murni',
-    'ROA',
-    'ROE organik',
-    'ROE',
-    'Equity Multiplier',
-    'DER',
-    'Operating Margin',
-    'Op Margin',
-    'Margin of Safety',
-    'MoS',
-    'Equity Yield Spread',
-    'Skor Value',
-    'Skor Komposit',
-    'Skor Momentum',
-    'Low-Vol',
-    'Beta 1Y',
-    'Beta',
-    'BVPS',
-    'EPS',
-    'biaya modal',
-    'Cost of Equity',
-    'Nilai Intrinsik Wajar',
-    'Nilai Wajar',
-    'margin usaha'
-  ];
-
-  const patternParts: string[] = [
-    `\\b(?:${verdictTerms.join('|')})\\b`,
-    `\\b(?:${metricLabels.join('|')})\\s*~?(?:Rp\\s*)?[+-]?\\d+(?:[.,]\\d+)?(?:%|x|\\/100|\\/10|\\/saham)?`,
-    `~?Rp\\s*\\d+(?:[.,]\\d+)*(?:\\/saham)?`,
-    `[+-]?\\d+(?:[.,]\\d+)?(?:%|x|\\b\\/100\\b|\\b\\/10\\b)`
-  ];
-
-  if (escapedTicker.length >= 4) {
-    patternParts.push(`\\b${escapedTicker}\\b`);
+  const cleanTicker = (ticker || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const cacheKey = `${cleanTicker}::${text}`;
+  const cachedNode = narrativeHighlightNodeCache.get(cacheKey);
+  if (cachedNode !== undefined) {
+    return cachedNode;
   }
 
-  const masterRegex = new RegExp(`(${patternParts.join('|')})`, 'g');
-  const segments = text.split(masterRegex);
+  let masterRegex = narrativeRegexByTickerCache.get(cleanTicker);
+  if (!masterRegex) {
+    const patternParts = [...BASE_NARRATIVE_PATTERN_PARTS];
+    if (cleanTicker.length >= 4) {
+      patternParts.push(`\\b${cleanTicker}\\b`);
+    }
+    masterRegex = new RegExp(`(${patternParts.join('|')})`, 'g');
+    narrativeRegexByTickerCache.set(cleanTicker, masterRegex);
+  }
 
-  return segments.map((seg, i) => {
+  const segments = text.split(masterRegex);
+  const rendered = segments.map((seg, i) => {
     if (!seg) return null;
     if (i % 2 === 1) {
-      const isVerdict = verdictTerms.some((v) => seg.toUpperCase() === v);
+      const isVerdict = VERDICT_TERMS_SET.has(seg.toUpperCase());
       if (isVerdict) {
         return (
           <strong
@@ -328,6 +341,12 @@ function renderHighlightedFinancialNarrative(
     }
     return <React.Fragment key={i}>{seg}</React.Fragment>;
   });
+
+  if (narrativeHighlightNodeCache.size > 300) {
+    narrativeHighlightNodeCache.clear();
+  }
+  narrativeHighlightNodeCache.set(cacheKey, rendered);
+  return rendered;
 }
 
 function renderHighlightedQuantRationale(
@@ -338,30 +357,35 @@ function renderHighlightedQuantRationale(
   if (!text) return null;
   const cleanTicker = (ticker || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
   const cleanPeer = (peerTicker || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const cacheKey = `${cleanTicker}::${cleanPeer}::${text}`;
+  const cachedNode = quantRationaleNodeCache.get(cacheKey);
+  if (cachedNode !== undefined) {
+    return cachedNode;
+  }
 
   // Split out "Langkah Follow-Up: ..." if present so we can style the follow-up sentence inline with distinct tactical emphasis
   const followUpSplit = text.split(/(Langkah Follow-Up:\s*[\s\S]*)$/i);
   const mainBody = followUpSplit[0] || '';
   const followUpClause = followUpSplit[1] || '';
 
-  const highlightTokens = (segmentText: string, keyPrefix: string) => {
-    const tokenPatterns: string[] = [
-      `terdiskon\\s+tajam\\s+[+-]?\\d+(?:[.,]\\d+)?%`,
-      `(?:diskon|premi)\\s+[+-]?\\d+(?:[.,]\\d+)?%`,
-      `Surplus\\s+konversi\\s+kas\\s+riil\\s+sangat\\s+solid`,
-      `Anomali\\s+Relative\\s+Value\\s+Terdeteksi`,
-      `Ohlson-Penman\\s+RIM(?:\\s*\\([^)]+\\))?`,
-      `Multi-Stage\\s+RIM(?:\\s*\\([^)]+\\))?`,
-      `(?:OCF\\/NI|GP\\/A(?:\\s+Novy-Marx)?|DER|Forward\\s+ROE|Fwd\\s+ROE|Ke|Z-Score|Spread\\s+1D|Spread\\s+30D|P\\/CF|EV\\/EBITDA|P\\/AFFO|Justified\\s+PBV|Quality\\s+P\\/E|Cash\\s+EPS|EBITDA|AFFO|OCF|EPS|BVPS|ρ|ω)\\s*(?:=\\s*)?~?(?:Rp\\s*)?[+-]?\\d+(?:[.,]\\d+)?(?:%|x|σ|\\/[a-zA-Z]+)?`,
-      `[+-]?\\d+(?:[.,]\\d+)?x\\s+vs\\s+(?:Wajar|Justified\\s+PBV)\\s+[+-]?\\d+(?:[.,]\\d+)?x`,
-      `[+-]?\\d+(?:[.,]\\d+)?%\\s+excess\\s+return`,
-      `~?Rp\\s*\\d+(?:[.,]\\d+)*(?:\\/shm|\\/saham)?`,
-      `[+-]?\\d+(?:[.,]\\d+)?(?:%|x|σ)`
-    ];
-    if (cleanTicker.length >= 4) tokenPatterns.push(`\\b${cleanTicker}\\b`);
-    if (cleanPeer.length >= 4) tokenPatterns.push(`\\b${cleanPeer}\\b`);
+  const tokenPatterns: string[] = [
+    `terdiskon\\s+tajam\\s+[+-]?\\d+(?:[.,]\\d+)?%`,
+    `(?:diskon|premi)\\s+[+-]?\\d+(?:[.,]\\d+)?%`,
+    `Surplus\\s+konversi\\s+kas\\s+riil\\s+sangat\\s+solid`,
+    `Anomali\\s+Relative\\s+Value\\s+Terdeteksi`,
+    `Ohlson-Penman\\s+RIM(?:\\s*\\([^)]+\\))?`,
+    `Multi-Stage\\s+RIM(?:\\s*\\([^)]+\\))?`,
+    `(?:OCF\\/NI|GP\\/A(?:\\s+Novy-Marx)?|DER|Forward\\s+ROE|Fwd\\s+ROE|Ke|Z-Score|Spread\\s+1D|Spread\\s+30D|P\\/CF|EV\\/EBITDA|P\\/AFFO|Justified\\s+PBV|Quality\\s+P\\/E|Cash\\s+EPS|EBITDA|AFFO|OCF|EPS|BVPS|ρ|ω)\\s*(?:=\\s*)?~?(?:Rp\\s*)?[+-]?\\d+(?:[.,]\\d+)?(?:%|x|σ|\\/[a-zA-Z]+)?`,
+    `[+-]?\\d+(?:[.,]\\d+)?x\\s+vs\\s+(?:Wajar|Justified\\s+PBV)\\s+[+-]?\\d+(?:[.,]\\d+)?x`,
+    `[+-]?\\d+(?:[.,]\\d+)?%\\s+excess\\s+return`,
+    `~?Rp\\s*\\d+(?:[.,]\\d+)*(?:\\/shm|\\/saham)?`,
+    `[+-]?\\d+(?:[.,]\\d+)?(?:%|x|σ)`
+  ];
+  if (cleanTicker.length >= 4) tokenPatterns.push(`\\b${cleanTicker}\\b`);
+  if (cleanPeer.length >= 4) tokenPatterns.push(`\\b${cleanPeer}\\b`);
+  const regex = new RegExp(`(${tokenPatterns.join('|')})`, 'g');
 
-    const regex = new RegExp(`(${tokenPatterns.join('|')})`, 'g');
+  const highlightTokens = (segmentText: string, keyPrefix: string) => {
     const parts = segmentText.split(regex);
 
     return parts.map((part, idx) => {
@@ -419,54 +443,61 @@ function renderHighlightedQuantRationale(
     });
   };
 
+  let rendered: React.ReactNode;
   if (!followUpClause) {
-    return highlightTokens(mainBody, 'main');
+    rendered = highlightTokens(mainBody, 'main');
+  } else {
+    const isBuyFollowUp = /BELI\s*\/\s*AKUMULASI/i.test(followUpClause);
+    const isTrimRotateFollowUp = /TAHAN\s+BELI\s+BARU|TRIM|ROTASI\s+KE\s+PAIR/i.test(followUpClause);
+
+    const followUpBody = followUpClause.replace(/^Langkah Follow-Up:\s*/i, '');
+    const actionMatch = followUpBody.match(
+      /^(BELI\s*\/\s*AKUMULASI\s+[A-Z]{4}|TAHAN\s+BELI\s+BARU\s*\/\s*JUAL\s+SEBAGIAN\s*\(TRIM\)\s+[A-Z]{4}\s*&\s*ROTASI\s+KE\s+PAIR\s+[A-Z]{4}|Pertahankan\s+posisi\s*\(HOLD\)\s+[A-Z]{4}|Hindari\s+arbitrase\s+pasangan\s*\(pair\s+trade\)\s+murni)/i
+    );
+
+    rendered = (
+      <>
+        <span>{highlightTokens(mainBody.trim(), 'main')}</span>
+        <span className="block mt-2 pt-1.5 border-t border-[#E4E2DD]/70">
+          <strong
+            className={`font-extrabold px-1.5 py-0.5 rounded-2xs mr-1.5 inline-block ${
+              isBuyFollowUp
+                ? 'text-[#0D5C46] bg-[#059669]/15 border border-[#059669]/40'
+                : isTrimRotateFollowUp
+                ? 'text-[#9E2A2B] bg-[#E11D48]/15 border border-[#E11D48]/40'
+                : 'text-[#0284C7] bb-cyan bg-[#0284C7]/15 border border-[#0284C7]/40'
+            }`}
+          >
+            Langkah Follow-Up:
+          </strong>
+          {actionMatch ? (
+            <>
+              <strong
+                className={`font-extrabold underline underline-offset-2 ${
+                  isBuyFollowUp
+                    ? 'text-[#0D5C46]'
+                    : isTrimRotateFollowUp
+                    ? 'text-[#9E2A2B]'
+                    : 'text-[#111315]'
+                }`}
+              >
+                {actionMatch[1]}
+              </strong>
+              {highlightTokens(followUpBody.slice(actionMatch[1].length), 'fu_rest')}
+            </>
+          ) : (
+            highlightTokens(followUpBody, 'fu_all')
+          )}
+        </span>
+      </>
+    );
   }
 
-  const isBuyFollowUp = /BELI\s*\/\s*AKUMULASI/i.test(followUpClause);
-  const isTrimRotateFollowUp = /TAHAN\s+BELI\s+BARU|TRIM|ROTASI\s+KE\s+PAIR/i.test(followUpClause);
-
-  const followUpBody = followUpClause.replace(/^Langkah Follow-Up:\s*/i, '');
-  const actionMatch = followUpBody.match(
-    /^(BELI\s*\/\s*AKUMULASI\s+[A-Z]{4}|TAHAN\s+BELI\s+BARU\s*\/\s*JUAL\s+SEBAGIAN\s*\(TRIM\)\s+[A-Z]{4}\s*&\s*ROTASI\s+KE\s+PAIR\s+[A-Z]{4}|Pertahankan\s+posisi\s*\(HOLD\)\s+[A-Z]{4}|Hindari\s+arbitrase\s+pasangan\s*\(pair\s+trade\)\s+murni)/i
-  );
-
-  return (
-    <>
-      <span>{highlightTokens(mainBody.trim(), 'main')}</span>
-      <span className="block mt-2 pt-1.5 border-t border-[#E4E2DD]/70">
-        <strong
-          className={`font-extrabold px-1.5 py-0.5 rounded-2xs mr-1.5 inline-block ${
-            isBuyFollowUp
-              ? 'text-[#0D5C46] bg-[#059669]/15 border border-[#059669]/40'
-              : isTrimRotateFollowUp
-              ? 'text-[#9E2A2B] bg-[#E11D48]/15 border border-[#E11D48]/40'
-              : 'text-[#0284C7] bb-cyan bg-[#0284C7]/15 border border-[#0284C7]/40'
-          }`}
-        >
-          Langkah Follow-Up:
-        </strong>
-        {actionMatch ? (
-          <>
-            <strong
-              className={`font-extrabold underline underline-offset-2 ${
-                isBuyFollowUp
-                  ? 'text-[#0D5C46]'
-                  : isTrimRotateFollowUp
-                  ? 'text-[#9E2A2B]'
-                  : 'text-[#111315]'
-              }`}
-            >
-              {actionMatch[1]}
-            </strong>
-            {highlightTokens(followUpBody.slice(actionMatch[1].length), 'fu_rest')}
-          </>
-        ) : (
-          highlightTokens(followUpBody, 'fu_all')
-        )}
-      </span>
-    </>
-  );
+  if (quantRationaleNodeCache.size > 150) {
+    quantRationaleNodeCache.clear();
+  }
+  quantRationaleNodeCache.set(cacheKey, rendered);
+  return rendered;
 }
 
 export function EmitenFundamentalInspectorModal({
@@ -532,24 +563,47 @@ export function EmitenFundamentalInspectorModal({
 
   const typingTimerRef = useRef<number | null>(null);
 
+  // Stabilize incoming stock prop reference against unrelated background universe sync updates
+  const stableStock = useMemo(
+    () => stock,
+    [
+      stock?.ticker,
+      stock?.lastPrice,
+      stock?.change1D,
+      stock?.return30D,
+      stock?.beta1Y,
+      stock?.volatilityAnn,
+      stock?.roe,
+      stock?.debtToEquity,
+      stock?.operatingMargin,
+      stock?.revenueTTMIdr,
+      stock?.netIncomeTTMIdr,
+      stock?.equityAttributableIdr,
+      stock?.adtv20dIdr,
+      stock?.fundamentalsSource,
+      stock?.isHscFlagged,
+      stock?.hscTier
+    ]
+  );
+
   // Active stock merges initial prop with on-demand live quote, snapshot overlay, and user fundamental overrides
   const activeStock = useMemo(() => {
-    if (!stock) return null;
+    if (!stableStock) return null;
     const base =
-      liveStockOverride && liveStockOverride.ticker === stock.ticker
+      liveStockOverride && liveStockOverride.ticker === stableStock.ticker
         ? {
-            ...stock,
+            ...stableStock,
             ...liveStockOverride,
-            isHscFlagged: stock.isHscFlagged,
-            hscSource: stock.hscSource,
-            hscTier: stock.hscTier,
-            hscReason: stock.hscReason,
-            kseiHscConcentrationPct: stock.kseiHscConcentrationPct,
-            kseiHscIsNew: stock.kseiHscIsNew,
-            kseiHscFootnote: stock.kseiHscFootnote,
-            kseiHscScorePenaltyPts: stock.kseiHscScorePenaltyPts
+            isHscFlagged: stableStock.isHscFlagged,
+            hscSource: stableStock.hscSource,
+            hscTier: stableStock.hscTier,
+            hscReason: stableStock.hscReason,
+            kseiHscConcentrationPct: stableStock.kseiHscConcentrationPct,
+            kseiHscIsNew: stableStock.kseiHscIsNew,
+            kseiHscFootnote: stableStock.kseiHscFootnote,
+            kseiHscScorePenaltyPts: stableStock.kseiHscScorePenaltyPts
           }
-        : stock;
+        : stableStock;
     const overlay = resolveTickerFundamentalOverlay(
       base.ticker,
       {
@@ -601,7 +655,7 @@ export function EmitenFundamentalInspectorModal({
       ...(overlay.fundamentalsNote ? { fundamentalsNote: overlay.fundamentalsNote } : {})
     };
     return enrichStockMetrics(mergedWithOverlay);
-  }, [stock, liveStockOverride, catalystRevision]);
+  }, [stableStock, liveStockOverride, catalystRevision]);
 
   const joeliardiEval = useMemo(() => {
     if (!activeStock) return null;
@@ -1198,7 +1252,7 @@ export function EmitenFundamentalInspectorModal({
     ];
   }, [activeStock, joeliardiEval]);
 
-  // Trigger progressive typing animation whenever a new structuredReport arrives
+  // Trigger lightweight 2-stage progressive block reveal whenever a new structuredReport arrives (eliminates 50Hz full-modal re-renders)
   useEffect(() => {
     if (typingTimerRef.current) {
       window.clearInterval(typingTimerRef.current);
@@ -1220,46 +1274,23 @@ export function EmitenFundamentalInspectorModal({
     const totalCot = structuredReport.chainOfThoughtSteps?.length || 0;
     const totalSecs = structuredReport.sections?.length || 0;
 
-    setTypedCharCount(0);
-    setVisibleCotCount(0);
-    setVisibleSectionCount(0);
-    setIsTypingComplete(false);
+    // Frame 0: Immediately display full Executive Summary + initial Chain-of-Thought cards (hits memoized RegExp cache once)
+    setTypedCharCount(totalChars);
+    setVisibleCotCount(totalCot);
+    setVisibleSectionCount(Math.min(2, totalSecs));
+    setIsTypingComplete(totalSecs <= 2);
 
-    let currentChars = 0;
-    let currentCot = 0;
-    let currentSec = 0;
-
-    typingTimerRef.current = window.setInterval(() => {
-      if (currentChars < totalChars) {
-        // Type 5 characters per 18ms tick (~275 chars/sec) for a brisk, intelligent streaming feel
-        currentChars = Math.min(totalChars, currentChars + 5);
-        setTypedCharCount(currentChars);
-
-        // Progressively reveal Chain-of-Thought steps as summary types out
-        const progressRatio = totalChars > 0 ? currentChars / totalChars : 1;
-        const targetCot = Math.min(totalCot, Math.floor(progressRatio * (totalCot + 1)));
-        if (targetCot > currentCot) {
-          currentCot = targetCot;
-          setVisibleCotCount(currentCot);
-        }
-      } else if (currentCot < totalCot) {
-        currentCot += 1;
-        setVisibleCotCount(currentCot);
-      } else if (currentSec < totalSecs) {
-        currentSec += 1;
-        setVisibleSectionCount(currentSec);
-      } else {
+    if (totalSecs > 2) {
+      typingTimerRef.current = window.setTimeout(() => {
+        setVisibleSectionCount(totalSecs);
         setIsTypingComplete(true);
-        if (typingTimerRef.current) {
-          window.clearInterval(typingTimerRef.current);
-          typingTimerRef.current = null;
-        }
-      }
-    }, 20);
+        typingTimerRef.current = null;
+      }, 90);
+    }
 
     return () => {
       if (typingTimerRef.current) {
-        window.clearInterval(typingTimerRef.current);
+        window.clearTimeout(typingTimerRef.current);
         typingTimerRef.current = null;
       }
     };
@@ -1267,7 +1298,7 @@ export function EmitenFundamentalInspectorModal({
 
   const handleSkipTypingAnimation = () => {
     if (typingTimerRef.current) {
-      window.clearInterval(typingTimerRef.current);
+      window.clearTimeout(typingTimerRef.current);
       typingTimerRef.current = null;
     }
     if (structuredReport) {
@@ -1281,14 +1312,14 @@ export function EmitenFundamentalInspectorModal({
     }
   };
 
-  // Helper to run multi-step thinking animation during AI inspection
+  // Helper to run multi-step thinking animation during AI inspection without blocking the UI
   const runWithThinkingStages = async <T,>(taskFn: () => Promise<T>): Promise<T> => {
     setThinkingStageIdx(0);
     const stageInterval = window.setInterval(() => {
       setThinkingStageIdx((prev) => (prev < 3 ? prev + 1 : prev));
-    }, 420);
+    }, 150);
 
-    const minThinkingDelay = new Promise((resolve) => setTimeout(resolve, 1650));
+    const minThinkingDelay = new Promise((resolve) => setTimeout(resolve, 480));
     try {
       const [result] = await Promise.all([taskFn(), minThinkingDelay]);
       return result;
@@ -1297,7 +1328,7 @@ export function EmitenFundamentalInspectorModal({
     }
   };
 
-  // Lazy On-Demand Fetch: Pulls live quote, <=3m news, and runs staged thinking + typing AI synthesis
+  // Lazy On-Demand Fetch: Pulls live quote + worker fundamentals, <=3m news, and runs AI synthesis
   useEffect(() => {
     if (!stock) return;
     let isMounted = true;
@@ -1312,105 +1343,122 @@ export function EmitenFundamentalInspectorModal({
     const runLazyOnDemandInspect = async () => {
       let currentStock = stock;
 
-      // 1. Pull fresh single-ticker quote + On-Demand Real-Time Single-Ticker Fundamentals (Cloudflare Worker / Snapshot Cascade)
-      const quotePromise = Promise.all([
-        fetchLiveIdxTicker(stock.ticker).catch(() => null),
-        tryFetchLiveTickerFundamentalsOnDemand(stock.ticker).catch(() => null)
-      ])
-        .then(([fresh, workerEntry]) => {
-          if (!isMounted) return;
-          if (fresh && fresh.lastPrice > 0) {
-            currentStock = {
-              ...stock,
-              ...fresh,
-              isHscFlagged: stock.isHscFlagged,
-              hscSource: stock.hscSource,
-              hscTier: stock.hscTier,
-              hscReason: stock.hscReason,
-              kseiHscConcentrationPct: stock.kseiHscConcentrationPct,
-              kseiHscIsNew: stock.kseiHscIsNew,
-              kseiHscFootnote: stock.kseiHscFootnote,
-              kseiHscScorePenaltyPts: stock.kseiHscScorePenaltyPts
-            };
-          }
-          if (workerEntry) {
-            const ov = resolveTickerFundamentalOverlay(
-              currentStock.ticker,
-              {
-                defaultRoe: currentStock.trailingRoePct ?? currentStock.roe,
-                defaultDer: currentStock.debtToEquity,
-                defaultOpMargin: currentStock.operatingMargin
-              },
-              workerEntry.adtv20dIdr ?? currentStock.adtv20dIdr,
-              'LIVE_YAHOO_API',
-              workerEntry.asOfDate || new Date().toISOString().slice(0, 10)
-            );
-            currentStock = enrichStockMetrics({
-              ...currentStock,
-              ...(workerEntry.lastPrice && workerEntry.lastPrice > 0
-                ? {
-                    lastPrice: workerEntry.lastPrice,
-                    previousClose: workerEntry.previousClose ?? currentStock.previousClose,
-                    change1D: workerEntry.change1D ?? currentStock.change1D,
-                    priceSource: 'LIVE_YAHOO_API',
-                    priceAsOfDate: workerEntry.asOfDate || new Date().toISOString().slice(0, 10)
-                  }
-                : {}),
-              ...(workerEntry.adtv20dIdr && workerEntry.adtv20dIdr > 0
-                ? {
-                    adtv20dIdr: workerEntry.adtv20dIdr,
-                    adtvSource: 'LIVE_YAHOO_API',
-                    adtvAsOfDate: workerEntry.asOfDate || new Date().toISOString().slice(0, 10)
-                  }
-                : {}),
-              ...(workerEntry.beta1Y ? { beta1Y: workerEntry.beta1Y } : {}),
-              ...(workerEntry.realizedAnnualVol ? { volatilityAnn: workerEntry.realizedAnnualVol } : {}),
-              ...(workerEntry.atr20 ? { atr20Idr: workerEntry.atr20 } : {}),
-              ...(workerEntry.dividendYieldTTM !== undefined && workerEntry.dividendYieldTTM !== null
-                ? { dividendYieldPct: workerEntry.dividendYieldTTM }
-                : {}),
-              ...(ov.sharesOutstanding ? { sharesOutstanding: ov.sharesOutstanding } : {}),
-              ...(ov.revenueTTMIdr ? { revenueTTMIdr: ov.revenueTTMIdr } : {}),
-              ...(ov.latestFullYearRevenueIdr ? { latestFullYearRevenueIdr: ov.latestFullYearRevenueIdr } : {}),
-              ...(ov.operatingProfitTTMIdr ? { operatingProfitTTMIdr: ov.operatingProfitTTMIdr } : {}),
-              ...(ov.ebitdaTTMIdr ? { ebitdaTTMIdr: ov.ebitdaTTMIdr } : {}),
-              ...(ov.netIncomeTTMIdr ? { netIncomeTTMIdr: ov.netIncomeTTMIdr } : {}),
-              ...(ov.netIncomeYoYPct !== undefined ? { earningsGrowthYoYPct: ov.netIncomeYoYPct } : {}),
-              ...(ov.operatingProfitYoYPct !== undefined ? { operatingProfitGrowthYoYPct: ov.operatingProfitYoYPct } : {}),
-              ...(ov.equityAttributableIdr ? { equityAttributableIdr: ov.equityAttributableIdr } : {}),
-              ...(ov.totalAssetsIdr ? { totalAssetsIdr: ov.totalAssetsIdr } : {}),
-              ...(ov.totalDebtIdr !== undefined ? { totalDebtIdr: ov.totalDebtIdr } : {}),
-              ...(ov.cashAndEquivalentsIdr !== undefined ? { cashAndEquivalentsIdr: ov.cashAndEquivalentsIdr } : {}),
-              ...(ov.ocfTTMIdr !== undefined ? { ocfTTMIdr: ov.ocfTTMIdr } : {}),
-              ...(ov.capexTTMIdr !== undefined ? { capexTTMIdr: ov.capexTTMIdr } : {}),
-              ...(ov.daTTMIdr !== undefined ? { daTTMIdr: ov.daTTMIdr } : {}),
-              ...(ov.roeAvg3YPct !== undefined ? { roeAvg3YPct: ov.roeAvg3YPct } : {}),
-              ...(ov.roeAvg5YPct !== undefined ? { roeAvg5YPct: ov.roeAvg5YPct } : {}),
-              ...(ov.daAnomaly !== undefined ? { daAnomaly: ov.daAnomaly } : {}),
-              ...(ov.daMethodNote ? { daMethodNote: ov.daMethodNote } : {}),
-              ...(ov.ttmMethod ? { ttmMethod: ov.ttmMethod } : {}),
-              ...(ov.flowAudit ? { flowAudit: ov.flowAudit } : {}),
-              ...(ov.missingFundamentalFields ? { missingFundamentalFields: ov.missingFundamentalFields } : {}),
-              ...(ov.reportingCurrency ? { reportingCurrency: ov.reportingCurrency } : {}),
-              ...(ov.fxRateUsdIdr ? { fxRateUsdIdr: ov.fxRateUsdIdr } : {}),
-              ...(ov.computedRoePct ? { roe: ov.computedRoePct, trailingRoePct: ov.computedRoePct } : {}),
-              ...(ov.computedOpMarginPct ? { operatingMargin: ov.computedOpMarginPct } : {}),
-              ...(ov.computedDer !== undefined ? { debtToEquity: ov.computedDer } : {}),
-              ...(ov.fundamentalsSource ? { fundamentalsSource: ov.fundamentalsSource } : {}),
-              ...(ov.fundamentalsAsOfDate ? { fundamentalsAsOfDate: ov.fundamentalsAsOfDate } : {}),
-              ...(ov.fundamentalsFiscalPeriod ? { fundamentalsFiscalPeriod: ov.fundamentalsFiscalPeriod } : {}),
-              ...(ov.fundamentalsNote ? { fundamentalsNote: ov.fundamentalsNote } : {})
-            });
-          }
-          setLiveStockOverride(currentStock);
-          setCatalystRevision((r) => r + 1);
-          onStockSynced?.(currentStock);
-        })
-        .finally(() => {
-          if (isMounted) setIsSyncingOnDemand(false);
-        });
+      // 1. Pull On-Demand Real-Time Single-Ticker Fundamentals + Price from Cloudflare Worker first (1 fast request).
+      // Only fall back to multi-proxy fetchLiveIdxTicker if Worker did not return a valid spot price.
+      try {
+        const workerEntry = await tryFetchLiveTickerFundamentalsOnDemand(stock.ticker).catch(
+          () => null
+        );
+        if (!isMounted) return;
 
-      await quotePromise;
+        let freshQuote: StockMetrics | null = null;
+        if (!workerEntry || !workerEntry.lastPrice || workerEntry.lastPrice <= 0) {
+          freshQuote = await fetchLiveIdxTicker(stock.ticker).catch(() => null);
+        }
+        if (!isMounted) return;
+
+        if (freshQuote && freshQuote.lastPrice > 0) {
+          currentStock = {
+            ...stock,
+            ...freshQuote,
+            isHscFlagged: stock.isHscFlagged,
+            hscSource: stock.hscSource,
+            hscTier: stock.hscTier,
+            hscReason: stock.hscReason,
+            kseiHscConcentrationPct: stock.kseiHscConcentrationPct,
+            kseiHscIsNew: stock.kseiHscIsNew,
+            kseiHscFootnote: stock.kseiHscFootnote,
+            kseiHscScorePenaltyPts: stock.kseiHscScorePenaltyPts
+          };
+        }
+
+        if (workerEntry) {
+          const ov = resolveTickerFundamentalOverlay(
+            currentStock.ticker,
+            {
+              defaultRoe: currentStock.trailingRoePct ?? currentStock.roe,
+              defaultDer: currentStock.debtToEquity,
+              defaultOpMargin: currentStock.operatingMargin
+            },
+            workerEntry.adtv20dIdr ?? currentStock.adtv20dIdr,
+            'LIVE_YAHOO_API',
+            workerEntry.asOfDate || new Date().toISOString().slice(0, 10)
+          );
+          currentStock = enrichStockMetrics({
+            ...currentStock,
+            ...(workerEntry.lastPrice && workerEntry.lastPrice > 0
+              ? {
+                  lastPrice: workerEntry.lastPrice,
+                  previousClose: workerEntry.previousClose ?? currentStock.previousClose,
+                  change1D: workerEntry.change1D ?? currentStock.change1D,
+                  priceSource: 'LIVE_YAHOO_API',
+                  priceAsOfDate: workerEntry.asOfDate || new Date().toISOString().slice(0, 10)
+                }
+              : {}),
+            ...(workerEntry.adtv20dIdr && workerEntry.adtv20dIdr > 0
+              ? {
+                  adtv20dIdr: workerEntry.adtv20dIdr,
+                  adtvSource: 'LIVE_YAHOO_API',
+                  adtvAsOfDate: workerEntry.asOfDate || new Date().toISOString().slice(0, 10)
+                }
+              : {}),
+            ...(workerEntry.beta1Y ? { beta1Y: workerEntry.beta1Y } : {}),
+            ...(workerEntry.realizedAnnualVol ? { volatilityAnn: workerEntry.realizedAnnualVol } : {}),
+            ...(workerEntry.atr20 ? { atr20Idr: workerEntry.atr20 } : {}),
+            ...(workerEntry.dividendYieldTTM !== undefined && workerEntry.dividendYieldTTM !== null
+              ? { dividendYieldPct: workerEntry.dividendYieldTTM }
+              : {}),
+            ...(ov.sharesOutstanding ? { sharesOutstanding: ov.sharesOutstanding } : {}),
+            ...(ov.revenueTTMIdr ? { revenueTTMIdr: ov.revenueTTMIdr } : {}),
+            ...(ov.latestFullYearRevenueIdr ? { latestFullYearRevenueIdr: ov.latestFullYearRevenueIdr } : {}),
+            ...(ov.operatingProfitTTMIdr ? { operatingProfitTTMIdr: ov.operatingProfitTTMIdr } : {}),
+            ...(ov.ebitdaTTMIdr ? { ebitdaTTMIdr: ov.ebitdaTTMIdr } : {}),
+            ...(ov.netIncomeTTMIdr ? { netIncomeTTMIdr: ov.netIncomeTTMIdr } : {}),
+            ...(ov.netIncomeYoYPct !== undefined ? { earningsGrowthYoYPct: ov.netIncomeYoYPct } : {}),
+            ...(ov.operatingProfitYoYPct !== undefined ? { operatingProfitGrowthYoYPct: ov.operatingProfitYoYPct } : {}),
+            ...(ov.equityAttributableIdr ? { equityAttributableIdr: ov.equityAttributableIdr } : {}),
+            ...(ov.totalAssetsIdr ? { totalAssetsIdr: ov.totalAssetsIdr } : {}),
+            ...(ov.totalDebtIdr !== undefined ? { totalDebtIdr: ov.totalDebtIdr } : {}),
+            ...(ov.cashAndEquivalentsIdr !== undefined ? { cashAndEquivalentsIdr: ov.cashAndEquivalentsIdr } : {}),
+            ...(ov.ocfTTMIdr !== undefined ? { ocfTTMIdr: ov.ocfTTMIdr } : {}),
+            ...(ov.capexTTMIdr !== undefined ? { capexTTMIdr: ov.capexTTMIdr } : {}),
+            ...(ov.daTTMIdr !== undefined ? { daTTMIdr: ov.daTTMIdr } : {}),
+            ...(ov.roeAvg3YPct !== undefined ? { roeAvg3YPct: ov.roeAvg3YPct } : {}),
+            ...(ov.roeAvg5YPct !== undefined ? { roeAvg5YPct: ov.roeAvg5YPct } : {}),
+            ...(ov.daAnomaly !== undefined ? { daAnomaly: ov.daAnomaly } : {}),
+            ...(ov.daMethodNote ? { daMethodNote: ov.daMethodNote } : {}),
+            ...(ov.ttmMethod ? { ttmMethod: ov.ttmMethod } : {}),
+            ...(ov.flowAudit ? { flowAudit: ov.flowAudit } : {}),
+            ...(ov.missingFundamentalFields ? { missingFundamentalFields: ov.missingFundamentalFields } : {}),
+            ...(ov.reportingCurrency ? { reportingCurrency: ov.reportingCurrency } : {}),
+            ...(ov.fxRateUsdIdr ? { fxRateUsdIdr: ov.fxRateUsdIdr } : {}),
+            ...(ov.computedRoePct ? { roe: ov.computedRoePct, trailingRoePct: ov.computedRoePct } : {}),
+            ...(ov.computedOpMarginPct ? { operatingMargin: ov.computedOpMarginPct } : {}),
+            ...(ov.computedDer !== undefined ? { debtToEquity: ov.computedDer } : {}),
+            ...(ov.fundamentalsSource ? { fundamentalsSource: ov.fundamentalsSource } : {}),
+            ...(ov.fundamentalsAsOfDate ? { fundamentalsAsOfDate: ov.fundamentalsAsOfDate } : {}),
+            ...(ov.fundamentalsFiscalPeriod ? { fundamentalsFiscalPeriod: ov.fundamentalsFiscalPeriod } : {}),
+            ...(ov.fundamentalsNote ? { fundamentalsNote: ov.fundamentalsNote } : {})
+          });
+        }
+
+        const hasMeaningfulChange =
+          currentStock.lastPrice !== stock.lastPrice ||
+          currentStock.change1D !== stock.change1D ||
+          currentStock.revenueTTMIdr !== stock.revenueTTMIdr ||
+          currentStock.netIncomeTTMIdr !== stock.netIncomeTTMIdr ||
+          currentStock.equityAttributableIdr !== stock.equityAttributableIdr ||
+          currentStock.adtv20dIdr !== stock.adtv20dIdr ||
+          currentStock.fundamentalsSource !== stock.fundamentalsSource;
+
+        if (hasMeaningfulChange) {
+          setLiveStockOverride(currentStock);
+          onStockSynced?.(currentStock);
+        }
+      } finally {
+        if (isMounted) setIsSyncingOnDemand(false);
+      }
+
       if (!isMounted) return;
 
       // 2. Pull emiten-specific news & corporate actions after live quote/worker overlay resolves
@@ -1435,7 +1483,7 @@ export function EmitenFundamentalInspectorModal({
         });
       if (!isMounted) return;
 
-      // 3. Run multi-stage thinking animation then progressive typing AI conviction analysis
+      // 3. Run multi-stage thinking animation then AI conviction synthesis
       setIsAnalyzingAi(true);
       try {
         const evalObj = evaluateJoeliardiOosFundamental(

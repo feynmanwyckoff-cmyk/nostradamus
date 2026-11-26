@@ -712,22 +712,36 @@ export function resolveCalibratorFieldProvenanceBadge(
   };
 }
 
+let cachedFundamentalUserOverrides: Record<string, FundamentalUserOverride> | null = null;
+let cachedMacroSbnUserOverride: MacroSbnUserOverride | null | undefined = undefined;
+
 export function loadFundamentalUserOverrides(): Record<string, FundamentalUserOverride> {
+  if (cachedFundamentalUserOverrides !== null) {
+    return cachedFundamentalUserOverrides;
+  }
   if (typeof window === 'undefined') return {};
   try {
     const raw = window.localStorage.getItem(FUNDAMENTAL_USER_OVERRIDES_STORAGE_KEY);
-    if (!raw) return {};
+    if (!raw) {
+      cachedFundamentalUserOverrides = {};
+      return cachedFundamentalUserOverrides;
+    }
     const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return {};
+    if (!parsed || typeof parsed !== 'object') {
+      cachedFundamentalUserOverrides = {};
+      return cachedFundamentalUserOverrides;
+    }
     const out: Record<string, FundamentalUserOverride> = {};
     for (const [k, v] of Object.entries(parsed)) {
       if (v && typeof v === 'object') {
         out[k] = normalizeUserOverrideRecord(v as FundamentalUserOverride);
       }
     }
+    cachedFundamentalUserOverrides = out;
     return out;
   } catch {
-    return {};
+    cachedFundamentalUserOverrides = {};
+    return cachedFundamentalUserOverrides;
   }
 }
 
@@ -741,7 +755,7 @@ export function getFundamentalUserOverride(ticker: string): FundamentalUserOverr
 export function saveFundamentalUserOverride(override: FundamentalUserOverride): void {
   if (typeof window === 'undefined') return;
   const clean = override.ticker.trim().toUpperCase().replace(/\.JK$/i, '');
-  const all = loadFundamentalUserOverrides();
+  const all = { ...loadFundamentalUserOverrides() };
   const normalized = normalizeUserOverrideRecord({
     ...all[clean],
     ...override,
@@ -749,6 +763,7 @@ export function saveFundamentalUserOverride(override: FundamentalUserOverride): 
     updatedAt: override.updatedAt || new Date().toISOString().slice(0, 10),
   });
   all[clean] = normalized;
+  cachedFundamentalUserOverrides = all;
   try {
     window.localStorage.setItem(FUNDAMENTAL_USER_OVERRIDES_STORAGE_KEY, JSON.stringify(all));
     const sbnVal = normalized.sbn10YOverridePct ?? normalized.sbn10YPct;
@@ -764,13 +779,16 @@ export function clearFundamentalUserOverride(ticker?: string): void {
   if (typeof window === 'undefined') return;
   try {
     if (!ticker) {
+      cachedFundamentalUserOverrides = {};
+      cachedMacroSbnUserOverride = null;
       window.localStorage.removeItem(FUNDAMENTAL_USER_OVERRIDES_STORAGE_KEY);
       window.localStorage.removeItem(MACRO_SBN_OVERRIDE_STORAGE_KEY);
       return;
     }
     const clean = ticker.trim().toUpperCase().replace(/\.JK$/i, '');
-    const all = loadFundamentalUserOverrides();
+    const all = { ...loadFundamentalUserOverrides() };
     delete all[clean];
+    cachedFundamentalUserOverrides = all;
     window.localStorage.setItem(FUNDAMENTAL_USER_OVERRIDES_STORAGE_KEY, JSON.stringify(all));
   } catch {
     // ignore
@@ -785,16 +803,25 @@ export interface MacroSbnUserOverride {
 }
 
 export function loadMacroSbnUserOverride(): MacroSbnUserOverride | null {
+  if (cachedMacroSbnUserOverride !== undefined) {
+    return cachedMacroSbnUserOverride;
+  }
   if (typeof window === 'undefined') return null;
   try {
     const raw = window.localStorage.getItem(MACRO_SBN_OVERRIDE_STORAGE_KEY);
-    if (!raw) return null;
+    if (!raw) {
+      cachedMacroSbnUserOverride = null;
+      return null;
+    }
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed.sbn10YPct === 'number' && Number.isFinite(parsed.sbn10YPct)) {
+      cachedMacroSbnUserOverride = parsed;
       return parsed;
     }
+    cachedMacroSbnUserOverride = null;
     return null;
   } catch {
+    cachedMacroSbnUserOverride = null;
     return null;
   }
 }
@@ -806,6 +833,7 @@ export function saveMacroSbnUserOverride(sbn10YPct: number): void {
       sbn10YPct: Number(sbn10YPct.toFixed(2)),
       updatedAt: new Date().toISOString().slice(0, 10),
     };
+    cachedMacroSbnUserOverride = payload;
     window.localStorage.setItem(MACRO_SBN_OVERRIDE_STORAGE_KEY, JSON.stringify(payload));
   } catch {
     // ignore

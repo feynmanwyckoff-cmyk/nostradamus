@@ -532,15 +532,24 @@ export interface HscManualOverrides {
   removed: string[];
 }
 
+let cachedHscManualOverrides: HscManualOverrides | null = null;
+
 export function getHscManualOverrides(): HscManualOverrides {
+  if (cachedHscManualOverrides !== null) {
+    return cachedHscManualOverrides;
+  }
   try {
     if (typeof window === 'undefined' || !window.localStorage) {
-      return { added: [], removed: [] };
+      cachedHscManualOverrides = { added: [], removed: [] };
+      return cachedHscManualOverrides;
     }
     const raw = window.localStorage.getItem(HSC_MANUAL_STORAGE_KEY);
-    if (!raw) return { added: [], removed: [] };
+    if (!raw) {
+      cachedHscManualOverrides = { added: [], removed: [] };
+      return cachedHscManualOverrides;
+    }
     const parsed = JSON.parse(raw);
-    return {
+    cachedHscManualOverrides = {
       added: Array.isArray(parsed?.added)
         ? parsed.added.map((t: string) => String(t).trim().toUpperCase()).filter(Boolean)
         : [],
@@ -548,21 +557,22 @@ export function getHscManualOverrides(): HscManualOverrides {
         ? parsed.removed.map((t: string) => String(t).trim().toUpperCase()).filter(Boolean)
         : []
     };
+    return cachedHscManualOverrides;
   } catch {
-    return { added: [], removed: [] };
+    cachedHscManualOverrides = { added: [], removed: [] };
+    return cachedHscManualOverrides;
   }
 }
 
 export function saveHscManualOverrides(overrides: HscManualOverrides): void {
+  const normalized: HscManualOverrides = {
+    added: Array.from(new Set(overrides.added)),
+    removed: Array.from(new Set(overrides.removed))
+  };
+  cachedHscManualOverrides = normalized;
   try {
     if (typeof window === 'undefined' || !window.localStorage) return;
-    window.localStorage.setItem(
-      HSC_MANUAL_STORAGE_KEY,
-      JSON.stringify({
-        added: Array.from(new Set(overrides.added)),
-        removed: Array.from(new Set(overrides.removed))
-      })
-    );
+    window.localStorage.setItem(HSC_MANUAL_STORAGE_KEY, JSON.stringify(normalized));
   } catch {
     // ignore storage errors
   }
