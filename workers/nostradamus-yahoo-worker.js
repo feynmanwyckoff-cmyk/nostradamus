@@ -498,6 +498,18 @@ function computeMarketMetricsFromCharts(stockChartJson, jkseChartJson) {
     }
   }
 
+  // 6. 1Y Maximum Drawdown (%) across valid daily closes
+  let peakClose = 0;
+  let maxDdFrac = 0;
+  for (const b of validBars) {
+    if (b.close > peakClose) peakClose = b.close;
+    if (peakClose > 0) {
+      const dd = (peakClose - b.close) / peakClose;
+      if (dd > maxDdFrac) maxDdFrac = dd;
+    }
+  }
+  const maxDrawdown1YPct = Number((maxDdFrac * 100).toFixed(2));
+
   // Return last 65 closes & timestamps for sparklines / 30D return calculation
   const tailBars = validBars.slice(-65);
   const closes = tailBars.map((b) => Math.round(b.close));
@@ -519,6 +531,7 @@ function computeMarketMetricsFromCharts(stockChartJson, jkseChartJson) {
     realizedAnnualVol,
     atr20,
     dividendYieldTTM,
+    maxDrawdown1YPct,
     closes,
     timestamps,
     chartCurrency: meta.currency || 'IDR'
@@ -755,7 +768,20 @@ async function fetchAndDecumulateFundamentals(cleanTicker, yfSymbol, lastPrice, 
         'annualEBITDA',
         'quarterlyEBITDA',
         'annualNormalizedEBITDA',
-        'quarterlyNormalizedEBITDA'
+        'quarterlyNormalizedEBITDA',
+        // Worker v2.1.0 Sector-Specific & Capital Intensity Keys (Zero Extra HTTP Requests)
+        'annualGrossProfit',
+        'quarterlyGrossProfit',
+        'annualNetPPE',
+        'quarterlyNetPPE',
+        'annualCapitalLeaseObligations',
+        'quarterlyCapitalLeaseObligations',
+        'annualLongTermCapitalLeaseObligation',
+        'quarterlyLongTermCapitalLeaseObligation',
+        'annualInterestExpense',
+        'quarterlyInterestExpense',
+        'annualNetInterestIncome',
+        'quarterlyNetInterestIncome'
       ].join(',');
 
       const url = `https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/${encodeURIComponent(
@@ -861,6 +887,12 @@ async function fetchAndDecumulateFundamentals(cleanTicker, yfSymbol, lastPrice, 
   );
   const annualEbitdaPts = getSeries('annualEBITDA', 'annualNormalizedEBITDA');
   const quarterlyEbitdaPts = getSeries('quarterlyEBITDA', 'quarterlyNormalizedEBITDA');
+  const annualGpPts = getSeries('annualGrossProfit');
+  const quarterlyGpPts = getSeries('quarterlyGrossProfit');
+  const annualIntExpPts = getSeries('annualInterestExpense');
+  const quarterlyIntExpPts = getSeries('quarterlyInterestExpense');
+  const annualNiiPts = getSeries('annualNetInterestIncome');
+  const quarterlyNiiPts = getSeries('quarterlyNetInterestIncome');
 
   const latestAnnualRev =
     annualRevPts.length > 0 ? annualRevPts[annualRevPts.length - 1].val : null;
@@ -1338,6 +1370,35 @@ async function fetchAndDecumulateFundamentals(cleanTicker, yfSymbol, lastPrice, 
     'quarterlyShareIssued',
     'annualShareIssued'
   );
+  const netPpeSnap = getLatestSnapshotPoint('quarterlyNetPPE', 'annualNetPPE');
+  const leaseSnap = getLatestSnapshotPoint(
+    'quarterlyCapitalLeaseObligations',
+    'annualCapitalLeaseObligations',
+    'quarterlyLongTermCapitalLeaseObligation',
+    'annualLongTermCapitalLeaseObligation'
+  );
+
+  const gpFlow = computeFlowTtmAndYoY(
+    annualGpPts,
+    quarterlyGpPts,
+    latestAnnualRev,
+    unifiedForcedMethod,
+    anchorAnnualDate
+  );
+  const intExpFlow = computeFlowTtmAndYoY(
+    annualIntExpPts,
+    quarterlyIntExpPts,
+    latestAnnualRev,
+    unifiedForcedMethod,
+    anchorAnnualDate
+  );
+  const niiFlow = computeFlowTtmAndYoY(
+    annualNiiPts,
+    quarterlyNiiPts,
+    latestAnnualRev,
+    unifiedForcedMethod,
+    anchorAnnualDate
+  );
 
   let rawRevenueTTM = revFlow.ttmVal;
   let rawOperatingProfitTTM = ebitFlow.ttmVal;
@@ -1346,8 +1407,14 @@ async function fetchAndDecumulateFundamentals(cleanTicker, yfSymbol, lastPrice, 
   let rawCapexTTM = capexFlow.ttmVal !== null ? Math.abs(capexFlow.ttmVal) : null;
   let rawDaTTM = daFlow.ttmVal !== null ? Math.abs(daFlow.ttmVal) : null;
   let rawEbitdaTTM = ebitdaFlow.ttmVal;
+  let rawGrossProfitTTM = gpFlow.ttmVal;
+  let rawInterestExpenseTTM =
+    intExpFlow.ttmVal !== null ? Math.abs(intExpFlow.ttmVal) : null;
+  let rawNetInterestIncomeTTM = niiFlow.ttmVal;
 
   let rawEquity = eqSnap ? eqSnap.val : null;
+  let rawNetPpe = netPpeSnap && netPpeSnap.val >= 0 ? netPpeSnap.val : null;
+  let rawLeaseLiabilities = leaseSnap && leaseSnap.val >= 0 ? leaseSnap.val : null;
   let rawTotalAssets =
     assetsSnap && assetsSnap.val > 0
       ? assetsSnap.val
@@ -1585,10 +1652,34 @@ async function fetchAndDecumulateFundamentals(cleanTicker, yfSymbol, lastPrice, 
   const ocfTTM = toIdr(rawOcfTTM);
   const capexTTM = toIdr(rawCapexTTM);
   const daTTM = toIdr(rawDaTTM);
+  const grossProfitTTM = toIdr(rawGrossProfitTTM);
+  const netPpe = toIdr(rawNetPpe);
+  const leaseLiabilities = toIdr(rawLeaseLiabilities);
+  const interestExpenseTTM = toIdr(rawInterestExpenseTTM);
+  const netInterestIncomeTTM = toIdr(rawNetInterestIncomeTTM);
 
-  // Compute multi-year historical 3Y & 5Y ROE averages from annual Net Income & Equity series
+  // Compute multi-year historical 3Y & 5Y ROE averages, median, stdDev, and earnings CV from annual series
   let roeAvg3Y = null;
   let roeAvg5Y = null;
+  let roeMedian5YPct = null;
+  let roeStdDev5YPct = null;
+  let earningsCv5Y = null;
+
+  if (annualNiPts.length >= 2) {
+    const niVals = annualNiPts.slice(-5).map((p) => p.val);
+    if (niVals.length >= 2) {
+      const meanNi = niVals.reduce((a, b) => a + b, 0) / niVals.length;
+      if (Math.abs(meanNi) > 0) {
+        const varNi =
+          niVals.reduce((acc, v) => acc + (v - meanNi) * (v - meanNi), 0) /
+          Math.max(1, niVals.length - 1);
+        earningsCv5Y = Number(
+          Math.min(5.0, Math.sqrt(Math.max(0, varNi)) / Math.abs(meanNi)).toFixed(3)
+        );
+      }
+    }
+  }
+
   if (annualNiPts.length >= 2 && annualRevPts.length >= 1) {
     const annualEqPts = getSeries('annualStockholdersEquity', 'annualCommonStockEquity');
     if (annualEqPts.length >= 2) {
@@ -1605,10 +1696,35 @@ async function fetchAndDecumulateFundamentals(cleanTicker, yfSymbol, lastPrice, 
       if (roes.length >= 2) {
         const slice3 = roes.slice(0, Math.min(3, roes.length));
         roeAvg3Y = Number((slice3.reduce((a, b) => a + b, 0) / slice3.length).toFixed(2));
-        roeAvg5Y = Number((roes.reduce((a, b) => a + b, 0) / roes.length).toFixed(2));
+        const mean5 = roes.reduce((a, b) => a + b, 0) / roes.length;
+        roeAvg5Y = Number(mean5.toFixed(2));
+        const sortedRoes = [...roes].sort((a, b) => a - b);
+        const mid = Math.floor(sortedRoes.length / 2);
+        const medianVal =
+          sortedRoes.length % 2 === 1
+            ? sortedRoes[mid]
+            : (sortedRoes[mid - 1] + sortedRoes[mid]) / 2;
+        roeMedian5YPct = Number(medianVal.toFixed(2));
+        const varRoe =
+          roes.reduce((acc, r) => acc + (r - mean5) * (r - mean5), 0) /
+          Math.max(1, roes.length - 1);
+        roeStdDev5YPct = Number(Math.sqrt(Math.max(0, varRoe)).toFixed(2));
       }
     }
   }
+
+  const fieldPeriodEndDates = {
+    revenueTTM: revFlow.asOfDate || null,
+    operatingProfitTTM: ebitFlow.asOfDate || null,
+    netIncomeTTM: niFlow.asOfDate || null,
+    ocfTTM: ocfFlow.asOfDate || null,
+    capexTTM: capexFlow.asOfDate || null,
+    daTTM: daFlow.asOfDate || null,
+    equityAttributable: eqSnap?.asOfDate || null,
+    totalAssets: assetsSnap?.asOfDate || null,
+    totalDebt: debtSnap?.asOfDate || ltDebtSnap?.asOfDate || null,
+    sharesOutstanding: sharesSnap?.asOfDate || null
+  };
 
   // Determine latest asOfDate and fiscalPeriod label (strictly use flow statement date when locked to FY_FALLBACK)
   const flowDates = [revFlow.asOfDate, ebitFlow.asOfDate, niFlow.asOfDate].filter(Boolean);
@@ -1695,10 +1811,19 @@ async function fetchAndDecumulateFundamentals(cleanTicker, yfSymbol, lastPrice, 
     ocfTTM,
     capexTTM,
     daTTM,
+    grossProfitTTM,
+    netPpe,
+    leaseLiabilities,
+    interestExpenseTTM,
+    netInterestIncomeTTM,
     netIncomeYoYPct: niFlow.yoyPct,
     operatingProfitYoYPct: ebitFlow.yoyPct,
     roeAvg3YPct: roeAvg3Y,
-    roeAvg5YPct: roeAvg5Y
+    roeAvg5YPct: roeAvg5Y,
+    roeMedian5YPct,
+    roeStdDev5YPct,
+    earningsCv5Y,
+    fieldPeriodEndDates
   };
 }
 
@@ -1737,7 +1862,7 @@ export default {
       return jsonResponse(request, {
         ok: true,
         service: 'nostradamus-yahoo-worker',
-        version: '2.0.0',
+        version: '2.1.0',
         provenanceMode: 'LIVE_REALTIME_WORKER',
         usage: 'GET /?ticker=BBCA atau GET /?ticker=LSIP&nocache=1',
         timestamp: new Date().toISOString()
@@ -1857,6 +1982,7 @@ export default {
       realizedAnnualVol: market.realizedAnnualVol,
       atr20: market.atr20,
       dividendYieldTTM: market.dividendYieldTTM,
+      maxDrawdown1YPct: market.maxDrawdown1YPct,
       closes: market.closes,
       timestamps: market.timestamps,
 
@@ -1873,10 +1999,19 @@ export default {
       ocfTTM: fundamentals?.ocfTTM ?? null,
       capexTTM: fundamentals?.capexTTM ?? null,
       daTTM: fundamentals?.daTTM ?? null,
+      grossProfitTTM: fundamentals?.grossProfitTTM ?? null,
+      netPpe: fundamentals?.netPpe ?? null,
+      leaseLiabilities: fundamentals?.leaseLiabilities ?? null,
+      interestExpenseTTM: fundamentals?.interestExpenseTTM ?? null,
+      netInterestIncomeTTM: fundamentals?.netInterestIncomeTTM ?? null,
       netIncomeYoYPct: fundamentals?.netIncomeYoYPct ?? null,
       operatingProfitYoYPct: fundamentals?.operatingProfitYoYPct ?? null,
       roeAvg3YPct: fundamentals?.roeAvg3YPct ?? null,
       roeAvg5YPct: fundamentals?.roeAvg5YPct ?? null,
+      roeMedian5YPct: fundamentals?.roeMedian5YPct ?? null,
+      roeStdDev5YPct: fundamentals?.roeStdDev5YPct ?? null,
+      earningsCv5Y: fundamentals?.earningsCv5Y ?? null,
+      fieldPeriodEndDates: fundamentals?.fieldPeriodEndDates ?? null,
 
       market,
       fundamentals,

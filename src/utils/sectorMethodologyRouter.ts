@@ -13,6 +13,15 @@
  * and sector-adjusted fundamental scores so UI Modal, 2x Retina PNG Export, and Multi-Page Institutional PDF Export are 100% synchronized.
  */
 
+import {
+  IdxSubIndustryEnum,
+  SectorArchetypeId
+} from '../config/sectorProfiles';
+import {
+  classifyEmitenSectorProfile,
+  SectorClassificationResult
+} from './sectorClassifier';
+
 export type SectorMethodologyRegime =
   | 'FINANCIALS'
   | 'CYCLICAL_COMMODITIES'
@@ -25,6 +34,8 @@ export interface SectorMethodologyInput {
   ticker: string;
   sector: string;
   subSector?: string;
+  subIndustry?: IdxSubIndustryEnum;
+  userSectorArchetypeOverride?: SectorArchetypeId;
   roeTTM: number; // % (e.g., 16.5)
   roeAvg5YPct: number; // % (e.g., 14.2)
   costOfEquityKePct: number; // % (e.g., 11.45)
@@ -54,10 +65,23 @@ export interface SectorMethodologyInput {
   isDualConfirmedCatalystActive: boolean;
   rawAccrualPenaltyPts: number;
   effectiveModule?: string;
+  hasVerifiedCapexAndDa?: boolean;
+  isCoreFundamentalsSeed?: boolean;
+  nimPct?: number;
+  nplPct?: number;
+  carPct?: number;
+  bopoPct?: number;
 }
 
 export interface SectorMethodologyProfile {
   regime: SectorMethodologyRegime;
+  archetype?: SectorArchetypeId;
+  subArchetype?: string;
+  classification?: SectorClassificationResult;
+  isSectorDataIncomplete?: boolean;
+  sectorDataFlags?: string[];
+  maxAllowedGradeBySectorData?: 'A+ (CORE CONVICTION)' | 'B (WATCHLIST / HOLD)' | 'C (SPECULATIVE)';
+  maxAllowedScoreBySectorData?: number;
   regimeShortLabel: string;
   regimeBadgeLabel: string;
   sectorMethodologyNotice: string;
@@ -248,102 +272,78 @@ export function resolveAuthenticTotalAssetsIdr(params: {
 }
 
 /**
- * Determines the IDX-IC Sector Methodology Regime for any issuer
+ * Determines the IDX-IC Sector Methodology Regime for any issuer via the Two-Stage SectorClassifier SSOT.
+ * Closes Finding B (ASSA -> INFRA_TELCO_UTILITIES / TRANSPORTATION_LOGISTICS) and
+ * Finding C (Cyclical/Commodity issuers with NI <= 0 stay in CYCLICAL_COMMODITIES Trough Mode,
+ * NEVER mislabeled as TECH_UNPROFITABLE_GROWTH).
  */
 export function detectSectorMethodologyRegime(params: {
   ticker: string;
   sector: string;
   subSector?: string;
+  subIndustry?: IdxSubIndustryEnum;
   netIncomeTTMIdr: number;
   operatingProfitTTMIdr: number;
   roeTTM: number;
 }): SectorMethodologyRegime {
-  const cleanTicker = params.ticker.replace(/\.JK$/i, '').trim().toUpperCase();
-  const sec = (params.sector || '').trim();
-  const sub = (params.subSector || '').toLowerCase();
-
-  // 1. Financials (Banks, Multifinance, Insurance)
-  if (
-    sec === 'Financials' ||
-    KNOWN_FINANCIAL_TICKERS.has(cleanTicker) ||
-    sub.includes('bank') ||
-    sub.includes('finance') ||
-    sub.includes('insurance')
-  ) {
-    return 'FINANCIALS';
-  }
-
-  // 6. Technology / Unprofitable Growth (Negative or near-zero Net Income / Operating Profit, or Tech sector with weak earnings)
-  const isUnprofitable =
-    params.netIncomeTTMIdr <= 0 ||
-    params.operatingProfitTTMIdr <= 0 ||
-    params.roeTTM <= 1.0;
-  if (
-    isUnprofitable ||
-    ((sec === 'Technology' || KNOWN_TECH_TICKERS.has(cleanTicker)) && params.roeTTM < 6.0)
-  ) {
-    return 'TECH_UNPROFITABLE_GROWTH';
-  }
-
-  // 2. Energy, Basic Materials & CPO/Agri Plantations (Cyclical Commodities)
-  if (
-    sec === 'Energy' ||
-    sec === 'Basic Materials' ||
-    KNOWN_CPO_PLANTATION_TICKERS.has(cleanTicker) ||
-    sub.includes('plantation') ||
-    sub.includes('cpo') ||
-    sub.includes('palm') ||
-    sub.includes('coal') ||
-    sub.includes('mining') ||
-    sub.includes('metal') ||
-    sub.includes('oil') ||
-    sub.includes('pulp') ||
-    sub.includes('cement')
-  ) {
-    return 'CYCLICAL_COMMODITIES';
-  }
-
-  // 3. Properties & Real Estate (PSAK 72 Developers & Industrial Estates)
-  if (
-    sec === 'Properties & Real Estate' ||
-    sub.includes('property') ||
-    sub.includes('real estate') ||
-    sub.includes('industrial estate')
-  ) {
-    return 'PROPERTIES_REAL_ESTATE';
-  }
-
-  // 4. Infrastructure, Utilities & Telecommunications (Heavy-Asset / High D&A)
-  if (
-    sec === 'Infrastructures' ||
-    sec === 'Infrastructure' ||
-    sec === 'Transportation & Logistic' ||
-    sub.includes('telecom') ||
-    sub.includes('tower') ||
-    sub.includes('toll') ||
-    sub.includes('utilities')
-  ) {
-    return 'INFRA_TELCO_UTILITIES';
-  }
-
-  // 5. Healthcare, Consumer Non-Cyclicals, Consumer Cyclicals, Industrials & profitable Tech (Core Corporate)
-  return 'CORE_CORPORATE';
+  const classification = classifyEmitenSectorProfile({
+    ticker: params.ticker,
+    sector: params.sector,
+    subIndustry: params.subIndustry,
+    netIncomeTTMIdr: params.netIncomeTTMIdr,
+    operatingProfitTTMIdr: params.operatingProfitTTMIdr,
+    roeTTM: params.roeTTM
+  });
+  return classification.legacyRegime;
 }
 
 /**
- * Master IDX-IC Sector-Aware Fundamental & Valuation Methodology Router
+ * Master IDX-IC Sector-Aware Fundamental & Valuation Methodology Router (Consuming SectorProfile SSOT)
  */
 export function resolveSectorMethodologyProfile(
   input: SectorMethodologyInput
 ): SectorMethodologyProfile {
-  const regime = detectSectorMethodologyRegime({
+  const classification = classifyEmitenSectorProfile({
     ticker: input.ticker,
     sector: input.sector,
-    subSector: input.subSector,
+    subIndustry: input.subIndustry,
+    userSectorArchetypeOverride: input.userSectorArchetypeOverride,
     netIncomeTTMIdr: input.netIncomeTTMIdr,
     operatingProfitTTMIdr: input.operatingProfitTTMIdr,
-    roeTTM: input.roeTTM
+    ebitdaTTMIdr: input.ebitdaTTMIdr,
+    revenueTTMIdr: input.revenueTTMIdr,
+    equityAttributableIdr: input.equityAttributableIdr,
+    totalAssetsIdr: input.totalAssetsIdr,
+    totalDebtIdr: input.totalDebtIdr,
+    cashAndEquivalentsIdr: input.cashAndEquivalentsIdr,
+    ocfTTMIdr: input.ocfTTMIdr,
+    capexTTMIdr: input.capexTTMIdr,
+    daTTMIdr: input.daTTMIdr,
+    roeTTM: input.roeTTM,
+    roeAvg5YPct: input.roeAvg5YPct,
+    roicTTMPct: input.roicTTMPct,
+    costOfEquityKePct: input.costOfEquityKePct,
+    grossProfitabilityToAssetsPct: input.grossProfitabilityToAssetsPct,
+    ocfToNetIncomeRatio: input.ocfToNetIncomeRatio,
+    debtToEquityRatio: input.debtToEquityRatio,
+    capexToDaRatio: input.capexToDaRatio,
+    hasVerifiedCapexAndDa: input.hasVerifiedCapexAndDa,
+    isCoreFundamentalsSeed: input.isCoreFundamentalsSeed,
+    nimPct: input.nimPct,
+    nplPct: input.nplPct,
+    carPct: input.carPct,
+    bopoPct: input.bopoPct
   });
+  const regime = classification.legacyRegime;
+  const baseFields = {
+    archetype: classification.archetype,
+    subArchetype: classification.subArchetype,
+    classification,
+    isSectorDataIncomplete: classification.isSectorDataIncomplete,
+    sectorDataFlags: classification.sectorDataFlags,
+    maxAllowedGradeBySectorData: classification.maxAllowedGradeBySectorData,
+    maxAllowedScoreBySectorData: classification.maxAllowedScoreBySectorData
+  };
 
   const authenticTotalAssetsIdr = resolveAuthenticTotalAssetsIdr({
     ticker: input.ticker,
@@ -420,19 +420,30 @@ export function resolveSectorMethodologyProfile(
       Math.max(18, Math.min(98, leverageHealthScore + payoutCapitalBonus + hscBonus))
     );
 
-    const leverageStatusLabel =
-      assetLeverageRatio <= 8.5
-        ? 'Permodalan Kuat (CAR Sehat)'
-        : assetLeverageRatio <= 11.0
-        ? 'Leverage Perbankan Normal'
-        : 'Leverage Aset Tinggi';
+    // Confirmed Decision 2: NEVER print "Permodalan Kuat (CAR Sehat)" when explicit CAR% is missing!
+    const hasExplicitCar = typeof input.carPct === 'number' && input.carPct > 0;
+    const hasExplicitNpl = typeof input.nplPct === 'number' && input.nplPct >= 0;
+    const leverageStatusLabel = hasExplicitCar
+      ? `CAR ${input.carPct!.toFixed(1)}%${hasExplicitNpl ? ` · NPL ${input.nplPct!.toFixed(1)}%` : ''}`
+      : classification.isBankRegulatoryDataMissing
+      ? `Leverage Aset ${assetLeverageRatio.toFixed(2)}x [DATA BANK TIDAK LENGKAP: CAR/NPL/NIM belum tersedia]`
+      : assetLeverageRatio <= 8.5
+      ? 'Leverage Aset Perbankan Konservatif'
+      : assetLeverageRatio <= 11.0
+      ? 'Leverage Perbankan Normal'
+      : 'Leverage Aset Tinggi';
 
     return {
+      ...baseFields,
       regime: 'FINANCIALS',
-      regimeShortLabel: 'FINANCIALS (BANK & KEUANGAN)',
-      regimeBadgeLabel: 'MODE SEKTOR: FINANCIALS',
+      regimeShortLabel: classification.profile.displayName.toUpperCase(),
+      regimeBadgeLabel: classification.profile.shortBadgeLabel,
       sectorMethodologyNotice:
-        'Mode Sektor Financials: GP/A, OCF/NI, DER korporasi, & EV/EBITDA dinonaktifkan karena struktur DPK/kredit perbankan; kualitas diukur via ROE-Ke Spread & True ROA (NI/Assets).',
+        `Mode Sektor ${classification.profile.displayName}: GP/A, OCF/NI, DER korporasi, & EV/EBITDA dinonaktifkan karena struktur DPK/kredit perbankan; kualitas diukur via ROE-Ke Spread & True ROA (NI/Assets).${
+          classification.isBankRegulatoryDataMissing
+            ? ' [CATATAN: Rasio regulasi OJK NIM/NPL/CAR belum tersedia di feed Yahoo — Grade dibatasi maks B]'
+            : ''
+        }`,
       bypassedMetrics: [
         'GP/A (Novy-Marx)',
         'OCF/NI Accrual',
@@ -488,7 +499,9 @@ export function resolveSectorMethodologyProfile(
       academicStripCard3: {
         label: 'STRUKTUR DPK & MODAL BANK',
         mainVal: `Assets/Eq ${assetLeverageRatio.toFixed(2)}x`,
-        subVal: '(0 Penalti · Bypass OCF/NI & DER)'
+        subVal: classification.isBankRegulatoryDataMissing
+          ? '(DATA BANK TIDAK LENGKAP · Cap Grade B)'
+          : '(0 Penalti · Bypass OCF/NI & DER)'
       },
       adjustedBusinessQualityScore,
       adjustedBalanceSheetHealthScore
@@ -500,19 +513,27 @@ export function resolveSectorMethodologyProfile(
   // ============================================================================
   if (regime === 'CYCLICAL_COMMODITIES') {
     const isCpo = isCpoPlantationTicker(input.ticker);
-    const roeAvg5Y = Math.max(1, input.roeAvg5YPct || input.roeTTM * 0.85);
-    const isCyclePeakWarning = input.roeTTM > roeAvg5Y * 1.35;
+    const roeAvg5Y = Math.max(1, input.roeAvg5YPct || Math.max(8.0, input.roeTTM * 0.85));
+    const isCyclePeakWarning = classification.isCyclicalPeakWarning || input.roeTTM > roeAvg5Y * 1.35;
+    const isTroughMode = classification.isCyclicalTroughMode;
     const cyclePeakWarningText = isCyclePeakWarning
       ? `CYCLE PEAK WARNING: ROE TTM (${input.roeTTM.toFixed(1)}%) melampaui 1.35× ROE Rata-Rata 5Y (${roeAvg5Y.toFixed(1)}%) — valuasi menggunakan normalisasi Through-the-Cycle untuk mencegah Value Trap puncak komoditas.`
+      : isTroughMode
+      ? `CYCLICAL TROUGH MODE: Emiten komoditas/siklikal sedang berada di titik bawah siklus (TTM NI/ROE tertekan) — dinilai dengan Normalized Mid-Cycle ROE (${roeAvg5Y.toFixed(1)}%) & Book Value, bukan Tech Unprofitable.`
       : undefined;
 
     return {
+      ...baseFields,
       regime: 'CYCLICAL_COMMODITIES',
-      regimeShortLabel: isCpo ? 'CPO & AGRI (SIKLIKAL/KOMODITAS)' : 'CYCLICAL / KOMODITAS',
-      regimeBadgeLabel: 'MODE SEKTOR: SIKLIKAL/KOMODITAS',
+      regimeShortLabel: isCpo
+        ? 'CPO & AGRI (SIKLIKAL/KOMODITAS)'
+        : classification.profile.displayName.toUpperCase(),
+      regimeBadgeLabel: classification.profile.shortBadgeLabel,
       sectorMethodologyNotice: isCpo
         ? `Mode Sektor Siklikal/Komoditas (Sub-Sektor CPO/Perkebunan): Meski tercatat di Consumer Non-Cyclicals IDX-IC, emiten sawit/CPO (${input.ticker}) dinilai dengan normalisasi ROE 3–5 tahun (through-the-cycle) & jangkar EV/EBITDA komoditas (~5.0x–6.0x, bukan 11.8x FMCG).`
-        : 'Mode Sektor Siklikal/Komoditas: Valuasi menggunakan normalisasi laba 3–5 tahun (through-the-cycle) & jangkar EV/EBITDA untuk mencegah jebakan laba puncak siklus.',
+        : isTroughMode
+        ? `Mode Trough Siklikal (${classification.profile.displayName}): Laba TTM sedang berada di bawah siklus; valuasi menggunakan normalisasi laba mid-cycle (ROE 5Y ${roeAvg5Y.toFixed(1)}%) & Book Value Floor.`
+        : `Mode Sektor ${classification.profile.displayName}: Valuasi menggunakan normalisasi laba 3–5 tahun (through-the-cycle) & jangkar EV/EBITDA untuk mencegah jebakan laba puncak siklus.`,
       bypassedMetrics: ['Peak-Cycle Unadjusted P/E Extrapolation'],
       activeMetrics: [
         'Normalized 3-5Y Through-the-Cycle ROE & EPS',
@@ -544,7 +565,7 @@ export function resolveSectorMethodologyProfile(
       pillar4Title: '4. 1/β Barbell Position Sizing',
       pillar1PrimaryMetricLabel: `Norm. ROE 5Y ${roeAvg5Y.toFixed(1)}% (TTM ${input.roeTTM.toFixed(1)}%)`,
       pillar1Lines: [
-        `Norm ROE 5Y: ${roeAvg5Y.toFixed(1)}% · TTM ${input.roeTTM.toFixed(1)}%${isCyclePeakWarning ? ' [PEAK WARN]' : ''}`,
+        `Norm ROE 5Y: ${roeAvg5Y.toFixed(1)}% · TTM ${input.roeTTM.toFixed(1)}%${isCyclePeakWarning ? ' [PEAK WARN]' : isTroughMode ? ' [TROUGH MODE]' : ''}`,
         `OCF/NI (Kas Siklus): ${input.ocfToNetIncomeRatio.toFixed(2)}x (GP/A ${input.grossProfitabilityToAssetsPct.toFixed(1)}%)`,
         payoutLine
       ],
@@ -590,9 +611,10 @@ export function resolveSectorMethodologyProfile(
     );
 
     return {
+      ...baseFields,
       regime: 'PROPERTIES_REAL_ESTATE',
       regimeShortLabel: 'PROPERTIES (PSAK 72)',
-      regimeBadgeLabel: 'MODE SEKTOR: PROPERTI (PSAK 72)',
+      regimeBadgeLabel: classification.profile.shortBadgeLabel,
       sectorMethodologyNotice:
         'Mode Sektor Properti: Pengakuan pendapatan PSAK 72 bersifat musiman; valuasi diprioritaskan pada PBV/aset & ketahanan kas dibanding P/E kuartalan.',
       bypassedMetrics: ['Quarterly P/E Volatility', 'Strict Short-Term OCF/NI Penalty (when Net Debt/Eq < 0.75x)'],
@@ -652,10 +674,9 @@ export function resolveSectorMethodologyProfile(
   }
 
   // ============================================================================
-  // REGIME 4: INFRASTRUCTURE, UTILITIES & TELECOMMUNICATIONS (HEAVY-ASSET / HIGH D&A)
+  // REGIME 4: INFRASTRUCTURE, UTILITIES, TELECOM & TRANSPORTATION/LOGISTICS
   // ============================================================================
   if (regime === 'INFRA_TELCO_UTILITIES') {
-    // Evaluate balance sheet via Net Debt / EBITDA and OCF / EBITDA conversion rather than penalizing corporate DER harshly
     const ndEbitdaScore =
       netDebtToEbitdaRatio <= 2.0
         ? 52
@@ -671,12 +692,18 @@ export function resolveSectorMethodologyProfile(
       Math.max(18, Math.min(98, ndEbitdaScore + ocfEbitdaBonus + hscBonus))
     );
 
+    const isTransport = classification.archetype === 'TRANSPORTATION_LOGISTICS';
+
     return {
+      ...baseFields,
       regime: 'INFRA_TELCO_UTILITIES',
-      regimeShortLabel: 'INFRA / TELKO (HIGH D&A)',
-      regimeBadgeLabel: 'MODE SEKTOR: INFRASTRUKTUR/TELKO',
-      sectorMethodologyNotice:
-        'Mode Sektor Infrastruktur/Telko: Depresiasi tinggi mendistorsi P/E; valuasi dan leverage diukur menggunakan EV/EBITDA & Net Debt/EBITDA.',
+      regimeShortLabel: isTransport
+        ? 'TRANSPORTASI & LOGISTIK (FLEET)'
+        : 'INFRA / TELKO (HIGH D&A)',
+      regimeBadgeLabel: classification.profile.shortBadgeLabel,
+      sectorMethodologyNotice: isTransport
+        ? 'Mode Sektor Transportasi & Logistik: Depresiasi armada/kapal tinggi mendistorsi P/E; valuasi dan leverage diukur menggunakan Fleet EV/EBITDA(R), OCF/EBITDA & Net Debt/EBITDA.'
+        : 'Mode Sektor Infrastruktur/Telko: Depresiasi tinggi mendistorsi P/E; valuasi dan leverage diukur menggunakan EV/EBITDA & Net Debt/EBITDA.',
       bypassedMetrics: ['Unadjusted P/E Distortion from High D&A', 'Manufacturing-Style Strict DER Penalty'],
       activeMetrics: [
         'Historical EV/EBITDA Band 5Y',
@@ -732,18 +759,21 @@ export function resolveSectorMethodologyProfile(
   }
 
   // ============================================================================
-  // REGIME 6: TECHNOLOGY / UNPROFITABLE GROWTH (LABA BERSIH NEGATIF ATAU TIPIS)
+  // REGIME 6: TECHNOLOGY / UNPROFITABLE GROWTH (ONLY FOR TECH / PRE-PROFIT)
   // ============================================================================
   if (regime === 'TECH_UNPROFITABLE_GROWTH') {
     const isOperatingProfitNegative =
-      input.operatingProfitTTMIdr <= 0 || input.netIncomeTTMIdr <= 0;
+      classification.isPreProfitTechSpeculative ||
+      input.operatingProfitTTMIdr <= 0 ||
+      input.netIncomeTTMIdr <= 0;
 
     return {
+      ...baseFields,
       regime: 'TECH_UNPROFITABLE_GROWTH',
       regimeShortLabel: 'GROWTH / TECH (SURVIVAL MODE)',
-      regimeBadgeLabel: 'MODE SEKTOR: GROWTH/TECH',
+      regimeBadgeLabel: classification.profile.shortBadgeLabel,
       sectorMethodologyNotice:
-        'Mode Growth/Tech (Laba Negatif): Model P/E & RIM diblokir; fokus beralih ke ketahanan kas (runway) dan jalur menuju profitabilitas operasional.',
+        'Mode Growth/Tech: Evaluasi berfokus pada ketahanan kas (runway), efisiensi GP/A, dan jalur menuju profitabilitas operasional.',
       bypassedMetrics: ['Negative P/E Multiple', 'Negative Justified PBV / RIM Extrapolation'],
       activeMetrics: [
         'Cash Runway & Balance Sheet Survival',
@@ -753,8 +783,8 @@ export function resolveSectorMethodologyProfile(
       isGpaBypassed: false,
       isOcfNiAccrualBypassed: false,
       isCorporateDerBypassed: false,
-      isEvEbitdaBypassed: true,
-      isRoicCapexBypassed: true,
+      isEvEbitdaBypassed: isOperatingProfitNegative,
+      isRoicCapexBypassed: isOperatingProfitNegative,
       isPeAndRimBlockedByNegativeProfit: isOperatingProfitNegative,
       isGradeCappedAtCByUnprofitableTech: isOperatingProfitNegative,
       isCyclePeakWarning: false,
@@ -791,36 +821,35 @@ export function resolveSectorMethodologyProfile(
       academicStripCard3: {
         label: 'CASH RUNWAY & SURVIVAL',
         mainVal: `Runway ~${cashRunwayYears.toFixed(1)} Thn`,
-        subVal: '(P/E & RIM Negatif Diblokir · Cap Grade C)'
+        subVal: isOperatingProfitNegative
+          ? '(P/E & RIM Negatif Diblokir · Cap Grade C)'
+          : `(OCF/NI ${input.ocfToNetIncomeRatio.toFixed(2)}x)`
       }
     };
   }
 
   // ============================================================================
-  // REGIME 5: CORE CORPORATE (HEALTHCARE, CONSUMER NON-CYCLICALS, CYCLICALS, INDUSTRIALS)
+  // REGIME 5: CORE CORPORATE (FMCG, PHARMA, HOSPITALS, AUTO/RETAIL/MEDIA, INDUSTRIALS)
   // ============================================================================
   const is2StageCapexActive =
-    input.capexToDaRatio > 1.5 && input.roicTTMPct > input.costOfEquityKePct;
+    classification.resolvedAppliedModule === 'Capex_Aggressor';
   const ocfRuleTag =
     input.rawAccrualPenaltyPts > 0
       ? `(Penalti -${input.rawAccrualPenaltyPts} pts)`
-      : is2StageCapexActive || input.effectiveModule === 'Capex_Aggressor'
+      : is2StageCapexActive
       ? '(Lolos Rule B >0,50x)'
       : '(Kas Riil Sehat >0,80x)';
 
   return {
+    ...baseFields,
     regime: 'CORE_CORPORATE',
-    regimeShortLabel: 'KORPORASI INTI (CORE CORPORATE)',
-    regimeBadgeLabel: 'MODE SEKTOR: KORPORASI INTI',
-    sectorMethodologyNotice:
-      'Mode Korporasi Inti: Menggunakan GP/A Novy-Marx, validasi kas OCF/NI, serta evaluasi ekspansi 2-Stage RI bila ROIC > Ke.',
-    bypassedMetrics: [],
+    regimeShortLabel: classification.profile.displayName.toUpperCase(),
+    regimeBadgeLabel: classification.profile.shortBadgeLabel,
+    sectorMethodologyNotice: `Mode ${classification.profile.displayName}: Modul valuasi '${classification.resolvedAppliedModule}' (ω=${classification.resolvedOmega.toFixed(2)}, ${classification.resolvedFadeYears}Y Fade) dengan validasi GP/A Novy-Marx & kas OCF/NI.`,
+    bypassedMetrics: classification.profile.bypassedMetrics,
     activeMetrics: [
-      'Novy-Marx GP/A',
-      'OCF/NI Anti-Junk',
-      'DER & Cash Buffer',
-      'Quality P/E + Justified PBV + EV/EBITDA Band 5Y',
-      ...(is2StageCapexActive ? ['2-Stage Capex Aggressor RI (CapEx/D&A > 1.5x & ROIC > Ke)'] : [])
+      ...classification.profile.requiredMetrics,
+      ...(is2StageCapexActive ? ['2-Stage Capex Aggressor RI (Verified CapEx/D&A & ROIC > Ke)'] : [])
     ],
     isGpaBypassed: false,
     isOcfNiAccrualBypassed: false,
@@ -829,7 +858,7 @@ export function resolveSectorMethodologyProfile(
     isRoicCapexBypassed: false,
     isPeAndRimBlockedByNegativeProfit: false,
     isGradeCappedAtCByUnprofitableTech: false,
-    isCyclePeakWarning: false,
+    isCyclePeakWarning: classification.isCyclicalPeakWarning,
     isPsak72AccrualRelaxed: false,
     effectiveAccrualPenaltyPts: input.rawAccrualPenaltyPts,
     trueRoaPct,
@@ -866,7 +895,7 @@ export function resolveSectorMethodologyProfile(
       subVal:
         input.rawAccrualPenaltyPts > 0
           ? `(Penalti Akrual -${input.rawAccrualPenaltyPts} pts)`
-          : is2StageCapexActive || input.effectiveModule === 'Capex_Aggressor'
+          : is2StageCapexActive
           ? '(0 Penalti · Rule B Capex >0,50x)'
           : '(0 Penalti · Rule A Kas >0,80x)'
     }

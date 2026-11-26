@@ -66,6 +66,7 @@ export interface StockMetrics {
   yfTicker: string;        // e.g., "BBCA.JK"
   name: string;            // e.g., "Bank Central Asia Tbk"
   sector: string;          // 11 IDX-IC Sectors
+  subIndustry?: import('../config/sectorProfiles').IdxSubIndustryEnum;
   lastPrice: number;       // IDR Price (Intraday Live during market hours, Last Close when market closed)
   previousClose?: number;  // Official Previous Trading Day Close Price (IDR)
   marketState?: string;    // Yahoo Finance marketState ('REGULAR' | 'PRE' | 'POST' | 'CLOSED')
@@ -175,6 +176,26 @@ export interface StockMetrics {
   missingFundamentalFields?: string[]; // List of fundamental fields returned as null by Yahoo / Worker
   reportingCurrency?: string;          // Original financial statement currency ('IDR' | 'USD')
   fxRateUsdIdr?: number;               // Live USD/IDR FX rate applied when reportingCurrency === 'USD'
+  // FASE 2: Worker v2.1.0 Extended Historical & Sectoral Fields + Banking Regulatory Ratios
+  roeMedian5YPct?: number;             // 5-Year Historical Median ROE (%)
+  roeStdDev5YPct?: number;             // 5-Year Historical ROE Standard Deviation (%)
+  earningsCv5Y?: number;               // 5-Year Historical Net Income Coefficient of Variation (CV = std / |mean|)
+  grossProfitTTMIdr?: number;          // TTM Gross Profit (IDR)
+  netPpeIdr?: number;                  // Net Property, Plant & Equipment (IDR)
+  leaseLiabilitiesIdr?: number;        // PSAK 73 Lease Liabilities (IDR)
+  interestExpenseTTMIdr?: number;      // TTM Interest Expense (IDR)
+  netInterestIncomeTTMIdr?: number;    // TTM Net Interest Income for Banks/Financials (IDR)
+  maxDrawdown1YPct?: number;           // 1-Year Maximum Drawdown (%)
+  fieldPeriodEndDates?: Record<string, string | null>; // Per-line statement period-end dates
+  // OJK Banking / Multifinance Regulatory Metrics (when available via curated supplement or USER_OVERRIDE)
+  nimPct?: number;                     // Net Interest Margin (%)
+  nplPct?: number;                     // Gross Non-Performing Loan / NPF (%)
+  carPct?: number;                     // Capital Adequacy Ratio / KPMM (%)
+  bopoPct?: number;                    // Biaya Operasional terhadap Pendapatan Operasional (%)
+  ldrPct?: number;                     // Loan-to-Deposit Ratio / FDR (%)
+  casaPct?: number;                    // Current Account Saving Account Ratio (%)
+  costOfCreditPct?: number;            // Cost of Credit (%)
+  userSectorArchetypeOverride?: import('../config/sectorProfiles').SectorArchetypeId;
 }
 
 export type RecommendationDecisionState =
@@ -453,6 +474,97 @@ export interface JoeliardiOosEvaluation {
   dataLineage?: TickerDataLineageReport;
   isConvictionCappedBySeed?: boolean;
   seedCapWarningReason?: string;
+  // FASE 2: SINGLE SOURCE OF TRUTH SECTOR CLASSIFICATION & PROFILE
+  sectorClassification?: import('../utils/sectorClassifier').SectorClassificationResult;
+  // FASE 1: IMMUTABLE SINGLE SOURCE OF TRUTH (SSOT) DECISION OBJECT
+  decision?: EmitenDecision;
+}
+
+/**
+ * FASE 1: IMMUTABLE SINGLE SOURCE OF TRUTH (SSOT) DECISION OBJECT
+ * Computed ONCE by `evaluateJoeliardiOosFundamental()` and consumed without re-calculation
+ * across all renderers: UI Inspector Modal, Screening Cards, AI/Committee Narrative,
+ * Raw Data Audit Strip, and Ultra-HD PDF/PNG Exports.
+ */
+export interface EmitenDecision {
+  ticker: string;
+  name: string;
+  sector: string;
+  spotPriceIdr: number;
+  // Global Market Regime SSOT (never inferred from single-stock volatility)
+  marketRegime: MarketRegimeStatus;
+  // Conviction & Grade SSOT
+  rawConvictionScore: number;
+  finalConvictionScore: number;
+  finalGrade: JoeliardiOosEvaluation['convictionGrade'];
+  compactHeaderGradeBadge: string;
+  compactHeaderDataBadge: string;
+  compactHeaderDataStatus: 'WORKER' | 'FRESH' | 'OVERRIDE' | 'PROXY' | 'SEED_WARN';
+  primaryActionLabel: string;
+  holdingFactorsExplanation: string;
+  narrativeExecutionSentence: string;
+  // Intrinsic Valuation & Standalone Floor SSOT
+  intrinsicValueIdr: number;
+  rawStandaloneFloorIdr: number;
+  standaloneFloorIdr: number;
+  isFloorClamped: boolean;
+  mosPct: number;
+  mosRequiredPct: number;
+  formattedAccumulationZone: string;
+  // Discount Rate, Beta & Persistence SSOT
+  sbnSpot1YPct: number;
+  sbnSpot5YPct: number;
+  sbnSpot10YPct: number;
+  rfBlendedPct: number;
+  erpBenchmarkPct: number;
+  kePct: number;
+  rawBeta1Y: number;
+  adjustedBeta: number;
+  omega: number;
+  rimFadeYears: number;
+  gSustPct: number;
+  // Sizing, Stop Loss & Adaptive ADTV Formatting SSOT
+  maxCapPct: number;
+  tranche1Pct: number;
+  tranche2Pct: number;
+  stopLossIdr: number;
+  stopLossPct: number;
+  adtv20dIdr: number;
+  maxSafe5PctAdtvIdr: number;
+  formattedAdtv20d: string;          // e.g. "Rp 12,70 M/hr" or "Rp 450,0 Jt/hr"
+  formattedMaxSafe5PctAdtv: string;  // e.g. "Rp 635,0 Jt/hr" or "Rp 34,00 M/hr"
+  // FASE 2: Sector Profile & Classification Telemetry SSOT
+  sectorArchetype?: import('../config/sectorProfiles').SectorArchetypeId;
+  sectorSubArchetype?: string;
+  classificationConfidence?: 'HIGH' | 'MEDIUM' | 'LOW_CONSERVATIVE';
+  isSectorDataIncomplete?: boolean;
+  sectorDataFlags?: string[];
+  // FASE 3: Unified Persistence, Epistemic Fair Value Range, ROE-Fade Scenarios & Ke Sensitivity SSOT
+  kePremiaBps?: number;
+  erpAsOfDate?: string;
+  erpSource?: string;
+  continuousDispersionPenaltyPts?: number;
+  fairValueRangeIdr?: [number, number];
+  roeFadeScenarios?: RoeFadeScenarioAnalysis;
+  keSensitivityMatrix?: KeSensitivityMatrix;
+}
+
+export interface RoeFadeScenarioAnalysis {
+  bearOmega: number;
+  baseOmega: number;
+  bullOmega: number;
+  bearIdr: number;
+  baseIdr: number;
+  bullIdr: number;
+}
+
+export interface KeSensitivityMatrix {
+  keMinus1ppPct: number;
+  keBasePct: number;
+  kePlus1ppPct: number;
+  keMinus1ppIdr: number;
+  keBaseIdr: number;
+  kePlus1ppIdr: number;
 }
 
 export type UnifiedEvaluationResult = JoeliardiOosEvaluation;
@@ -704,9 +816,13 @@ export interface ValuationResult {
   modelDispersion: number;        // (maxVal - minVal) / medianVal
   medianModelValue: number;
   isOutlierEnsembleActive: boolean;
-  isDispersionPenalized: boolean; // True if modelDispersion > 0.40 or isOutlierEnsembleActive
-  dispersionPenaltyPts: number;   // 10 - 15 points deducted from convictionScore
+  isDispersionPenalized: boolean; // True if continuous dispersion penalty > 0
+  dispersionPenaltyPts: number;   // Continuous 0 - 15 points deducted from convictionScore
+  continuousDispersionPenaltyPts?: number;
   dispersionPenaltyReason?: string;
+  fairValueRangeIdr?: [number, number];
+  roeFadeScenarios?: RoeFadeScenarioAnalysis;
+  keSensitivityMatrix?: KeSensitivityMatrix;
   // Separated Tactical Overlay (StatArb)
   tacticalOverlay: TacticalOverlay;
 }

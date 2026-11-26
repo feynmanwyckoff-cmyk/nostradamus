@@ -8,8 +8,10 @@ import {
   StructuredAiConvictionReport
 } from '../types/quant';
 import {
+  computeSbnSpotYieldCurveAndKe,
   enrichStockMetrics,
-  evaluateJoeliardiOosFundamental
+  evaluateJoeliardiOosFundamental,
+  formatAdaptiveIdrValue
 } from '../utils/quantEngine';
 import {
   getCustomCorporateActionOverrides,
@@ -744,13 +746,28 @@ export function EmitenFundamentalInspectorModal({
     const roePct = Number(((niIdr / eqIdr) * 100).toFixed(2));
     const opMarginPct = revIdr > 0 ? Number(((ebitIdr / revIdr) * 100).toFixed(2)) : activeStock.operatingMargin;
 
+    const sbnPreview = computeSbnSpotYieldCurveAndKe(
+      {
+        ...activeStock,
+        forwardDividendYieldPct:
+          joeliardiEval.forwardDividendYieldPct ?? activeStock.forwardDividendYieldPct
+      },
+      joeliardiEval.forwardDividendYieldPct ?? activeStock.forwardDividendYieldPct ?? 2.5
+    );
     const anchorDelta = sbn10Y - 6.75;
     const sbn1Y = 6.15 + anchorDelta * 0.75;
     const sbn5Y = 6.48 + anchorDelta * 0.90;
-    const blendedRf = Number((0.22 * sbn1Y + 0.38 * sbn5Y + 0.40 * sbn10Y).toFixed(2));
-    const rawBeta = Math.max(0.35, Number(activeStock.beta1Y) || 1.0);
-    const blumeBeta = Math.max(0.48, Math.min(1.55, 0.67 * rawBeta + 0.33 * 1.0));
-    const kePct = Number(Math.max(8.8, Math.min(16.2, blendedRf + blumeBeta * 5.5)).toFixed(2));
+    const divYieldForPreview =
+      joeliardiEval.forwardDividendYieldPct ?? activeStock.forwardDividendYieldPct ?? 2.5;
+    const w1Y = divYieldForPreview >= 4.5 ? 0.28 : divYieldForPreview >= 2.0 ? 0.22 : 0.12;
+    const w5Y = divYieldForPreview >= 4.5 ? 0.42 : divYieldForPreview >= 2.0 ? 0.38 : 0.33;
+    const w10Y = divYieldForPreview >= 4.5 ? 0.30 : divYieldForPreview >= 2.0 ? 0.40 : 0.55;
+    const blendedRf = Number((w1Y * sbn1Y + w5Y * sbn5Y + w10Y * sbn10Y).toFixed(2));
+    const adjustedBeta =
+      joeliardiEval.decision?.adjustedBeta ??
+      Math.max(0.48, Math.min(1.55, 0.67 * Math.max(0.35, Number(activeStock.beta1Y) || 1.0) + 0.33 * 1.0));
+    const erpPct = joeliardiEval.decision?.erpBenchmarkPct ?? sbnPreview.erpBenchmarkPct;
+    const kePct = Number(Math.max(8.8, Math.min(16.2, blendedRf + adjustedBeta * erpPct)).toFixed(2));
 
     return {
       sharesFull,
@@ -1424,7 +1441,8 @@ export function EmitenFundamentalInspectorModal({
         const evalObj = evaluateJoeliardiOosFundamental(
           currentStock,
           undefined,
-          availablePortfolioCashIdr
+          availablePortfolioCashIdr,
+          regimeStatus
         );
         const qText = `Apakah ${currentStock.ticker} layak dibeli pada harga Rp ${currentStock.lastPrice.toLocaleString('id-ID')} berdasarkan Nilai Intrinsik Wajar & Fundamental Kualitas Moat?`;
         setUserQuestion(qText);
@@ -4560,12 +4578,9 @@ export function EmitenFundamentalInspectorModal({
                           ? { label: 'WAJAR', cls: 'bg-[#0284C7]/15 text-[#0284C7] bb-cyan border-[#0284C7]/40' }
                           : { label: 'PREMIUM', cls: 'bg-[#D97706]/15 text-[#D97706] bb-amber border-[#D97706]/40' };
 
-                        const safeAdtvMillionsStr =
-                          joeliardiEval.maxSafeAllocationIdr >= 1_000_000
-                            ? (joeliardiEval.maxSafeAllocationIdr / 1_000_000).toLocaleString('id-ID', {
-                                maximumFractionDigits: 1
-                              })
-                            : joeliardiEval.maxSafeAllocationIdr.toLocaleString('id-ID');
+                        const formattedMaxSafe5PctAdtv =
+                          joeliardiEval.decision?.formattedMaxSafe5PctAdtv ??
+                          formatAdaptiveIdrValue(joeliardiEval.maxSafeAllocationIdr, '/hr');
 
                         return (
                           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
@@ -4620,9 +4635,9 @@ export function EmitenFundamentalInspectorModal({
                                     <strong className="text-[#111315] text-[9.5px] shrink-0">Rp {formatIdrPriceDisplay(fairIdr)}</strong>
                                   </div>
                                   <div className="flex items-center justify-between gap-1 whitespace-nowrap">
-                                    <span className="text-neutral-500 text-[9px] shrink-0">Spot vs Wajar:</span>
+                                    <span className="text-neutral-500 text-[9px] shrink-0">Margin of Safety (MoS):</span>
                                     <strong className={`text-[9.5px] shrink-0 ${mosVal >= 0 ? 'text-[#0D5C46]' : 'text-[#D97706] bb-amber'}`}>
-                                      Rp {formatIdrPriceDisplay(spotIdr)} ({mosVal >= 0 ? `+${mosVal.toFixed(1)}%` : `${mosVal.toFixed(1)}%`})
+                                      {mosVal >= 0 ? `+${mosVal.toFixed(1)}%` : `${mosVal.toFixed(1)}%`} (Spot Rp {formatIdrPriceDisplay(spotIdr)})
                                     </strong>
                                   </div>
                                 </div>
@@ -4709,7 +4724,7 @@ export function EmitenFundamentalInspectorModal({
                                   <div className="flex items-center justify-between gap-1 whitespace-nowrap">
                                     <span className="text-neutral-500 text-[9px] shrink-0">5% ADTV 20D:</span>
                                     <strong className="text-[#0D5C46] text-[9.5px] shrink-0">
-                                      Maks. Rp {safeAdtvMillionsStr} Jt/hr
+                                      Maks. {formattedMaxSafe5PctAdtv}
                                     </strong>
                                   </div>
                                 </div>

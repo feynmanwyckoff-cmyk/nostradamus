@@ -13,6 +13,7 @@ import {
   computeSbnSpotYieldCurveAndKe,
   enrichStockMetrics,
   estimateEmitenAdtv20dIdr,
+  formatAdaptiveIdrValue,
   rankUniverseWithBuffer,
   roundToIdxTick
 } from './quantEngine';
@@ -51,6 +52,7 @@ export interface IdxDirectoryEntry {
   ticker: string;
   name: string;
   sector: string;
+  subIndustry?: import('../config/sectorProfiles').IdxSubIndustryEnum;
   defaultRoe: number;
   defaultDer: number;
   defaultOpMargin: number;
@@ -1648,6 +1650,7 @@ export function buildIdx100StockUniverse(
         yfTicker,
         name: entry.name,
         sector: entry.sector,
+        subIndustry: entry.subIndustry,
         lastPrice,
         previousClose,
         marketState: snapItem.marketState,
@@ -1708,6 +1711,7 @@ export function buildIdx100StockUniverse(
       yfTicker,
       name: entry.name,
       sector: entry.sector,
+      subIndustry: entry.subIndustry,
       lastPrice: 0,
       change1D: 0,
       return30D: 0,
@@ -4361,8 +4365,8 @@ export function buildEmitenCorporateActionRadarBaseline(
   const price = stock?.lastPrice ?? 1000;
   const c1d = stock?.change1D ?? 0;
   const sbnAndKe = computeSbnSpotYieldCurveAndKe(
-    stock || ({ ticker: clean, beta1Y: 0.85, roe } as StockMetrics),
-    undefined
+    stock || ({ ticker: clean, beta1Y: 0.85, roe, dividendYieldPct: divYield } as StockMetrics),
+    divYield
   );
   const dynamicKePct = sbnAndKe.dynamicCostOfEquityPct;
   const overlayForNews = resolveTickerFundamentalOverlay(clean, {
@@ -5075,20 +5079,18 @@ function buildDeepAnalyticalConvictionReport(params: {
     Math.min(rawTargetMaxNominalIdr, realCashAvailableIdr, maxSafeAllocationIdr)
   );
   const isLiquidityCapped = !stock.isHscFlagged && Math.min(rawTargetMaxNominalIdr, realCashAvailableIdr) > maxSafeAllocationIdr;
-  const adtvMillionsStr = (adtv20dIdr / 1_000_000).toLocaleString('id-ID', {
-    maximumFractionDigits: 0
-  });
-  const maxSafeMillionsStr = (maxSafeAllocationIdr / 1_000_000).toLocaleString('id-ID', {
-    maximumFractionDigits: 1
-  });
-  const realCashCappedMillionsStr = (realCashCappedAllocationIdr / 1_000_000).toLocaleString('id-ID', {
-    maximumFractionDigits: 1
-  });
+  const formattedAdtv20d =
+    joeliardiEval.decision?.formattedAdtv20d ??
+    formatAdaptiveIdrValue(adtv20dIdr, '/hr');
+  const formattedMaxSafe5PctAdtv =
+    joeliardiEval.decision?.formattedMaxSafe5PctAdtv ??
+    formatAdaptiveIdrValue(maxSafeAllocationIdr, '/hr');
+  const formattedRealCashCapped = formatAdaptiveIdrValue(realCashCappedAllocationIdr, '/hr');
 
   const liquidityWarningBadge = !stock.isHscFlagged
     ? isLiquidityCapped
-      ? `LIQUIDITY CAP WARNING: Target Alokasi Kas (Rp ${(Math.min(rawTargetMaxNominalIdr, realCashAvailableIdr) / 1_000_000).toLocaleString('id-ID', { maximumFractionDigits: 1 })} Jt) > 5% ADTV 20D (Maks. Rp ${maxSafeMillionsStr} Jt/hari dari ADTV Rp ${adtvMillionsStr} Jt)`
-      : `LIQUIDITY & CASH VERIFIED: Eksekusi Maks. Rp ${realCashCappedMillionsStr} Jt (min Kas Riil & 5% ADTV Rp ${maxSafeMillionsStr} Jt/hari dari ADTV Rp ${adtvMillionsStr} Jt)`
+      ? `LIQUIDITY CAP WARNING: Target Alokasi Kas (${formatAdaptiveIdrValue(Math.min(rawTargetMaxNominalIdr, realCashAvailableIdr), '')}) > 5% ADTV 20D (Maks. ${formattedMaxSafe5PctAdtv} dari ADTV ${formattedAdtv20d})`
+      : `LIQUIDITY & CASH VERIFIED: Eksekusi Maks. ${formattedRealCashCapped} (min Kas Riil & 5% ADTV ${formattedMaxSafe5PctAdtv} dari ADTV ${formattedAdtv20d})`
     : undefined;
 
   const sectorNoticePrefix = joeliardiEval.sectorMethodologyNotice
@@ -5111,7 +5113,7 @@ function buildDeepAnalyticalConvictionReport(params: {
         : `01. Audit Profitabilitas Kas (GP/A & Anti-Junk OCF/NI): GP/A (Novy-Marx) ${gpToAssets.toFixed(1)}% (ROA murni ${trueRoaPct.toFixed(2)}% x Lev ${assetLeverageRatio.toFixed(2)}x, ROE TTM ${roeTtmPct.toFixed(1)}%) dengan OCF/NI ${ocfNi.toFixed(2)}x (${ocfNiNarrativeClause}${accrualPen > 0 ? ` · Penalti Akrual -${accrualPen} pts` : ''}) -> ${isHighQualityOrganicRoe && ocfNi >= 0.90 ? 'Mesin Kas Riil Berdaya Saing Kuat (Anti-Junk).' : isLeveragedRoe ? 'Laba Ditopang Leverage / Pantau Kas Operasi.' : 'Profitabilitas Operasional Terjaga.'}`,
       `02. Router ${valModuleLabel} & Ensemble 3-Kaki (ValuationLedger): Matriks Sektor ${secShort} (${leg1WeightPct}% · Rp ${secFairValIdr.toLocaleString('id-ID')}) [Justified PBV ${justPbvStr}x], Multi-Stage RIM ${rimFadeYrs}Y omega=${(joeliardiEval.rimPersistenceOmega ?? 0.72).toFixed(2)} (${leg2WeightPct}% · Rp ${rimFairValIdr.toLocaleString('id-ID')}), dan ${leg3Label} (${leg3WeightPct}% · Rp ${leg3ValIdr.toLocaleString('id-ID')}) + Floor Graham-Joeliardi Rp ${gjFloorIdr.toLocaleString('id-ID')} -> Harga Wajar Utama Quantedge Rp ${joeliardiEval.intrinsicValueIdr.toLocaleString('id-ID')} (MoS ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct.toFixed(1)}% vs Syarat Dinamis Min. ${dynamicRequiredMosPct.toFixed(1)}%).`,
       `03. Tactical Overlay StatArb (${stock.ticker}<->${peerTicker}, Beta-Ratio ${(joeliardiEval.statArbBetaRatio ?? 1).toFixed(2)}x · 0% Bobot Intrinsik): Korelasi historis rho=${statArbRho.toFixed(2)} mencatat Z-Score ${statArbZ >= 0 ? '+' : ''}${statArbZ.toFixed(2)} SD (Target Konvergensi Pair Rp ${statArbTargetIdr.toLocaleString('id-ID')}) -> ${statArbFollowUpShort}`,
-      `04. Sizing Barbell Vol-Targeted, Stop Loss ATR/Vol & Kas Riil: Plafon Alokasi Maks. ${maxBarbellCapStr}% portofolio (Tranche 1: ${tranche1Str}% + Tranche 2: ${tranche2Str}%), Stop Loss Kuantitatif ATR/Vol di Rp ${riskStopPrice.toLocaleString('id-ID')} (-${riskStopPct.toFixed(2)}%), didukung ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}% (Net Payout ${netPayoutYieldPct.toFixed(2)}%) & batas eksekusi min(Kas Riil, 5% ADTV) Rp ${realCashCappedMillionsStr} Jt/hari -> ${stock.isHscFlagged ? 'Hindari Eksposur Spekulatif.' : isLiquidityCapped ? 'Wajib Pecah Order Sesuai Batas 5% ADTV.' : `${primaryActionLabel} (Plafon Maks. ${maxBarbellCapStr}%).`}`
+      `04. Sizing Barbell Vol-Targeted, Stop Loss ATR/Vol & Kas Riil: Plafon Alokasi Maks. ${maxBarbellCapStr}% portofolio (Tranche 1: ${tranche1Str}% + Tranche 2: ${tranche2Str}%), Stop Loss Kuantitatif ATR/Vol di Rp ${riskStopPrice.toLocaleString('id-ID')} (-${riskStopPct.toFixed(2)}%), didukung ${shareholderYieldLabel} ${totalShareholderYieldPct.toFixed(2)}% (Net Payout ${netPayoutYieldPct.toFixed(2)}%) & batas eksekusi min(Kas Riil, 5% ADTV) ${formattedRealCashCapped} -> ${stock.isHscFlagged ? 'Hindari Eksposur Spekulatif.' : isLiquidityCapped ? 'Wajib Pecah Order Sesuai Batas 5% ADTV.' : `${primaryActionLabel} (Plafon Maks. ${maxBarbellCapStr}%).`}`
     ],
     sections: [
       {
@@ -5183,7 +5185,7 @@ function buildDeepAnalyticalConvictionReport(params: {
             : stock.hscTier === 'KSEI_DIVIDEND_PENALTY' && stock.kseiHscConcentrationPct
             ? `HSC KSEI Top-10: ${stock.kseiHscConcentrationPct.toFixed(3).replace('.', ',')}% (${stock.kseiHscIsNew ? 'Baru/New' : 'Eksisting'}) · Penalti -${(stock.kseiHscScorePenaltyPts || 0.45).toFixed(2)} Tanpa Blokir`
             : 'Clean Institutional (Bebas HSC KSEI & Suspect)'
-        } · ADTV 20D Rp ${adtvMillionsStr} Jt · Kapasitas 5% ADTV Rp ${maxSafeMillionsStr} Jt`,
+        } · ADTV 20D ${formattedAdtv20d} · Kapasitas 5% ADTV ${formattedMaxSafe5PctAdtv}`,
         reasoningParagraph: stock.isHscFlagged
           ? `Sistem mendeteksi ${stock.ticker} masuk dalam kategori ${
               stock.hscTier === 'EARLY_WARNING_SUSPECT'
@@ -5191,8 +5193,8 @@ function buildDeepAnalyticalConvictionReport(params: {
                 : 'Daftar Resmi Kepemilikan Saham Terkonsentrasi Tinggi BEI-KSEI tanpa dukungan dividen memadai atau dalam proses delisting'
             } (${stock.hscReason || 'pergerakan harga tidak wajar'}). Demi menjaga keamanan modal, saham ini diblokir otomatis dari Top Decile Buy dan Barbell Allocator.`
           : stock.hscTier === 'KSEI_DIVIDEND_PENALTY' && stock.kseiHscConcentrationPct
-          ? `Berdasarkan Pengumuman BEI-KSEI No. Peng-HSC-00088/BEI.WAS/11-2026 per 30 Oktober 2026, konsentrasi kepemilikan Top 10 pemegang saham ${stock.ticker} mencapai ${stock.kseiHscConcentrationPct.toFixed(3).replace('.', ',')}% (Status: ${stock.kseiHscIsNew ? 'Baru/New' : 'Eksisting'}, sisa free float publik maksimal ${(100 - stock.kseiHscConcentrationPct).toFixed(2).replace('.', ',')}%). Sesuai kebijakan kuantitatif Dual-Tier, karena ${stock.ticker} memiliki dukungan pembagian dividen rutin (Dividend Yield ${forwardDivYield.toFixed(2)}%) dan fundamental yang sehat, saham ini TIDAK diblokir otomatis melainkan dikenai penalti skor likuiditas -${(stock.kseiHscScorePenaltyPts || 0.45).toFixed(2).replace('.', ',')} poin serta wajib mematuhi batas eksekusi 5% ADTV 20D (~Rp ${maxSafeMillionsStr} Juta/hari).`
-          : `Dari ${recentNews.length} berita dan keterbukaan informasi terbaru pada ${stock.ticker}, perhatian pelaku pasar tertuju pada rilis kinerja keuangan, proyeksi dividen ke depan, serta prospek sektor ${stock.sector}. Aktivitas perdagangannya bersih dari daftar konsentrasi HSC BEI-KSEI maupun sinyal Early Warning Suspect dengan nilai transaksi harian rata-rata 20 hari (ADTV 20D) sekitar Rp ${adtvMillionsStr} Juta.`,
+          ? `Berdasarkan Pengumuman BEI-KSEI No. Peng-HSC-00088/BEI.WAS/11-2026 per 30 Oktober 2026, konsentrasi kepemilikan Top 10 pemegang saham ${stock.ticker} mencapai ${stock.kseiHscConcentrationPct.toFixed(3).replace('.', ',')}% (Status: ${stock.kseiHscIsNew ? 'Baru/New' : 'Eksisting'}, sisa free float publik maksimal ${(100 - stock.kseiHscConcentrationPct).toFixed(2).replace('.', ',')}%). Sesuai kebijakan kuantitatif Dual-Tier, karena ${stock.ticker} memiliki dukungan pembagian dividen rutin (Dividend Yield ${forwardDivYield.toFixed(2)}%) dan fundamental yang sehat, saham ini TIDAK diblokir otomatis melainkan dikenai penalti skor likuiditas -${(stock.kseiHscScorePenaltyPts || 0.45).toFixed(2).replace('.', ',')} poin serta wajib mematuhi batas eksekusi 5% ADTV 20D (~${formattedMaxSafe5PctAdtv}).`
+          : `Dari ${recentNews.length} berita dan keterbukaan informasi terbaru pada ${stock.ticker}, perhatian pelaku pasar tertuju pada rilis kinerja keuangan, proyeksi dividen ke depan, serta prospek sektor ${stock.sector}. Aktivitas perdagangannya bersih dari daftar konsentrasi HSC BEI-KSEI maupun sinyal Early Warning Suspect dengan nilai transaksi harian rata-rata 20 hari (ADTV 20D) sekitar ${formattedAdtv20d}.`,
         bulletPoints:
           recentNews.length > 0
             ? recentNews.slice(0, 3).map(
@@ -5201,7 +5203,7 @@ function buildDeepAnalyticalConvictionReport(params: {
               )
             : [
                 `Agenda Korporasi yang Perlu Dipantau: Realisasi laba TTM terdekumulasi serta penetapan rasio pembayaran dividen (DPR historis 3Y ~${historicalDpr3Y.toFixed(0)}%) pada RUPS ${stock.ticker}.`,
-                `Kedalaman Likuiditas Pasar (ADTV 20D): Rata-rata nilai transaksi harian 20 hari mencapai Rp ${adtvMillionsStr} Juta, sehingga batas aman eksekusi harian tanpa memicu slippage adalah 5% ADTV (~Rp ${maxSafeMillionsStr} Juta).`
+                `Kedalaman Likuiditas Pasar (ADTV 20D): Rata-rata nilai transaksi harian 20 hari mencapai ${formattedAdtv20d}, sehingga batas aman eksekusi harian tanpa memicu slippage adalah 5% ADTV (~${formattedMaxSafe5PctAdtv}).`
               ],
         sentimentTone: stock.isHscFlagged
           ? 'NEGATIVE'
@@ -5211,14 +5213,14 @@ function buildDeepAnalyticalConvictionReport(params: {
       },
       {
         id: 'regime-momentum-fit',
-        badge: `04. BARBELL SIZING & STOP LOSS // ${regimeStatus}`,
+        badge: `04. BARBELL SIZING & STOP LOSS // ${joeliardiEval.decision?.marketRegime ?? regimeStatus}`,
         title: 'Penjatahan Porsi Barbell Vol-Targeted, Stop Loss ATR/Vol & Batas 5% ADTV',
-        keyMetricHighlight: `Propensitas 1/Beta ${betaPropensity.toFixed(2)}x · Cap Maks. ${maxBarbellCapStr}% (T1: ${tranche1Str}% + T2: ${tranche2Str}%) · Stop Loss Rp ${riskStopPrice.toLocaleString('id-ID')} (-${riskStopPct.toFixed(2)}%) · Maks. Rp ${realCashCappedMillionsStr} Jt`,
-        reasoningParagraph: `Sesuai prinsip Risk Parity (Qian 2005) dan Volatility-Targeted Barbell (Taleb 2012), saham dengan Beta 1Y ${stock.beta1Y.toFixed(2)}x dan volatilitas tahunan ${stock.volatilityAnn.toFixed(1)}% memiliki Batas Alokasi Maksimum Maks. ${maxBarbellCapStr}% dari modal portofolio (Tranche 1 Inisiasi 60%: ${tranche1Str}% ekuitas + Tranche 2 Konfirmasi 40%: ${tranche2Str}% ekuitas) dan Stop Loss Kuantitatif ATR/Volatilitas di Rp ${riskStopPrice.toLocaleString('id-ID')} (-${riskStopPct.toFixed(2)}%). Berdasarkan validasi likuiditas terhadap sisa kas riil portofolio dan 5% ADTV 20D, batas serapan harian ditetapkan sebesar Rp ${realCashCappedMillionsStr} Juta.`,
+        keyMetricHighlight: `Propensitas 1/Beta ${betaPropensity.toFixed(2)}x · Cap Maks. ${maxBarbellCapStr}% (T1: ${tranche1Str}% + T2: ${tranche2Str}%) · Stop Loss Rp ${riskStopPrice.toLocaleString('id-ID')} (-${riskStopPct.toFixed(2)}%) · Maks. ${formattedRealCashCapped}`,
+        reasoningParagraph: `Sesuai prinsip Risk Parity (Qian 2005) dan Volatility-Targeted Barbell (Taleb 2012), saham dengan Beta 1Y ${stock.beta1Y.toFixed(2)}x dan volatilitas tahunan ${stock.volatilityAnn.toFixed(1)}% memiliki Batas Alokasi Maksimum Maks. ${maxBarbellCapStr}% dari modal portofolio (Tranche 1 Inisiasi 60%: ${tranche1Str}% ekuitas + Tranche 2 Konfirmasi 40%: ${tranche2Str}% ekuitas) dan Stop Loss Kuantitatif ATR/Volatilitas di Rp ${riskStopPrice.toLocaleString('id-ID')} (-${riskStopPct.toFixed(2)}%). Berdasarkan validasi likuiditas terhadap sisa kas riil portofolio dan 5% ADTV 20D, batas serapan harian ditetapkan sebesar ${formattedRealCashCapped}.`,
         bulletPoints: [
           `Penempatan Portofolio Barbell & Plafon Vol-Targeted: ${isBasket1Core ? `Ideal ditempatkan di Keranjang 1 (Defensive Core — Propensitas 1/Beta ${betaPropensity.toFixed(2)}x, Plafon Maks. ${maxBarbellCapStr}% = Tranche 1 ${tranche1Str}% + Tranche 2 ${tranche2Str}% ekuitas).` : `Ditempatkan di Keranjang 2 (Tactical Alpha — Propensitas 1/Beta ${betaPropensity.toFixed(2)}x membatasi Plafon Maks. ${maxBarbellCapStr}% = Tranche 1 ${tranche1Str}% + Tranche 2 ${tranche2Str}% ekuitas untuk mencegah tail-risk).`}`,
           `Stop Loss Kuantitatif ATR/Volatilitas Terpadu: Batas pengaman modal ditetapkan di Rp ${riskStopPrice.toLocaleString('id-ID')} (-${riskStopPct.toFixed(2)}% dari harga spot, dihitung dari max[2.5x ATR20, 1.5x Vol_bulanan] terklamp 12%-18%) dengan Graham-Joeliardi Floor di Rp ${gjFloorIdr.toLocaleString('id-ID')}.`,
-          `Validasi Kas Riil & 5% ADTV Rule: Alokasi dibatasi pada minimum antara sisa kas riil portofolio dan 5% ADTV 20D (Maks. Rp ${realCashCappedMillionsStr} Juta per sesi dari kapasitas 5% ADTV Rp ${maxSafeMillionsStr} Juta) guna mencegah dampak harga (slippage) dan over-allocation.`
+          `Validasi Kas Riil & 5% ADTV Rule: Alokasi dibatasi pada minimum antara sisa kas riil portofolio dan 5% ADTV 20D (Maks. ${formattedRealCashCapped} per sesi dari kapasitas 5% ADTV ${formattedMaxSafe5PctAdtv}) guna mencegah dampak harga (slippage) dan over-allocation.`
         ],
         sentimentTone:
           stock.volatilityAnn <= 26 && !stock.isHscFlagged ? 'POSITIVE' : 'NEUTRAL'
@@ -5235,8 +5237,8 @@ function buildDeepAnalyticalConvictionReport(params: {
       portfolioAllocationGuide: stock.isHscFlagged
         ? '0% Modal Portofolio (Diblokir oleh filter perlindungan modal)'
         : isBasket1Core
-        ? `Keranjang 1 (Defensive Core · 1/Beta ${betaPropensity.toFixed(2)}x): Plafon Maks. ${maxBarbellCapStr}% (Tranche 1: ${tranche1Str}% + Tranche 2: ${tranche2Str}%). BATAS EKSEKUSI KAS RIIL & 5% ADTV Maks. Rp ${realCashCappedMillionsStr} Jt/hari (5% ADTV Rp ${maxSafeMillionsStr} Jt dari ADTV Rp ${adtvMillionsStr} Jt).`
-        : `Keranjang 2 (Tactical Alpha · 1/Beta ${betaPropensity.toFixed(2)}x): Plafon Maks. ${maxBarbellCapStr}% (Tranche 1: ${tranche1Str}% + Tranche 2: ${tranche2Str}%). BATAS EKSEKUSI KAS RIIL & 5% ADTV Maks. Rp ${realCashCappedMillionsStr} Jt/hari (5% ADTV Rp ${maxSafeMillionsStr} Jt dari ADTV Rp ${adtvMillionsStr} Jt).`,
+        ? `Keranjang 1 (Defensive Core · 1/Beta ${betaPropensity.toFixed(2)}x): Plafon Maks. ${maxBarbellCapStr}% (Tranche 1: ${tranche1Str}% + Tranche 2: ${tranche2Str}%). BATAS EKSEKUSI KAS RIIL & 5% ADTV Maks. ${formattedRealCashCapped} (5% ADTV ${formattedMaxSafe5PctAdtv} dari ADTV ${formattedAdtv20d}).`
+        : `Keranjang 2 (Tactical Alpha · 1/Beta ${betaPropensity.toFixed(2)}x): Plafon Maks. ${maxBarbellCapStr}% (Tranche 1: ${tranche1Str}% + Tranche 2: ${tranche2Str}%). BATAS EKSEKUSI KAS RIIL & 5% ADTV Maks. ${formattedRealCashCapped} (5% ADTV ${formattedMaxSafe5PctAdtv} dari ADTV ${formattedAdtv20d}).`,
       isUndercutDeepDiscount,
       isLiquidityCapped,
       liquidityWarningBadge,

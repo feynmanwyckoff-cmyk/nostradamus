@@ -1,4 +1,9 @@
 import { IdxDirectoryEntry } from '../utils/liveMarketFetcher';
+import {
+  DEFAULT_SUB_INDUSTRY_BY_SECTOR,
+  IdxSectorEnum,
+  IdxSubIndustryEnum
+} from '../config/sectorProfiles';
 
 /**
  * Core Curated High-Liquidity Emiten with Detailed Institutional Profiles
@@ -703,10 +708,239 @@ const VERIFIED_EMITEN_CORPORATE_NAMES: Record<string, string> = {
   TRUE: 'Triniti Dinamik Tbk'
 };
 
+/**
+ * Deterministic Sub-Industry Classification Sets across the 11 Official IDX-IC Sectors
+ * Closes Finding E: Every single catalog entry has a structured IdxSubIndustryEnum.
+ */
+const SUB_INDUSTRY_TICKER_SETS: Array<{
+  subIndustry: IdxSubIndustryEnum;
+  tickers: Set<string>;
+}> = [
+  // 1. Financials
+  {
+    subIndustry: IdxSubIndustryEnum.BANK_KBMI3_4,
+    tickers: new Set([
+      'BBCA', 'BMRI', 'BBRI', 'BBNI', 'BNGA', 'NISP', 'BDMN', 'BNLI', 'BBTN',
+      'BJBR', 'BJTM', 'PNBN', 'MEGA', 'BTPN', 'MAYA', 'BBMD', 'BSIM', 'BINA',
+      'SDRA', 'BNII', 'BBKP', 'BBNP', 'BAEK'
+    ])
+  },
+  {
+    subIndustry: IdxSubIndustryEnum.BANK_MICRO_SHARIA,
+    tickers: new Set([
+      'BRIS', 'BTPS', 'PNBS', 'ARTO', 'BBYB', 'BANK', 'AMAR', 'AGRO', 'BBHI',
+      'BCIC', 'BEKS', 'BGTG', 'BKSW', 'BMAS', 'BNBA', 'BSWD', 'BVIC', 'DNAR',
+      'INPC', 'MASB', 'MCOR', 'NOBU', 'AGRS', 'BABP', 'BACA', 'BBSI'
+    ])
+  },
+  {
+    subIndustry: IdxSubIndustryEnum.MULTIFINANCE,
+    tickers: new Set([
+      'BFIN', 'ADMF', 'CFIN', 'WOMF', 'MFIN', 'TIFA', 'VRNA', 'BBLD', 'BPFI',
+      'DEFI', 'FUJI', 'HDFA', 'POLA', 'TRUS', 'VTNY'
+    ])
+  },
+  {
+    subIndustry: IdxSubIndustryEnum.INSURANCE,
+    tickers: new Set([
+      'TUGU', 'LIFE', 'PNIN', 'PNLF', 'ABDA', 'AHAP', 'AMAG', 'ASBI', 'ASDM',
+      'ASJT', 'ASMI', 'ASRM', 'BHAT', 'JMAS', 'MREI', 'MTWI', 'VINS', 'YOII'
+    ])
+  },
+  // 2. Energy
+  {
+    subIndustry: IdxSubIndustryEnum.OIL_GAS_ENERGY,
+    tickers: new Set([
+      'PGAS', 'MEDC', 'AKRA', 'RAJA', 'ENRG', 'APEX', 'BIPI', 'BULL', 'CGAS',
+      'ELSA', 'GTSI', 'HITS', 'HUMI', 'JSKY', 'LEAD', 'MTFN', 'RGAS', 'RUIS',
+      'SEMA', 'SHIP', 'SOCI', 'SURE', 'WINS', 'WOWS', 'RATU'
+    ])
+  },
+  {
+    subIndustry: IdxSubIndustryEnum.ENERGY_SERVICES_CONTRACTOR,
+    tickers: new Set([
+      'DEWA', 'DOID', 'PTRO', 'MBSS', 'SUNI', 'UNIQ', 'HILL', 'MKAP', 'PTIS',
+      'RIGS', 'SMRU', 'SUGI', 'TAMU', 'TCPI', 'ATLA', 'BESS', 'BOAT', 'BOBA',
+      'BSML', 'CANI', 'CBRE', 'KOPI', 'RDMP', 'SICO'
+    ])
+  },
+  {
+    subIndustry: IdxSubIndustryEnum.METALS_MINING_DOWNSTREAM,
+    tickers: new Set([
+      'AMMN', 'ANTM', 'INCO', 'MDKA', 'NCKL', 'TINS', 'BRMS', 'MBMA', 'ARCI',
+      'CITA', 'DKFT', 'IFSH', 'NICL', 'NIKL', 'PSAB', 'SQMI', 'ZINC', 'KRAS',
+      'BAJA', 'BTON', 'CTBN', 'GDST', 'GGRP', 'HKMU', 'INAI', 'ISSP', 'JKSW',
+      'LMSH', 'TBMS', 'ALKA', 'ALMI', 'INCF', 'OPMS', 'PURE', 'SIMA'
+    ])
+  },
+  // 3. Basic Materials
+  {
+    subIndustry: IdxSubIndustryEnum.PULP_PAPER_PACKAGING,
+    tickers: new Set([
+      'INKP', 'TKIM', 'FASW', 'INRU', 'KBRI', 'SPMA', 'SULI', 'ALDO', 'APLI',
+      'BRNA', 'EPAC', 'ESIP', 'FWCT', 'IGAR', 'IPOL', 'KDSI', 'KMTR', 'PACK',
+      'PBID', 'PDPP', 'PICO', 'PPRI', 'SMKL', 'SWAT', 'TALF', 'TRST', 'YPAS'
+    ])
+  },
+  // 4. Consumer Non-Cyclicals
+  {
+    subIndustry: IdxSubIndustryEnum.PLANTATION_CPO,
+    tickers: new Set([
+      'LSIP', 'AALI', 'TAPG', 'DSNG', 'SSMS', 'SMAR', 'SIMP', 'STAA', 'SGRO',
+      'BWPT', 'CSRA', 'ANJT', 'TBLA', 'GZCO', 'JAWA', 'PALM', 'FAPA', 'MGRO',
+      'NSSS', 'PGUN', 'TLDN', 'JARR', 'MKTR', 'PSGO', 'UNSP', 'ANDI', 'GOLL',
+      'MAGP', 'OILS', 'PTPS', 'BISI'
+    ])
+  },
+  {
+    subIndustry: IdxSubIndustryEnum.AGRI_POULTRY_STAPLE,
+    tickers: new Set([
+      'CPIN', 'JPFA', 'MAIN', 'SIPD', 'WMUU', 'WMPP', 'AYAM', 'CPRO', 'DSFI',
+      'FISH', 'CRAB', 'UDNG', 'ASHA', 'BEEF', 'BUAH', 'DEWI', 'DPUM', 'ENZO',
+      'HOKI', 'IKAN', 'IPPE', 'ISEA', 'LAPD', 'NANO', 'PMMP', 'SKBM', 'TRGU',
+      'WAPO'
+    ])
+  },
+  {
+    subIndustry: IdxSubIndustryEnum.STAPLE_RETAIL_DISTRIBUTION,
+    tickers: new Set([
+      'AMRT', 'MIDI', 'RANC', 'HERO', 'MPPA', 'DAYA', 'EPMT', 'SDPC', 'TGKA',
+      'WICO', 'KMDS', 'MAXI', 'MLPL', 'PCAR', 'PNSE', 'SOUL'
+    ])
+  },
+  // 5. Consumer Cyclicals (SPLIT into 3 distinct sub-industries)
+  {
+    subIndustry: IdxSubIndustryEnum.AUTO_COMPONENTS,
+    tickers: new Set([
+      'AUTO', 'DRMA', 'SMSM', 'GJTL', 'MPMX', 'IMAS', 'ASLC', 'BAUT', 'BOLT',
+      'BRAM', 'CARS', 'GDYR', 'INDS', 'LPIN', 'MASA', 'NIPS', 'PART', 'PMJS',
+      'SLIS', 'TYRE', 'VKTR', 'BIKE', 'ISAP', 'UNTD'
+    ])
+  },
+  {
+    subIndustry: IdxSubIndustryEnum.MEDIA_HOSPITALITY_LEISURE,
+    tickers: new Set([
+      'SCMA', 'MNCN', 'FILM', 'PJAA', 'PANR', 'KPIG', 'BMTR', 'MSIN', 'MSKY',
+      'NETV', 'VIVA', 'MDIA', 'IPTV', 'TMPO', 'ABBA', 'MARI', 'FORU', 'DIGI',
+      'DOOH', 'FUTR', 'RAAM', 'BLTZ', 'CNMA', 'BUVA', 'CLAY', 'DFAM', 'EAST',
+      'ESTA', 'FITT', 'GOLF', 'GRPH', 'GWSA', 'HAJJ', 'HOME', 'HOTL', 'HRME',
+      'HUDY', 'IDEA', 'JGLE', 'JIHD', 'JSPT', 'KDTN', 'KOTA', 'LUCY', 'MABA',
+      'MAMI', 'MINA', 'NATO', 'NUSA', 'PDES', 'PGLI', 'PLAN', 'PSKT', 'PTSP',
+      'SHID', 'SNLK', 'SONA', 'SOTS', 'SWID', 'BOLA', 'BAYU', 'ARTA', 'AKKU',
+      'SCTV'
+    ])
+  },
+  // 6. Healthcare (SPLIT into Hospitals vs Pharma)
+  {
+    subIndustry: IdxSubIndustryEnum.HOSPITAL_CLINIC,
+    tickers: new Set([
+      'MIKA', 'HEAL', 'SILO', 'PRDA', 'SAME', 'BMHS', 'CARE', 'DGNS', 'MTMH',
+      'PRAY', 'PRIM', 'RSCH', 'RSGK', 'SRAJ'
+    ])
+  },
+  // 7. Infrastructures
+  {
+    subIndustry: IdxSubIndustryEnum.UTILITIES_TOLL_PORT,
+    tickers: new Set([
+      'JSMR', 'BREN', 'PGEO', 'CMNP', 'META', 'POWR', 'KEEN', 'ARKO', 'TGRA',
+      'MPOW', 'IPCC', 'IPCM', 'PORT', 'KARW', 'CASS', 'GMFI', 'HGII', 'INDX'
+    ])
+  },
+  {
+    subIndustry: IdxSubIndustryEnum.CONSTRUCTION_EPC,
+    tickers: new Set([
+      'ADHI', 'PTPP', 'WIKA', 'WSKT', 'TOTL', 'NRCA', 'PPRE', 'WEGE', 'ACST',
+      'ASLI', 'BDKR', 'BTEL', 'BUKK', 'DGIK', 'FIMP', 'HADE', 'JKON', 'KOKA',
+      'KRYA', 'MTPS', 'MTRA', 'PBSA', 'PTDU', 'PTPW', 'RONY', 'SMKM', 'TAMA',
+      'TOPS', 'IDPR'
+    ])
+  },
+  // 8. Industrials
+  {
+    subIndustry: IdxSubIndustryEnum.CONGLOMERATE_HOLDING,
+    tickers: new Set([
+      'ASII', 'UNTR', 'BNBR', 'BHIT', 'DYAN', 'FOLK', 'ZBRA'
+    ])
+  },
+  // 9. Properties & Real Estate
+  {
+    subIndustry: IdxSubIndustryEnum.INDUSTRIAL_ESTATE,
+    tickers: new Set([
+      'DMAS', 'KIJA', 'SSIA', 'BEST', 'LPCK', 'MMLP', 'VAST'
+    ])
+  },
+  // 10. Technology
+  {
+    subIndustry: IdxSubIndustryEnum.TECH_HARDWARE_IT_SERVICES,
+    tickers: new Set([
+      'MTDL', 'MLPT', 'AXIO', 'PTSN', 'GLVA', 'MSTI', 'ATIC', 'CHIP', 'EDGE',
+      'ELIT', 'ENVY', 'IOTF', 'JATI', 'LMAS', 'LUCK', 'MENN', 'MPIX', 'SKYB',
+      'TECH', 'TOSK', 'TRON', 'WGSH', 'ZYRX'
+    ])
+  }
+];
+
+/**
+ * Resolves the canonical IdxSectorEnum and structured IdxSubIndustryEnum for any IDX ticker.
+ */
+export function resolveStructuredIdxSubIndustry(
+  ticker: string,
+  sectorRaw?: string
+): { sector: IdxSectorEnum; subIndustry: IdxSubIndustryEnum } {
+  const clean = (ticker || '').trim().toUpperCase().replace(/\.JK$/i, '');
+
+  // Normalize sector string to IdxSectorEnum
+  const rawSec = (sectorRaw || '').trim();
+  const normalizedSector: IdxSectorEnum =
+    rawSec === 'Financials'
+      ? IdxSectorEnum.FINANCIALS
+      : rawSec === 'Energy'
+      ? IdxSectorEnum.ENERGY
+      : rawSec === 'Basic Materials'
+      ? IdxSectorEnum.BASIC_MATERIALS
+      : rawSec === 'Consumer Non-Cyclicals'
+      ? IdxSectorEnum.CONSUMER_NON_CYCLICALS
+      : rawSec === 'Consumer Cyclicals'
+      ? IdxSectorEnum.CONSUMER_CYCLICALS
+      : rawSec === 'Healthcare'
+      ? IdxSectorEnum.HEALTHCARE
+      : rawSec === 'Infrastructures' || rawSec === 'Infrastructure'
+      ? IdxSectorEnum.INFRASTRUCTURES
+      : rawSec === 'Industrials'
+      ? IdxSectorEnum.INDUSTRIALS
+      : rawSec === 'Properties & Real Estate'
+      ? IdxSectorEnum.PROPERTIES_REAL_ESTATE
+      : rawSec === 'Technology'
+      ? IdxSectorEnum.TECHNOLOGY
+      : rawSec === 'Transportation & Logistics' || rawSec === 'Transportation & Logistic'
+      ? IdxSectorEnum.TRANSPORTATION_LOGISTICS
+      : IdxSectorEnum.INDUSTRIALS;
+
+  for (const group of SUB_INDUSTRY_TICKER_SETS) {
+    if (group.tickers.has(clean)) {
+      return { sector: normalizedSector, subIndustry: group.subIndustry };
+    }
+  }
+
+  // Fallback within Financials if not in KBMI3_4, Micro/Sharia, Multifinance, or Insurance sets
+  if (normalizedSector === IdxSectorEnum.FINANCIALS) {
+    return {
+      sector: normalizedSector,
+      subIndustry: IdxSubIndustryEnum.FINANCIAL_HOLDING_INVESTMENT
+    };
+  }
+
+  return {
+    sector: normalizedSector,
+    subIndustry: DEFAULT_SUB_INDUSTRY_BY_SECTOR[normalizedSector]
+  };
+}
+
 export function createCalibratedIdxEntry(ticker: string, sectorOverride?: string, customName?: string): IdxDirectoryEntry {
   const clean = ticker.trim().toUpperCase().replace(/\.JK$/i, '');
   const seed = hashTickerSeed(clean);
-  const sector = sectorOverride || SECTOR_LIST[seed % SECTOR_LIST.length];
+  const rawSector = sectorOverride || SECTOR_LIST[seed % SECTOR_LIST.length];
+  const { sector, subIndustry } = resolveStructuredIdxSubIndustry(clean, rawSector);
   const prefixes = CORPORATE_NAME_PREFIXES[sector] || ['Nusantara'];
   const prefix = prefixes[seed % prefixes.length];
 
@@ -721,6 +955,7 @@ export function createCalibratedIdxEntry(ticker: string, sectorOverride?: string
     ticker: clean,
     name: customName || VERIFIED_EMITEN_CORPORATE_NAMES[clean] || `${prefix} ${clean} Indonesia Tbk`,
     sector,
+    subIndustry,
     defaultRoe,
     defaultDer,
     defaultOpMargin,
@@ -752,8 +987,11 @@ export function getCalibratedInitialMarketAction(ticker: string): {
 function buildCompleteJciCatalog(): IdxDirectoryEntry[] {
   const map = new Map<string, IdxDirectoryEntry>();
 
-  // 1. Add all curated core issuers first
+  // 1. Add all curated core issuers first (enriched with deterministic subIndustry)
   for (const item of CORE_IDX_EMITEN) {
+    const { sector, subIndustry } = resolveStructuredIdxSubIndustry(item.ticker, item.sector);
+    item.sector = sector;
+    item.subIndustry = item.subIndustry ?? subIndustry;
     map.set(item.ticker, item);
   }
 
@@ -771,3 +1009,13 @@ function buildCompleteJciCatalog(): IdxDirectoryEntry[] {
 }
 
 export const FULL_JCI_EMITEN_CATALOG: IdxDirectoryEntry[] = buildCompleteJciCatalog();
+
+const CATALOG_LOOKUP_MAP = new Map<string, IdxDirectoryEntry>(
+  FULL_JCI_EMITEN_CATALOG.map((entry) => [entry.ticker, entry])
+);
+
+export function getEmitenCatalogEntry(ticker: string): IdxDirectoryEntry | undefined {
+  const clean = (ticker || '').trim().toUpperCase().replace(/\.JK$/i, '');
+  return CATALOG_LOOKUP_MAP.get(clean);
+}
+

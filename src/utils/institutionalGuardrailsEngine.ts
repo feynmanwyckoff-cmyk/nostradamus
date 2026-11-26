@@ -917,6 +917,13 @@ export interface InvariantGrahamJoeliardiParams {
   growthRate: number;             // Decimal or %
   spotRf10Y: number;              // Decimal or %
   ensembleFairValue: number;      // Main intrinsic ensemble fair value (IDR)
+  /**
+   * FASE 3: Sector-aware weak-moat & clamp policy from SectorProfile.floorPolicy
+   */
+  maxRatioToEnsemble?: number;        // Default 0.90 (always clamp to <= 90% of ensembleFairValue)
+  roeHaircutThresholdPct?: number;    // Default 15.0% (or Ke + tolerance)
+  derHaircutThreshold?: number | null;// Default 1.0x; null for Banks/Financials so banking DER is never penalized
+  weakMoatHaircutFactor?: number;     // Default 0.75 (-25% haircut)
   tickRounder?: (price: number) => number;
 }
 
@@ -961,47 +968,78 @@ export function calculateInvariantGrahamJoeliardiFloor(
 
   const rawFormula = (normalizedBasisEps * (8.5 + 2 * safeG) * 4.4) / safeSbn10YPct;
 
-  // Moat Haircut: Normalized ROE < 15% OR DER > 1.0x -> 25% haircut (x0.75)
-  const isLowRoe = normalizedBasisRoePct < 15.0;
-  const isHighDer = params.debtToEquity > 1.0;
+  // FASE 3 Sector-Aware Moat Haircut:
+  // - Uses sector-specific ROE threshold (default 15.0%)
+  // - Uses sector-specific DER threshold (default 1.0x, or null for Financials/Banks so deposit leverage is never penalized)
+  const roeThreshold = params.roeHaircutThresholdPct ?? 15.0;
+  const derThreshold = params.derHaircutThreshold === undefined ? 1.0 : params.derHaircutThreshold;
+  const haircutFactor = params.weakMoatHaircutFactor ?? 0.75;
+
+  const isLowRoe = normalizedBasisRoePct < roeThreshold;
+  const isHighDer = derThreshold !== null && params.debtToEquity > derThreshold;
   const isMoatHaircutApplied = isLowRoe || isHighDer;
-  const moatHaircutMultiplier = isMoatHaircutApplied ? 0.75 : 1.0;
+  const moatHaircutMultiplier = isMoatHaircutApplied ? haircutFactor : 1.0;
 
   const rawStandaloneFloor = tickRounder(Math.max(50, rawFormula * moatHaircutMultiplier));
 
-  // Enforce Hard Invariant: standaloneFloor <= ensembleFairValue
+  // FASE 3 Always-On Hard Invariant: standaloneFloor <= maxRatioToEnsemble (90%) * ensembleFairValue
+  // Closes Finding F4: Prevents un-clamped floors from sitting at 91%–99% of ensembleFairValue.
+  const maxRatio = Math.max(0.50, Math.min(0.95, params.maxRatioToEnsemble ?? 0.90));
+  const hasExplicitEnsemble =
+    typeof params.ensembleFairValue === 'number' &&
+    Number.isFinite(params.ensembleFairValue) &&
+    params.ensembleFairValue < Number.MAX_SAFE_INTEGER / 2;
   const safeEnsemble = Math.max(50, Number(params.ensembleFairValue) || rawStandaloneFloor);
+  let maxAllowedFloor = Number.MAX_SAFE_INTEGER;
+  if (hasExplicitEnsemble) {
+    const rawLimit = Math.max(50, safeEnsemble * maxRatio);
+    let candidate = tickRounder(rawLimit);
+    while (candidate > rawLimit + 1e-6 && candidate > 50) {
+      candidate = tickRounder(candidate - 1);
+    }
+    maxAllowedFloor = candidate;
+  }
+
   let standaloneFloor = rawStandaloneFloor;
   let isFloorClamped = false;
   let floorClampDiagnosticLog: string | undefined;
 
-  if (rawStandaloneFloor > safeEnsemble) {
+  if (hasExplicitEnsemble && rawStandaloneFloor > maxAllowedFloor) {
     isFloorClamped = true;
-    standaloneFloor = tickRounder(Math.max(50, Math.min(rawStandaloneFloor, safeEnsemble * 0.90)));
+    standaloneFloor = Math.min(rawStandaloneFloor, maxAllowedFloor);
+    const ratioPctLabel = Math.round(maxRatio * 100);
     floorClampDiagnosticLog = `[FLOOR_INVARIANT_CLAMPED] Raw Graham-Joeliardi Floor (Rp ${rawStandaloneFloor.toLocaleString(
       'id-ID'
-    )}) melampaui Ensemble Fair Value (Rp ${safeEnsemble.toLocaleString(
+    )}) melampaui batas konservatif ${ratioPctLabel}% Ensemble Fair Value (Rp ${safeEnsemble.toLocaleString(
       'id-ID'
-    )}). Di-clamp ke 90% Ensemble (Rp ${standaloneFloor.toLocaleString(
+    )}). Di-clamp ke ${ratioPctLabel}% Ensemble (Rp ${standaloneFloor.toLocaleString(
       'id-ID'
-    )}) untuk menjaga invarian standaloneFloor ≤ ensembleFairValue.`;
+    )}) untuk menjaga margin keamanan standaloneFloor ≤ ${ratioPctLabel}% ensembleFairValue.`;
   }
 
   const haircutReasons: string[] = [];
-  if (isLowRoe) haircutReasons.push(`Norm ROE ${normalizedBasisRoePct.toFixed(1)}% < 15%`);
-  if (isHighDer) haircutReasons.push(`DER ${params.debtToEquity.toFixed(2)}x > 1,0x`);
+  if (isLowRoe) {
+    haircutReasons.push(`Norm ROE ${normalizedBasisRoePct.toFixed(1)}% < ${roeThreshold.toFixed(1)}%`);
+  }
+  if (isHighDer && derThreshold !== null) {
+    haircutReasons.push(`DER ${params.debtToEquity.toFixed(2)}x > ${derThreshold.toFixed(2).replace('.', ',')}x`);
+  }
 
+  const haircutPctLabel = Math.round((1 - haircutFactor) * 100);
+  const haircutMultLabel = haircutFactor.toFixed(2).replace('.', ',');
   const moatHaircutReason = isMoatHaircutApplied
-    ? `Weak Moat Penalty -25% (×0,75 karena ${haircutReasons.join(' & ')})`
-    : 'Moat Historis Kuat (Norm ROE ≥ 15% & DER ≤ 1,0x)';
+    ? `Weak Moat Penalty -${haircutPctLabel}% (×${haircutMultLabel} karena ${haircutReasons.join(' & ')})`
+    : derThreshold === null
+    ? `Moat Finansial/Sektoral Kuat (Norm ROE ≥ ${roeThreshold.toFixed(1)}% · DER Korporasi Bypassed)`
+    : `Moat Historis Kuat (Norm ROE ≥ ${roeThreshold.toFixed(1)}% & DER ≤ ${derThreshold.toFixed(1).replace('.', ',')}x)`;
 
   const formulaAudit = `(Norm EPS min(TTM,Avg3Y) Rp ${normalizedBasisEps.toLocaleString(
     'id-ID'
   )} × (8,5 + 2×${safeG.toFixed(1)}) × 4,4 ÷ SBN10Y ${safeSbn10YPct.toFixed(2)}%)${
-    isMoatHaircutApplied ? ' × 0,75' : ''
+    isMoatHaircutApplied ? ` × ${haircutMultLabel}` : ''
   }${
     isFloorClamped
-      ? ` → Clamped 90% Ensemble (Rp ${standaloneFloor.toLocaleString('id-ID')})`
+      ? ` → Clamped ${Math.round(maxRatio * 100)}% Ensemble (Rp ${standaloneFloor.toLocaleString('id-ID')})`
       : ` = Rp ${standaloneFloor.toLocaleString('id-ID')}`
   }`;
 
@@ -1194,13 +1232,18 @@ export function buildTacticalOverlayFromStatArb(params: {
 
 /**
  * ============================================================================
- * P2.3: EPISTEMIC UNCERTAINTY PENALTY (MODEL DISPERSION PENALTY)
+ * P2.3 & FASE 3: CONTINUOUS EPISTEMIC UNCERTAINTY PENALTY (ZERO CLIFF AT 40%)
  * ============================================================================
  * - Calculates dispersion across intrinsic valuation methods:
  *   `modelDispersion = (maxVal - minVal) / medianVal`
- * - If `modelDispersion > 0.40` (or `isOutlierEnsembleActive === true`),
- *   automatically deducts 10–15 points from `convictionScore`, restricts
- *   initial position sizing (Tranche 1), and logs the penalty reason.
+ * - Replaces the 40% step-function cliff (0 -> -10 pts) with a continuous linear
+ *   ramp starting at delta_0 = 0.15 (15% dispersion):
+ *   `continuousPenalty = clamp((modelDispersion - 0.15) * 31.5, 0, 15)`
+ *   - At 15% dispersion: 0 pts
+ *   - At 39.9% vs 40.1% dispersion: 7.84 pts vs 7.91 pts (diff 0.07 pts < 1 pt, rounded 8 vs 8)
+ *   - At 53.33% dispersion: 12.08 pts (rounded 12 pts)
+ * - Closing Finding F3: `isOutlierEnsembleActive` alone never forces a minimum 10-point penalty
+ *   when dispersion is low.
  */
 export interface DispersionPenaltyInput {
   valuationOutputsIDR: number[];  // Array of active intrinsic model valuations (e.g. [twoStageRI, earningsPower, evEbitda5Y])
@@ -1214,9 +1257,11 @@ export interface DispersionPenaltyOutput {
   medianVal: number;
   modelDispersion: number;        // (maxVal - minVal) / medianVal
   isDispersionPenalized: boolean;
-  dispersionPenaltyPts: number;   // 10 - 15 points when triggered, else 0
+  dispersionPenaltyPts: number;   // Continuous 0 - 15 points (integer rounded)
+  continuousPenaltyPts: number;   // Exact continuous penalty (2 decimals)
   adjustedConvictionScore: number;
-  tranche1ScalingFactor: number;  // 0.35 (35% of max allocation) when penalized, else 0.55
+  tranche1ScalingFactor: number;  // 0.35 (35% of max allocation) when dispersion > 0.40, else 0.60
+  fairValueRangeIdr: [number, number];
   penaltyReason?: string;
 }
 
@@ -1235,8 +1280,10 @@ export function applyDispersionPenalty(
       modelDispersion: 0,
       isDispersionPenalized: false,
       dispersionPenaltyPts: 0,
+      continuousPenaltyPts: 0,
       adjustedConvictionScore: input.rawConvictionScore,
-      tranche1ScalingFactor: 0.60
+      tranche1ScalingFactor: 0.60,
+      fairValueRangeIdr: [0, 0]
     };
   }
 
@@ -1249,23 +1296,29 @@ export function applyDispersionPenalty(
       : (validPrices[midIdx - 1] + validPrices[midIdx]) / 2;
 
   const modelDispersion = Number(((maxVal - minVal) / Math.max(1, medianVal)).toFixed(4));
-  const isDispersionPenalized =
-    modelDispersion > 0.40 || Boolean(input.isOutlierEnsembleActive);
 
-  let dispersionPenaltyPts = 0;
+  // Continuous linear ramp starting at delta_0 = 0.15 up to 15.0 pts at delta = 0.626
+  const rawContinuousPenalty = Math.min(15.0, Math.max(0, (modelDispersion - 0.15) * 31.5));
+  const continuousPenaltyPts = Number(rawContinuousPenalty.toFixed(2));
+  const dispersionPenaltyPts = Math.round(rawContinuousPenalty);
+  const isHighDispersionRegime = modelDispersion > 0.40;
+  const isDispersionPenalized = dispersionPenaltyPts > 0;
+
   let penaltyReason: string | undefined;
-
   if (isDispersionPenalized) {
-    // Scale penalty between 10 and 15 points based on dispersion excess above 0.40
-    const excessRatio = Math.max(0, modelDispersion - 0.40);
-    dispersionPenaltyPts = Math.min(15, Math.max(10, Math.round(10 + excessRatio * 12.5)));
-    penaltyReason = `[EPISTEMIC_DISPERSION_PENALTY] Dispersi antar-model valuasi intrinsik sebesar ${(
+    penaltyReason = `[EPISTEMIC_DISPERSION_PENALTY] Dispersi kontinu antar-model valuasi intrinsik sebesar ${(
       modelDispersion * 100
-    ).toFixed(1)}% (> ambang 40,0%; Rentang Rp ${Math.round(minVal).toLocaleString(
+    ).toFixed(1)}% (Rentang Wajar Rp ${Math.round(minVal).toLocaleString(
       'id-ID'
     )} – Rp ${Math.round(maxVal).toLocaleString('id-ID')}, Median Rp ${Math.round(
       medianVal
-    ).toLocaleString('id-ID')}). Skor konviksi dipotong otomatis -${dispersionPenaltyPts} poin dan porsi masuk awal (Tranche 1) dibatasi maksimal 35% dari plafon posisi.`;
+    ).toLocaleString('id-ID')}). Skor konviksi disesuaikan secara kontinu -${dispersionPenaltyPts} poin (${continuousPenaltyPts.toFixed(
+      2
+    )} pts)${
+      isHighDispersionRegime
+        ? ' dan porsi masuk awal (Tranche 1) dibatasi maksimal 35% dari plafon posisi.'
+        : '.'
+    }`;
   }
 
   const adjustedConvictionScore = Math.max(
@@ -1280,8 +1333,10 @@ export function applyDispersionPenalty(
     modelDispersion,
     isDispersionPenalized,
     dispersionPenaltyPts,
+    continuousPenaltyPts,
     adjustedConvictionScore,
-    tranche1ScalingFactor: isDispersionPenalized ? 0.35 : 0.60,
+    tranche1ScalingFactor: isHighDispersionRegime ? 0.35 : 0.60,
+    fairValueRangeIdr: [Math.round(minVal), Math.round(maxVal)],
     penaltyReason
   };
 }
@@ -1392,7 +1447,7 @@ export function resolveExecutionThesis(params: {
     const factors: string[] = [];
     if (isWeakMoat) factors.push('Weak Moat Penalty (ROE/ROIC di bawah Cost of Equity)');
     if (isHscPenaltyActive) factors.push('HSC Concentration Penalty');
-    if (isDispersionPenalized) factors.push('Epistemic Dispersion (>40% antar-model valuasi)');
+    if (isDispersionPenalized) factors.push('Epistemic Dispersion (ketidakpastian antar-model valuasi)');
     if (isNonOpCatalystRejected) factors.push('Guardrail Kualitas Laba (Katalis Non-Operasional Ditolak)');
     if (factors.length === 0) {
       factors.push('Skor konviksi berada di pita transisi 65-74/100 atau Margin of Safety moderat');
@@ -1426,21 +1481,22 @@ export function resolveExecutionThesis(params: {
 
 /**
  * ============================================================================
- * P2.1 & P2.2: VOLATILITY-TARGETED BARBELL SIZING & ATR / TRANCHE STOP LOSS
+ * P2.1 & P2.2 + FASE 3: SMOOTH MONOTONIC VOLATILITY-TARGETED BARBELL SIZING & ATR STOP
  * ============================================================================
- * 1. Volatility-Targeted Barbell Sizing (Overcoming 1/Beta Blindness):
+ * 1. Volatility-Targeted Barbell Sizing (Overcoming 1/Beta Blindness & Flat 25%-35% Plateau):
  *    - `finalMaxAllocation = Math.min(inverseBetaCap, inverseVolatilityCap, regimeCap)`
- *    - Volatility Scalar: If `realizedAnnualVol > 35%` OR IHSG market regime === `'VOLATIL'`,
- *      slashes maximum allocation ceiling into the **8%–12%** band (never allowing 18% even if Beta is low).
+ *    - Smooth Monotonic Volatility Curve (Closing Finding F5):
+ *      - From 14% to 35% annualized volatility: decreases strictly monotonically from 18.0% down to 12.0%
+ *        (eliminating the flat 12.5% floor across 25%–35% volatility).
+ *      - Above 35% volatility: decreases strictly monotonically from 12.0% down to 8.0% at >= 60% volatility.
+ *      - Optional drawdown penalty: if 1Y max drawdown > 25%, smoothly trims ceiling by up to 2.5%.
  * 2. ATR / Volatility-Calibrated Stop Loss & Dual Core Conviction Mode:
  *    - `stopDistance = Math.max(2.5 * ATR_20, price * 1.5 * (realizedAnnualVol / Math.sqrt(12)))`
- *      bounded within reasonable [12%, 18%] below entry price.
- *    - Displays both ATR/Vol Calibrated Stop AND `Tranche Entry + Fundamental Invalidation Stop`
- *      for Core Conviction candidates.
+ *      bounded within sector stop band (default [12%, 18%]) below entry price.
  */
 export interface VolatilitySizingAndStopInput {
   price: number;
-  beta1Y: number;
+  beta1Y: number;                 // FASE 3: Unified Adjusted Beta passed from evaluateJoeliardiOosFundamental
   realizedAnnualVol: number;      // Decimal (e.g. 0.38) or percentage (38.0)
   atr20: number;                  // 20-Day ATR in IDR
   marketRegime: MarketRegimeStatus;
@@ -1450,6 +1506,9 @@ export interface VolatilitySizingAndStopInput {
   isHscFlagged?: boolean;
   effectiveCostOfEquity?: number; // Decimal
   debtToEquity?: number;
+  maxDrawdown1YPct?: number;      // Optional 1Y Max Drawdown (%) for drawdown-aware sizing
+  maxArchetypeAllocationPct?: number; // Optional SectorProfile sizing cap
+  stopLossBandPct?: [number, number]; // Optional SectorProfile stop band [minPct, maxPct]
   tickRounder?: (price: number) => number;
 }
 
@@ -1467,23 +1526,31 @@ export function calculateVolatilityTargetedSizingAndStop(
     Math.max(4.0, Math.min(18.0, 12.5 / Math.max(0.35, beta1Y))).toFixed(2)
   );
 
-  // 2. Inverse Volatility Cap (Volatility Scalar):
-  // If realizedAnnualVol > 35% (0.35), cap max allocation strictly within 8.0% - 12.0%
+  // 2. Smooth Strictly Monotonic Inverse Volatility Cap (Closing Finding F5):
+  // Eliminates the flat 12.5% floor on 25%-35% volatility.
   const isHighStockVol = realizedVolDecimal > 0.35;
-  let inverseVolatilityCapPct = 18.0;
+  let rawInverseVolatilityCapPct = 18.0;
   if (isHighStockVol) {
-    // Linearly scale from 12.0% at 35% vol down to 8.0% at >=60% vol
+    // Strictly monotonic decrease from 12.0% at 35% vol down to 8.0% at >=60% vol
     const volExcess = Math.min(0.25, realizedVolDecimal - 0.35);
-    inverseVolatilityCapPct = Number((12.0 - (volExcess / 0.25) * 4.0).toFixed(2));
+    rawInverseVolatilityCapPct = 12.0 - (volExcess / 0.25) * 4.0;
   } else {
-    // Below 35% vol: scale smoothly between 12.5% and 18.0%
-    inverseVolatilityCapPct = Number(
-      Math.max(12.5, Math.min(18.0, (0.22 / realizedVolDecimal) * 14.5)).toFixed(2)
-    );
+    // Strictly monotonic decrease from 18.0% at <=14% vol down to 12.0% at 35% vol
+    const volProgress = Math.max(0, Math.min(1, (realizedVolDecimal - 0.14) / (0.35 - 0.14)));
+    rawInverseVolatilityCapPct = 18.0 - volProgress * 6.0;
   }
 
+  // Optional Drawdown dampening when 1Y max drawdown exceeds 25%
+  const maxDdPct = Math.abs(Number(input.maxDrawdown1YPct) || 0);
+  const drawdownDampenerPct =
+    maxDdPct > 25 ? Math.min(2.5, ((maxDdPct - 25) / 35) * 2.5) : 0;
+
+  const inverseVolatilityCapPct = Number(
+    Math.max(6.0, Math.min(18.0, rawInverseVolatilityCapPct - drawdownDampenerPct)).toFixed(2)
+  );
+
   // 3. Market Regime Cap:
-  // If IHSG market regime is VOLATIL, cap max allocation strictly within 8.0% - 12.0% (e.g. 10.0%)
+  // If IHSG market regime is VOLATIL, cap max allocation strictly within 8.0% - 12.0%
   const isVolatileRegime = input.marketRegime === 'VOLATIL';
   const regimeCapPct = isVolatileRegime
     ? realizedVolDecimal > 0.35
@@ -1495,9 +1562,14 @@ export function calculateVolatilityTargetedSizingAndStop(
 
   const isVolatilityScalarTriggered = isHighStockVol || isVolatileRegime;
 
-  // Final Barbell Position Ceiling: Math.min(inverseBetaCap, inverseVolatilityCap, regimeCap)
+  const archetypeCapPct =
+    typeof input.maxArchetypeAllocationPct === 'number' && input.maxArchetypeAllocationPct > 0
+      ? input.maxArchetypeAllocationPct
+      : 18.0;
+
+  // Final Barbell Position Ceiling: Math.min(inverseBetaCap, inverseVolatilityCap, regimeCap, archetypeCap)
   let finalMaxAllocationPct = Number(
-    Math.min(inverseBetaCapPct, inverseVolatilityCapPct, regimeCapPct).toFixed(2)
+    Math.min(inverseBetaCapPct, inverseVolatilityCapPct, regimeCapPct, archetypeCapPct).toFixed(2)
   );
 
   // Enforce strict 8% - 12% upper ceiling guarantee whenever Volatility Scalar is triggered
@@ -1507,7 +1579,7 @@ export function calculateVolatilityTargetedSizingAndStop(
     );
   }
 
-  // Tranche Sizing (Tranche 1 restricted if Epistemic Dispersion Penalty > 0.40 is active)
+  // Tranche Sizing (Tranche 1 restricted to 35% if high epistemic dispersion > 40% is active)
   const t1Factor = input.dispersionPenalty.tranche1ScalingFactor;
   const tranche1AllocationPct = Number((finalMaxAllocationPct * t1Factor).toFixed(2));
   const tranche2AllocationPct = Number(
@@ -1515,15 +1587,17 @@ export function calculateVolatilityTargetedSizingAndStop(
   );
 
   // -------------------------------------------------------------------------
-  // ATR / VOLATILITY-CALIBRATED STOP LOSS (BOUNDED 12% - 18% BELOW ENTRY)
+  // ATR / VOLATILITY-CALIBRATED STOP LOSS (BOUNDED WITHIN SECTOR STOP BAND)
   // Formula: stopDistance = Math.max(2.5 * ATR_20, price * 1.5 * (realizedAnnualVol / Math.sqrt(12)))
   // -------------------------------------------------------------------------
   const atrMultipleStopDistanceIDR = 2.5 * atr20IDR;
   const volMonthlyStopDistanceIDR = price * 1.5 * (realizedVolDecimal / Math.sqrt(12));
   const rawStopDistanceIDR = Math.max(atrMultipleStopDistanceIDR, volMonthlyStopDistanceIDR);
 
-  const minAllowedStopIDR = price * 0.12; // 12.0% minimum distance to avoid daily noise whipsaw
-  const maxAllowedStopIDR = price * 0.18; // 18.0% maximum hard capital protection bound
+  const minStopBandDec = (input.stopLossBandPct?.[0] ?? 12.0) / 100;
+  const maxStopBandDec = (input.stopLossBandPct?.[1] ?? 18.0) / 100;
+  const minAllowedStopIDR = price * minStopBandDec;
+  const maxAllowedStopIDR = price * maxStopBandDec;
   const clampedStopDistanceIDR = Math.max(
     minAllowedStopIDR,
     Math.min(maxAllowedStopIDR, rawStopDistanceIDR)

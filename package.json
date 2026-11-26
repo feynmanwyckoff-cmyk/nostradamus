@@ -9,7 +9,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test:phase0": "tsx src/utils/phase0CharacterizationSuite.ts"
   },
   "dependencies": {
     "@google/genai": "^3.0.0",

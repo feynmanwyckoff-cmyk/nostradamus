@@ -18,6 +18,7 @@ Mengadopsi estetika editorial *light-mode* terinspirasi dari **Medium.com** (tip
 
 ## Daftar Isi
 
+- 📄 **[Dokumen Spesifikasi & Skema Reviewer Sistem Quant (`QUANT_SYSTEM_ARCHITECTURE_REVIEW.md`)](./QUANT_SYSTEM_ARCHITECTURE_REVIEW.md)**
 1. [Fitur Utama (Key Capabilities)](#1-fitur-utama-key-capabilities)
 2. [Arsitektur Sistem & Alur Sinkronisasi Cloud / GitHub Pages](#2-arsitektur-sistem--alur-sinkronisasi-cloud--github-pages)
 3. [Metodologi Kuantitatif: Barbell, QMJ, HRP & DeMiguel 4-Factor](#3-metodologi-kuantitatif-barbell-qmj-hrp--demiguel-4-factor)

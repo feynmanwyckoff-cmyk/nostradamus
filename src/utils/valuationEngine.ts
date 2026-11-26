@@ -19,6 +19,7 @@ import {
   decumulateIDXQuarters,
   validateFundamentalSanity
 } from './institutionalGuardrailsEngine';
+import { classifyEmitenSectorProfile } from './sectorClassifier';
 
 export {
   applyDispersionPenalty,
@@ -386,103 +387,34 @@ export function resolveContextualOcfNiPolicy(params: {
 export function resolveSectorOmegaFadeFactor(params: {
   ticker: string;
   sector: string;
+  subIndustry?: import('../config/sectorProfiles').IdxSubIndustryEnum;
   gpaPct: number;
   ocfToNi: number;
   accrualPenaltyScore: number;
   effectiveModule?: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical';
+  roeTTM?: number;
+  costOfEquityKePct?: number;
 }): {
   rimPersistenceOmega: number;
   rimFadeYears: number;
   omegaTierLabel: string;
 } {
-  const { ticker, sector, gpaPct, ocfToNi, accrualPenaltyScore, effectiveModule } = params;
-  const clean = ticker.trim().toUpperCase().replace(/\.JK$/i, '');
+  const classification = classifyEmitenSectorProfile({
+    ticker: params.ticker,
+    sector: params.sector,
+    subIndustry: params.subIndustry,
+    grossProfitabilityToAssetsPct: params.gpaPct,
+    ocfToNetIncomeRatio: params.ocfToNi,
+    accrualPenaltyScore: params.accrualPenaltyScore,
+    roeTTM: params.roeTTM,
+    costOfEquityKePct: params.costOfEquityKePct
+  });
 
-  const isCapexTolerant =
-    effectiveModule === 'Capex_Aggressor' ||
-    (!effectiveModule &&
-      (sector === 'Healthcare' ||
-        sector === 'Infrastructures' ||
-        METALS_HILIRISASI_TICKERS.has(clean)));
-
-  const ocfOmegaAdj = isCapexTolerant
-    ? ocfToNi >= 0.85
-      ? 0.03
-      : ocfToNi > 0.50
-      ? 0.01
-      : -0.03
-    : ocfToNi >= 1.0
-    ? 0.03
-    : ocfToNi > 0.80
-    ? 0.01
-    : -0.03;
-
-  const qualityDelta =
-    Math.min(0.06, (gpaPct / 30.0) * 0.05) +
-    ocfOmegaAdj -
-    Math.min(0.05, accrualPenaltyScore * 0.025);
-
-  // Case 1: KBMI 4 Banks & Consumer Monopolies -> ω in [0.90, 0.98]
-  if (
-    KBMI4_AND_CONSUMER_MONOPOLY_TICKERS.has(clean) ||
-    (sector === 'Consumer Non-Cyclicals' && !CPO_AGRI_TICKERS.has(clean) && gpaPct >= 20)
-  ) {
-    const omega = Number(Math.max(0.90, Math.min(0.98, 0.92 + qualityDelta)).toFixed(2));
-    return {
-      rimPersistenceOmega: omega,
-      rimFadeYears: 7,
-      omegaTierLabel: 'KBMI 4 / Monopoli Konsumen (ω Elastis 0.90–1.00)'
-    };
-  }
-
-  // Case 2: Commodities & Cyclicals (Coal, Oil & Gas, CPO, Basic Materials, Property, Consumer Cyclicals) -> ω in [0.40, 0.60]
-  if (
-    !isCapexTolerant &&
-    (sector === 'Energy' ||
-      CPO_AGRI_TICKERS.has(clean) ||
-      (sector === 'Basic Materials' && !METALS_HILIRISASI_TICKERS.has(clean)) ||
-      sector === 'Properties & Real Estate' ||
-      sector === 'Consumer Cyclicals')
-  ) {
-    const omega = Number(Math.max(0.40, Math.min(0.60, 0.48 + qualityDelta)).toFixed(2));
-    return {
-      rimPersistenceOmega: omega,
-      rimFadeYears: 5,
-      omegaTierLabel: 'Komoditas & Siklikal (ω Cepat Luruh 0.40–0.60)'
-    };
-  }
-
-  // Case 3: Mid-Tier Financials, Healthcare, Infrastructures & Capex Aggressors -> ω in [0.70, 0.86]
-  switch (sector) {
-    case 'Financials':
-    case 'Healthcare': {
-      const omega = Number(Math.max(0.76, Math.min(0.88, 0.80 + qualityDelta)).toFixed(2));
-      return {
-        rimPersistenceOmega: omega,
-        rimFadeYears: 6,
-        omegaTierLabel: 'Finansial / Kesehatan Moat Stabil (ω 0.76–0.88)'
-      };
-    }
-    case 'Infrastructures':
-    case 'Technology':
-    case 'Basic Materials':
-    case 'Energy': {
-      const omega = Number(Math.max(0.68, Math.min(0.84, 0.74 + qualityDelta)).toFixed(2));
-      return {
-        rimPersistenceOmega: omega,
-        rimFadeYears: 6,
-        omegaTierLabel: 'Infrastruktur & Hilirisasi Capex (ω 0.68–0.84)'
-      };
-    }
-    default: {
-      const omega = Number(Math.max(0.62, Math.min(0.82, 0.70 + qualityDelta)).toFixed(2));
-      return {
-        rimPersistenceOmega: omega,
-        rimFadeYears: 6,
-        omegaTierLabel: 'Industri Umum (ω 0.62–0.82)'
-      };
-    }
-  }
+  return {
+    rimPersistenceOmega: classification.resolvedOmega,
+    rimFadeYears: classification.resolvedFadeYears,
+    omegaTierLabel: classification.resolvedOmegaTierLabel
+  };
 }
 
 export interface RoutedValuationModuleOutput extends ValuationReport {
@@ -528,6 +460,7 @@ export const ValuationEngine = {
     capexToDaRatio: number;
     capexToRevenueRatio: number;
     isCapexOverrideTriggered: boolean;
+    isSyntheticCapexBlocked?: boolean;
     ui_notifications: string[];
   } {
     const clean = stock.ticker.trim().toUpperCase().replace(/\.JK$/i, '');
@@ -540,103 +473,84 @@ export const ValuationEngine = {
       ).toFixed(2)
     );
 
+    const hasRealCapex =
+      typeof stock.capexTTMIdr === 'number' &&
+      Number.isFinite(stock.capexTTMIdr) &&
+      stock.capexTTMIdr > 0;
+    const hasRealDa =
+      typeof stock.daTTMIdr === 'number' &&
+      Number.isFinite(stock.daTTMIdr) &&
+      stock.daTTMIdr > 0;
+    const hasRealRev =
+      typeof stock.revenueTTMIdr === 'number' &&
+      Number.isFinite(stock.revenueTTMIdr) &&
+      stock.revenueTTMIdr > 0;
+
+    // Closing Finding D: Only trust CapEx/D&A and CapEx/Revenue when backed by real CapEx & D&A
+    // (or explicit verified ratio not imputed from synthetic CWIP).
+    const isSyntheticCwipOnly =
+      customCwipRatio !== undefined ||
+      (!hasRealCapex && !hasRealDa && stock.capexToDaRatio === undefined);
+
+    const hasVerifiedCapexAndDa =
+      !isSyntheticCwipOnly &&
+      ((hasRealCapex && hasRealDa && stock.fundamentalsSource !== 'HARDCODED_SEED') ||
+        (typeof stock.capexToDaRatio === 'number' &&
+          stock.capexToDaRatio > 0 &&
+          stock.fundamentalsSource !== 'HARDCODED_SEED'));
+
     const capexToRevenueRatio = Number(
-      (stock.capexToRevenueRatio ?? cwipToAssetsRatio).toFixed(2)
+      (
+        hasRealCapex && hasRealRev
+          ? stock.capexTTMIdr! / stock.revenueTTMIdr!
+          : stock.capexToRevenueRatio ?? cwipToAssetsRatio
+      ).toFixed(2)
     );
     const capexToDaRatio = Number(
       (
-        stock.capexToDaRatio ??
-        (cwipToAssetsRatio > 0.15
-          ? 3.15 + (cwipToAssetsRatio - 0.15) * 9.5
-          : 0.9 + cwipToAssetsRatio * 12.0)
+        hasRealCapex && hasRealDa
+          ? stock.capexTTMIdr! / stock.daTTMIdr!
+          : stock.capexToDaRatio ??
+            (cwipToAssetsRatio > 0.15
+              ? 3.15 + (cwipToAssetsRatio - 0.15) * 9.5
+              : 0.9 + cwipToAssetsRatio * 12.0)
       ).toFixed(2)
     );
 
-    const ui_notifications: string[] = [];
-
-    // Capex Override Logic: If (Capex/D&A > 3.0 OR Capex/Revenue > 0.15) is met,
-    // override Pure Cyclical / standard routing into 'Capex Aggressor' and push the warning flag.
-    const isCapexOverrideMet = capexToDaRatio > 3.0 || capexToRevenueRatio > 0.15;
-    if (isCapexOverrideMet) {
-      ui_notifications.push(CAPEX_ANOMALY_NOTIFICATION_TEXT);
-      return {
-        route: 'CAPEX_AGGRESSOR',
-        applied_module: 'Capex_Aggressor',
-        cwipToAssetsRatio,
-        capexToDaRatio,
-        capexToRevenueRatio,
-        isCapexOverrideTriggered: true,
-        ui_notifications
-      };
-    }
-
-    // Pure Cyclical Trigger: Energy / Coal, Agri CPO, or Cyclical Property
-    if (
-      stock.sector === 'Energy' ||
-      CPO_AGRI_TICKERS.has(clean) ||
-      stock.sector === 'Properties & Real Estate'
-    ) {
-      return {
-        route: 'PURE_CYCLICAL',
-        applied_module: 'Pure_Cyclical',
-        cwipToAssetsRatio,
-        capexToDaRatio,
-        capexToRevenueRatio,
-        isCapexOverrideTriggered: false,
-        ui_notifications
-      };
-    }
-
-    // Capex Aggressor Sectoral Trigger: Healthcare / Infrastructures / Basic_Materials_Metals
-    if (
-      stock.sector === 'Healthcare' ||
-      stock.sector === 'Infrastructures' ||
-      METALS_HILIRISASI_TICKERS.has(clean)
-    ) {
-      return {
-        route: 'CAPEX_AGGRESSOR',
-        applied_module: 'Capex_Aggressor',
-        cwipToAssetsRatio,
-        capexToDaRatio,
-        capexToRevenueRatio,
-        isCapexOverrideTriggered: false,
-        ui_notifications
-      };
-    }
-
-    // Steady Compounder Trigger: Financials OR Consumer Non-Cyclicals
-    if (stock.sector === 'Financials' || stock.sector === 'Consumer Non-Cyclicals') {
-      return {
-        route: 'STEADY_COMPOUNDER',
-        applied_module: 'Compounder',
-        cwipToAssetsRatio,
-        capexToDaRatio,
-        capexToRevenueRatio,
-        isCapexOverrideTriggered: false,
-        ui_notifications
-      };
-    }
-
-    // Fallback routing for Industrials / General Cyclicals
-    if (stock.sector === 'Basic Materials' || stock.sector === 'Industrials') {
-      return {
-        route: 'PURE_CYCLICAL',
-        applied_module: 'Pure_Cyclical',
-        cwipToAssetsRatio,
-        capexToDaRatio,
-        capexToRevenueRatio,
-        isCapexOverrideTriggered: false,
-        ui_notifications
-      };
-    }
-
-    return {
-      route: 'STEADY_COMPOUNDER',
-      applied_module: 'Compounder',
+    const classification = classifyEmitenSectorProfile({
+      ticker: stock.ticker,
+      sector: stock.sector,
+      subIndustry: stock.subIndustry,
+      userSectorArchetypeOverride: stock.userSectorArchetypeOverride,
+      netIncomeTTMIdr: stock.netIncomeTTMIdr,
+      operatingProfitTTMIdr: stock.operatingProfitTTMIdr,
+      revenueTTMIdr: stock.revenueTTMIdr,
+      capexTTMIdr: stock.capexTTMIdr,
+      daTTMIdr: stock.daTTMIdr,
+      roeTTM: stock.roe,
+      roeAvg5YPct: stock.roeAvg5YPct,
+      roicTTMPct: stock.roicTTMPct ?? stock.roe,
       cwipToAssetsRatio,
       capexToDaRatio,
       capexToRevenueRatio,
-      isCapexOverrideTriggered: false,
+      hasVerifiedCapexAndDa,
+      isCoreFundamentalsSeed:
+        !stock.fundamentalsSource || stock.fundamentalsSource === 'HARDCODED_SEED'
+    });
+
+    const ui_notifications: string[] = [];
+    if (classification.isCapexOverrideTriggered) {
+      ui_notifications.push(CAPEX_ANOMALY_NOTIFICATION_TEXT);
+    }
+
+    return {
+      route: classification.resolvedValuationRoute,
+      applied_module: classification.resolvedAppliedModule,
+      cwipToAssetsRatio,
+      capexToDaRatio,
+      capexToRevenueRatio,
+      isCapexOverrideTriggered: classification.isCapexOverrideTriggered,
+      isSyntheticCapexBlocked: classification.isSyntheticCapexBlocked,
       ui_notifications
     };
   },
@@ -1140,6 +1054,7 @@ export const DynamicEnsembleWeighter = {
     ocfToNetIncomeRatio: number;
     peerCorrelation?: number;
     hscDiscountMultiplier?: number;
+    profileValuationLegs?: readonly import('../config/sectorProfiles').SectorValuationLegConfig[];
     tickRounder: (rawPrice: number) => number;
   }): DynamicEnsembleWeightingResult {
     const {
@@ -1154,6 +1069,7 @@ export const DynamicEnsembleWeighter = {
       relValPriceIdr,
       ocfToNetIncomeRatio,
       hscDiscountMultiplier = 1.0,
+      profileValuationLegs,
       tickRounder
     } = params;
 
@@ -1172,12 +1088,19 @@ export const DynamicEnsembleWeighter = {
 
     const confidenceNotes: string[] = [];
 
-    // Step 1: Sector Alignment Base Weights (100% Pure Intrinsic — Zero StatArb Weight)
+    // Step 1: Sector Alignment Base Weights from SectorProfile.valuationLegs (or deterministic sector fallback)
     let wSector = 0.45;
     let wRim = 0.35;
     let wEvEbitda5Y = 0.20;
 
-    if (sector === 'Financials') {
+    if (profileValuationLegs && profileValuationLegs.length >= 3) {
+      wSector = profileValuationLegs[0].baseWeight;
+      wRim = profileValuationLegs[1].baseWeight;
+      wEvEbitda5Y = profileValuationLegs[2].baseWeight;
+      confidenceNotes.push(
+        `SectorProfile Ensemble (${profileValuationLegs[0].shortMetric} ${Math.round(wSector * 100)}% [${profileValuationLegs[0].clusterGroup}] · ${profileValuationLegs[1].shortMetric} ${Math.round(wRim * 100)}% [${profileValuationLegs[1].clusterGroup}] · ${profileValuationLegs[2].shortMetric} ${Math.round(wEvEbitda5Y * 100)}% [${profileValuationLegs[2].clusterGroup}])`
+      );
+    } else if (sector === 'Financials') {
       wSector = 0.10;
       wRim = 0.70;
       wEvEbitda5Y = 0.20;
@@ -1200,6 +1123,24 @@ export const DynamicEnsembleWeighter = {
       wRim = 0.35;
       wEvEbitda5Y = 0.20;
       confidenceNotes.push('Capex Aggressor (Pure Intrinsic): 45% 2-Stage RI Blended · 35% RIM · 20% Hist EV/EBITDA Band 5Y');
+    }
+
+    // FASE 3 Cluster Correlation Anti-Double-Counting:
+    // If two legs share the BOOK_RETURN cluster group while the 3rd leg is an independent cluster,
+    // cap combined BOOK_RETURN weight at 80% so correlated book-return assumptions do not crowd out independent anchors.
+    if (
+      profileValuationLegs &&
+      profileValuationLegs.length >= 3 &&
+      profileValuationLegs[0].clusterGroup === 'BOOK_RETURN' &&
+      profileValuationLegs[1].clusterGroup === 'BOOK_RETURN' &&
+      profileValuationLegs[2].clusterGroup !== 'BOOK_RETURN' &&
+      wSector + wRim > 0.80
+    ) {
+      const bookSum = wSector + wRim;
+      wSector = Number(((wSector / bookSum) * 0.80).toFixed(4));
+      wRim = Number(((wRim / bookSum) * 0.80).toFixed(4));
+      wEvEbitda5Y = 0.20;
+      confidenceNotes.push('Cluster Correlation Cap: Kombinasi 2 leg BOOK_RETURN dibatasi ≤ 80% untuk mencegah bobot ganda asumsi ROE.');
     }
 
     confidenceNotes.push('P1.3 Guardrail: StatArb dikeluarkan 100% dari Ensemble Fair Value ke Tactical Overlay.');
@@ -1226,7 +1167,7 @@ export const DynamicEnsembleWeighter = {
       rimDisabled = false;
     }
 
-    // Step 3: Outlier Penalty & Epistemic Model Dispersion ((maxVal - minVal) / medianVal)
+    // Step 3: Symmetric Outlier Filter & Continuous Epistemic Model Dispersion ((maxVal - minVal) / medianVal)
     const activeCandidatePrices = [
       wSector > 0 ? sectorPriceIdr : null,
       wRim > 0 ? rimPriceIdr : null,
@@ -1282,13 +1223,17 @@ export const DynamicEnsembleWeighter = {
 
     const outlierPenalizedLeg = outlierNames.length > 0 ? outlierNames.join(', ') : undefined;
     if (outlierPenalizedLeg) {
-      confidenceNotes.push(`Penalti Outlier (-50% Bobot): ${outlierPenalizedLeg}`);
+      confidenceNotes.push(`Penalti Outlier Simetris (-50% Bobot): ${outlierPenalizedLeg}`);
     }
 
-    const isDispersionPenalized = modelDispersion > 0.40 || Boolean(outlierPenalizedLeg);
+    // FASE 3: Continuous dispersion penalty starts at delta > 0.15; outlier flag alone never forces a cliff penalty
+    const continuousDispersionPts = Math.round(
+      Math.min(15.0, Math.max(0, (modelDispersion - 0.15) * 31.5))
+    );
+    const isDispersionPenalized = continuousDispersionPts > 0;
     if (isDispersionPenalized) {
       confidenceNotes.push(
-        `P2.3 Epistemic Uncertainty: Dispersi Model ${(modelDispersion * 100).toFixed(1)}% (> 40%) → Penalti Konviksi Aktif`
+        `P2.3 Continuous Epistemic Uncertainty: Dispersi Model ${(modelDispersion * 100).toFixed(1)}% → Penalti Kontinu -${continuousDispersionPts} pts`
       );
     }
 
@@ -1451,7 +1396,7 @@ export interface GrahamJoeliardiBenchmarkResult {
   normalizedBasisEpsIdr: number;
   normalizedBasisRoePct: number;
   isMoatHaircutApplied: boolean;
-  moatHaircutMultiplier: number; // 0.75 if ROE < 15% or DER > 1x, else 1.00
+  moatHaircutMultiplier: number; // 0.75 if ROE < threshold or DER > threshold, else 1.00
   moatHaircutReason?: string;
   isFloorClamped: boolean;
   floorClampDiagnosticLog?: string;
@@ -1459,15 +1404,15 @@ export interface GrahamJoeliardiBenchmarkResult {
 }
 
 /**
- * 5. GRAHAM-JOELIARDI "MOAT" INTRINSIC VALUE BENCHMARK (Standalone Floor Value — P1.2 Refactored)
+ * 5. GRAHAM-JOELIARDI "MOAT" INTRINSIC VALUE BENCHMARK (Standalone Floor Value — P1.2 & FASE 3 Refactored)
  * Standalone conservative sanity check (floor value) displayed on the UI,
  * NEVER averaged into the main Quantedge Ensemble target price:
  *   Intrinsic Value = (Norm_EPS * (8.5 + (2 * g)) * 4.4) / current_SBN_10Y_Yield
  * - P1.2 Guardrail 1: Strictly uses 3–5 Year Historical Normalized EPS & ROE (`Math.min(TTM, Avg3Y)`).
  *   NEVER uses Forward Annualized EPS.
- * - P1.2 Guardrail 2 (Hard Invariant): `standaloneFloor <= ensembleFairValue`.
- *   If raw floor > ensembleFairValue, clamps to `Math.min(rawFloor, ensembleFairValue * 0.90)`
- *   and logs the diagnostic reason.
+ * - FASE 3 Guardrail 2 (Always-On <= 90% Hard Invariant & Sector-Aware Weak-Moat):
+ *   Always clamps `standaloneFloor <= maxRatioToEnsemble (90%) * ensembleFairValue`
+ *   and uses sector-aware `roeHaircutThresholdPct` & `derHaircutThreshold` (`null` for Financials/Banks).
  */
 export function calculateGrahamJoeliardiBenchmark(params: {
   basisEpsIdr: number;
@@ -1480,6 +1425,10 @@ export function calculateGrahamJoeliardiBenchmark(params: {
   roeAvg5YPct?: number;
   derRatio: number;
   ensembleFairValueIdr?: number;
+  maxRatioToEnsemble?: number;
+  roeHaircutThresholdPct?: number;
+  derHaircutThreshold?: number | null;
+  weakMoatHaircutFactor?: number;
   tickRounder: (rawPrice: number) => number;
 }): GrahamJoeliardiBenchmarkResult {
   const {
@@ -1493,6 +1442,10 @@ export function calculateGrahamJoeliardiBenchmark(params: {
     roeAvg5YPct,
     derRatio,
     ensembleFairValueIdr,
+    maxRatioToEnsemble,
+    roeHaircutThresholdPct,
+    derHaircutThreshold,
+    weakMoatHaircutFactor,
     tickRounder
   } = params;
 
@@ -1507,6 +1460,10 @@ export function calculateGrahamJoeliardiBenchmark(params: {
     growthRate: growthRatePct,
     spotRf10Y: sbn10YYieldPct,
     ensembleFairValue: ensembleFairValueIdr ?? Number.MAX_SAFE_INTEGER,
+    maxRatioToEnsemble,
+    roeHaircutThresholdPct,
+    derHaircutThreshold,
+    weakMoatHaircutFactor,
     tickRounder
   });
 

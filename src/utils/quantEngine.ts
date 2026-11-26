@@ -71,6 +71,8 @@ import {
 import { getCachedFundamentalsSnapshot } from './liveMarketFetcher';
 import { computeAuthenticBeta1YFromSnapshotOrSeries } from './institutionalGuardrailsEngine';
 import { resolveSectorMethodologyProfile } from './sectorMethodologyRouter';
+import { INDONESIA_ERP_CONFIG } from '../config/sectorProfiles';
+import { classifyEmitenSectorProfile } from './sectorClassifier';
 
 export type RawStockInput = Omit<
   StockMetrics,
@@ -1675,13 +1677,55 @@ export function calculateForwardDividend(
 }
 
 /**
+ * FASE 1: Adaptive IDR Nominal Formatter (Jt / M / T)
+ * Prevents ambiguous unit scales across UI cards, AI narrative, Audit Strip, and PDF/PNG exports.
+ * - >= Rp 1.000.000.000.000 (1 Trillion) -> "Rp X,XX T" (+ optional suffix like "/hr")
+ * - >= Rp 1.000.000.000 (1 Billion)      -> "Rp X,XX M"
+ * - >= Rp 1.000.000 (1 Million)          -> "Rp X,X Jt"
+ * - < Rp 1.000.000                       -> "Rp X.XXX"
+ */
+export function formatAdaptiveIdrValue(
+  amountIdr: number,
+  suffix: string = '/hr'
+): string {
+  const safe = Math.max(0, Number(amountIdr) || 0);
+  if (safe >= 1_000_000_000_000) {
+    const val = (safe / 1_000_000_000_000).toLocaleString('id-ID', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+    return `Rp ${val} T${suffix}`;
+  }
+  if (safe >= 1_000_000_000) {
+    const val = (safe / 1_000_000_000).toLocaleString('id-ID', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+    return `Rp ${val} M${suffix}`;
+  }
+  if (safe >= 1_000_000) {
+    const val = (safe / 1_000_000).toLocaleString('id-ID', {
+      minimumFractionDigits: 1,
+      maximumFractionDigits: 1
+    });
+    return `Rp ${val} Jt${suffix}`;
+  }
+  return `Rp ${Math.round(safe).toLocaleString('id-ID')}${suffix}`;
+}
+
+/**
  * Fabozzi (2012) Multi-Tenor SBN Government Bond Spot Yield Curve (1Y, 5Y, 10Y)
  * & Damodaran (2012) Duration-Matched Dynamic Cost of Equity (Ke) Calculator.
- * Per user preference: Uses a weighted combination of SBN 1Y, 5Y, and 10Y spot rates matched to equity cashflow duration.
+ * FASE 3 (Confirmed Decision 1):
+ * - Eliminates dividend-yield circularity by using deterministic SBN tenor weights (1Y / 5Y / 10Y)
+ *   from `SectorProfile.keAdjustments.sbnWeights` per sector archetype.
+ * - Computes a single unified `adjustedBeta` (Blume/Vasicek clamped per `SectorProfile.keAdjustments`)
+ *   shared identically between Cost of Equity (Ke) and Position Sizing (1/Beta).
+ * - Uses `INDONESIA_ERP_CONFIG` (with explicit asOfDate & source) + sector-specific risk premia.
  */
 export function computeSbnSpotYieldCurveAndKe(
   stock: StockMetrics,
-  forwardDividendYieldPct: number = 0,
+  forwardDividendYieldPct?: number,
   macroIndicators: MacroIndicator[] = DEFAULT_GLOBAL_MACRO
 ): {
   sbnSpot1YPct: number;
@@ -1690,7 +1734,12 @@ export function computeSbnSpotYieldCurveAndKe(
   sbnBlendedSpotRfPct: number;
   erpBenchmarkPct: number;
   dynamicCostOfEquityPct: number;
+  adjustedBeta: number;
+  kePremiaBps: number;
+  erpAsOfDate: string;
+  erpSource: string;
 } {
+  void forwardDividendYieldPct;
   const us10y = macroIndicators.find((m) => m.id === 'us10y')?.value ?? 4.89;
   const usdidr = macroIndicators.find((m) => m.id === 'usdidr')?.value ?? 18080;
 
@@ -1747,36 +1796,45 @@ export function computeSbnSpotYieldCurveAndKe(
       : Number((6.48 + anchorDelta10Y * 0.90).toFixed(2));
   const sbnSpot10YPct = effectiveSbn10Y;
 
-  // Equity Duration Weighting (Fabozzi 2012):
-  // High-dividend / mature cashflow compounders have shorter Macaulay equity duration (higher 1Y & 5Y weight),
-  // whereas low-payout growth stocks have longer cashflow duration (higher 5Y & 10Y weight).
-  let w1Y = 0.20;
-  let w5Y = 0.35;
-  let w10Y = 0.45;
-  if (forwardDividendYieldPct >= 4.5) {
-    w1Y = 0.28;
-    w5Y = 0.42;
-    w10Y = 0.30;
-  } else if (forwardDividendYieldPct >= 2.0) {
-    w1Y = 0.22;
-    w5Y = 0.38;
-    w10Y = 0.40;
-  } else {
-    w1Y = 0.12;
-    w5Y = 0.33;
-    w10Y = 0.55;
-  }
+  // FASE 3 (Confirmed Decision 1): Deterministic SBN Tenor Weighting per SectorProfile Archetype
+  // Free of dividend-yield circularity and caller-dependent omissions.
+  const classification = classifyEmitenSectorProfile({
+    ticker: stock.ticker,
+    sector: stock.sector,
+    subIndustry: stock.subIndustry,
+    userSectorArchetypeOverride: stock.userSectorArchetypeOverride,
+    netIncomeTTMIdr: stock.netIncomeTTMIdr,
+    operatingProfitTTMIdr: stock.operatingProfitTTMIdr,
+    revenueTTMIdr: stock.revenueTTMIdr,
+    capexTTMIdr: stock.capexTTMIdr,
+    daTTMIdr: stock.daTTMIdr,
+    roeTTM: stock.roe,
+    roeAvg5YPct: stock.roeAvg5YPct,
+    roicTTMPct: stock.roicTTMPct ?? stock.roe,
+    isCoreFundamentalsSeed:
+      !stock.fundamentalsSource || stock.fundamentalsSource === 'HARDCODED_SEED'
+  });
+  const keAdj = classification.profile.keAdjustments;
+  const { w1Y, w5Y, w10Y } = keAdj.sbnWeights;
 
   const sbnBlendedSpotRfPct = Number(
     (w1Y * sbnSpot1YPct + w5Y * sbnSpot5YPct + w10Y * sbnSpot10YPct).toFixed(2)
   );
 
-  // Blume-Adjusted Beta toward market mean (0.67 * rawBeta + 0.33 * 1.0), bounded [0.48, 1.55]
+  // FASE 3 Single Unified Adjusted Beta (Blume or Vasicek shrinkage clamped to profile.keAdjustments.betaClamp)
   const rawBeta = Math.max(0.35, Number(stock.beta1Y) || 1.0);
-  const blumeBeta = Math.max(0.48, Math.min(1.55, 0.67 * rawBeta + 0.33 * 1.0));
-  const erpBenchmarkPct = 5.5; // Damodaran Implied Country ERP for Indonesia
+  const [minBeta, maxBeta] = keAdj.betaClamp;
+  const shrunkBeta =
+    keAdj.betaPolicy === 'VASICEK'
+      ? 0.62 * rawBeta + 0.38 * 1.0
+      : 0.67 * rawBeta + 0.33 * 1.0;
+  const adjustedBeta = Number(Math.max(minBeta, Math.min(maxBeta, shrunkBeta)).toFixed(4));
 
-  const rawKe = sbnBlendedSpotRfPct + blumeBeta * erpBenchmarkPct;
+  const erpBenchmarkPct = INDONESIA_ERP_CONFIG.baseErpPct;
+  const kePremiaBps =
+    keAdj.liquidityPremiumBps + keAdj.governancePremiumBps + keAdj.cyclicalityPremiumBps;
+
+  const rawKe = sbnBlendedSpotRfPct + adjustedBeta * erpBenchmarkPct + kePremiaBps / 100;
   const dynamicCostOfEquityPct = Number(Math.max(8.8, Math.min(16.2, rawKe)).toFixed(2));
 
   return {
@@ -1785,7 +1843,11 @@ export function computeSbnSpotYieldCurveAndKe(
     sbnSpot10YPct,
     sbnBlendedSpotRfPct,
     erpBenchmarkPct,
-    dynamicCostOfEquityPct
+    dynamicCostOfEquityPct,
+    adjustedBeta,
+    kePremiaBps,
+    erpAsOfDate: INDONESIA_ERP_CONFIG.asOfDate,
+    erpSource: INDONESIA_ERP_CONFIG.source
   };
 }
 
@@ -1838,7 +1900,10 @@ const CANONICAL_STATARB_PEERS: Record<
   BMRI: { peerTicker: 'BBCA', peerName: 'Bank Central Asia Tbk', correlation: 0.91, defaultChange1D: 1.45, defaultReturn30D: -3.8 },
   BBRI: { peerTicker: 'BBNI', peerName: 'Bank Negara Indonesia (Persero) Tbk', correlation: 0.89, defaultChange1D: 1.25, defaultReturn30D: -6.2 },
   BBNI: { peerTicker: 'BMRI', peerName: 'Bank Mandiri (Persero) Tbk', correlation: 0.90, defaultChange1D: 1.11, defaultReturn30D: -5.4 },
-  BRIS: { peerTicker: 'BMRI', peerName: 'Bank Mandiri (Persero) Tbk', correlation: 0.84, defaultChange1D: 1.11, defaultReturn30D: -5.4 },
+  BRIS: { peerTicker: 'BTPS', peerName: 'Bank BTPN Syariah Tbk', correlation: 0.85, defaultChange1D: 0.75, defaultReturn30D: -2.4 },
+  BTPS: { peerTicker: 'BRIS', peerName: 'Bank Syariah Indonesia Tbk', correlation: 0.85, defaultChange1D: 1.15, defaultReturn30D: -1.8 },
+  BFIN: { peerTicker: 'ADMF', peerName: 'Adira Dinamika Multi Finance Tbk', correlation: 0.87, defaultChange1D: 0.65, defaultReturn30D: -1.4 },
+  ADMF: { peerTicker: 'BFIN', peerName: 'BFI Finance Indonesia Tbk', correlation: 0.87, defaultChange1D: 0.82, defaultReturn30D: -1.9 },
   BNGA: { peerTicker: 'NISP', peerName: 'Bank OCBC NISP Tbk', correlation: 0.88, defaultChange1D: 0.85, defaultReturn30D: -1.8 },
   NISP: { peerTicker: 'BNGA', peerName: 'Bank CIMB Niaga Tbk', correlation: 0.88, defaultChange1D: 0.92, defaultReturn30D: -1.5 },
   BJBR: { peerTicker: 'BJTM', peerName: 'BPD Jawa Timur Tbk', correlation: 0.87, defaultChange1D: 0.55, defaultReturn30D: -2.1 },
@@ -1883,9 +1948,18 @@ const CANONICAL_STATARB_PEERS: Record<
   SMRA: { peerTicker: 'CTRA', peerName: 'Ciputra Development Tbk', correlation: 0.89, defaultChange1D: 1.1, defaultReturn30D: -1.4 },
   DMAS: { peerTicker: 'PWON', peerName: 'Pakuwon Jati Tbk', correlation: 0.83, defaultChange1D: 0.85, defaultReturn30D: -1.9 },
   ARNA: { peerTicker: 'TOTO', peerName: 'Surya Toto Indonesia Tbk', correlation: 0.84, defaultChange1D: 0.65, defaultReturn30D: 0.9 },
-  MPMX: { peerTicker: 'ASII', peerName: 'Astra International Tbk', correlation: 0.82, defaultChange1D: 0.41, defaultReturn30D: -1.2 },
+  AUTO: { peerTicker: 'DRMA', peerName: 'Dharma Polimetal Tbk', correlation: 0.86, defaultChange1D: 0.95, defaultReturn30D: 1.4 },
+  DRMA: { peerTicker: 'AUTO', peerName: 'Astra Otoparts Tbk', correlation: 0.86, defaultChange1D: 0.82, defaultReturn30D: 1.1 },
+  SMSM: { peerTicker: 'AUTO', peerName: 'Astra Otoparts Tbk', correlation: 0.85, defaultChange1D: 0.82, defaultReturn30D: 1.1 },
+  GJTL: { peerTicker: 'AUTO', peerName: 'Astra Otoparts Tbk', correlation: 0.81, defaultChange1D: 0.82, defaultReturn30D: 1.1 },
+  MPMX: { peerTicker: 'AUTO', peerName: 'Astra Otoparts Tbk', correlation: 0.82, defaultChange1D: 0.82, defaultReturn30D: 1.1 },
   ACES: { peerTicker: 'MAPI', peerName: 'Mitra Adiperkasa Tbk', correlation: 0.85, defaultChange1D: 1.05, defaultReturn30D: -1.1 },
-  MAPI: { peerTicker: 'ACES', peerName: 'Aspirasi Hidup Indonesia Tbk', correlation: 0.85, defaultChange1D: 0.9, defaultReturn30D: -1.5 }
+  MAPI: { peerTicker: 'ACES', peerName: 'Aspirasi Hidup Indonesia Tbk', correlation: 0.85, defaultChange1D: 0.9, defaultReturn30D: -1.5 },
+  MAPA: { peerTicker: 'MAPI', peerName: 'Mitra Adiperkasa Tbk', correlation: 0.89, defaultChange1D: 1.05, defaultReturn30D: -1.1 },
+  ASSA: { peerTicker: 'BIRD', peerName: 'Blue Bird Tbk', correlation: 0.84, defaultChange1D: 0.8, defaultReturn30D: -1.0 },
+  BIRD: { peerTicker: 'ASSA', peerName: 'Adi Sarana Armada Tbk', correlation: 0.84, defaultChange1D: 0.9, defaultReturn30D: -1.2 },
+  SMDR: { peerTicker: 'TMAS', peerName: 'Temas Tbk', correlation: 0.88, defaultChange1D: 0.75, defaultReturn30D: -0.9 },
+  TMAS: { peerTicker: 'SMDR', peerName: 'Samudera Indonesia Tbk', correlation: 0.88, defaultChange1D: 0.85, defaultReturn30D: -1.1 }
 };
 
 const SECTOR_DEFAULT_BENCHMARK_PEER: Record<
@@ -2729,11 +2803,11 @@ export function evaluateJoeliardiOosFundamental(
   // P0: DATA INTEGRITY GUARDRAILS (PRE-PROCESSING LAYER)
   // ============================================================================
   const prelimRouteInfo = ValuationEngine.resolveRoute(stock);
-  const vixVal = macroIndicators.find((m) => m.id === 'vix')?.value ?? 18;
-  const jkseChange = macroIndicators.find((m) => m.id === 'jkse')?.change1D ?? 0;
+  // FASE 1 SSOT: MarketRegime MUST NEVER be inferred from a single stock's volatility (stock.volatilityAnn > 35).
+  // Always use the explicit global MarketRegimeStatus when passed, or compute the global IHSG + macro regime.
   const inferredMarketRegime: MarketRegimeStatus =
     explicitMarketRegime ??
-    (stock.volatilityAnn > 35 || vixVal >= 24 || jkseChange <= -1.5 ? 'VOLATIL' : 'TENANG');
+    computeMarketRegime(undefined, 18.0, macroIndicators).status;
 
   const isSbnMacroProxy = sbnFreshness.source === 'PROXY_FORMULA';
   const prelimBaseFundSource: DataSourceType = stock.fundamentalsSource ?? 'HARDCODED_SEED';
@@ -2936,9 +3010,18 @@ export function evaluateJoeliardiOosFundamental(
       ? 'Status HSC: Manual HSC Blokir'
       : 'Status HSC: Bebas HSC (<92,5%)';
 
+  const hasVerifiedCapexAndDaForRouter =
+    typeof rawTickerData.capexTTM === 'number' &&
+    rawTickerData.capexTTM > 0 &&
+    typeof rawTickerData.daTTM === 'number' &&
+    rawTickerData.daTTM > 0 &&
+    !prelimConvictionCappedByLineage;
+
   const sectorProfile = resolveSectorMethodologyProfile({
     ticker: stock.ticker,
     sector: stock.sector,
+    subIndustry: stock.subIndustry,
+    userSectorArchetypeOverride: stock.userSectorArchetypeOverride,
     roeTTM: ttmRoeBasisPct,
     roeAvg5YPct: (rawTickerData.roeAvg5Y ?? ttmRoeBasisPct / 100) * 100,
     costOfEquityKePct: dynamicCostOfEquityPct,
@@ -2967,7 +3050,13 @@ export function evaluateJoeliardiOosFundamental(
     isInstitutionalLiquid: isInst,
     isDualConfirmedCatalystActive,
     rawAccrualPenaltyPts,
-    effectiveModule
+    effectiveModule,
+    hasVerifiedCapexAndDa: hasVerifiedCapexAndDaForRouter,
+    isCoreFundamentalsSeed: prelimConvictionCappedByLineage,
+    nimPct: stock.nimPct,
+    nplPct: stock.nplPct,
+    carPct: stock.carPct,
+    bopoPct: stock.bopoPct
   });
 
   // Apply Sector-Specific Accounting Bypasses (Financials, Properties PSAK 72, Infra High D&A, Cyclical Normalized ROE)
@@ -2976,23 +3065,43 @@ export function evaluateJoeliardiOosFundamental(
     ? 0
     : rawAccrualPenaltyScore * (accrualPenaltyPts / Math.max(1, rawAccrualPenaltyPts));
 
-  // For Cyclicals/Commodities: Use Normalized Through-the-Cycle ROE (3-5Y average) so peak-cycle ROE is not extrapolated
+  // FASE 3 Unified Normalization Policy from SectorProfile (MEDIAN_5Y | MID_CYCLE_7_10Y | MIN_TTM_AVG3Y | TTM)
+  const activeProfile = sectorProfile.classification!.profile;
+  const histRoe5YPct =
+    typeof stock.roeMedian5YPct === 'number' && stock.roeMedian5YPct > 0
+      ? stock.roeMedian5YPct
+      : (rawTickerData.roeAvg5Y ?? ttmRoeBasisPct / 100) * 100;
+  const histRoe3YPct = (rawTickerData.roeAvg3Y ?? histRoe5YPct / 100) * 100;
+
   const valuationRoeBasisPct =
+    activeProfile.normalizationPolicy === 'MID_CYCLE_7_10Y' ||
     sectorProfile.regime === 'CYCLICAL_COMMODITIES'
       ? Math.min(
           ttmRoeBasisPct,
-          Math.max(6.0, ((rawTickerData.roeAvg5Y ?? ttmRoeBasisPct / 100) * 100) * 1.08)
+          Math.max(6.0, histRoe5YPct * 1.08)
         )
+      : activeProfile.normalizationPolicy === 'MEDIAN_5Y'
+      ? Number((0.65 * ttmRoeBasisPct + 0.35 * histRoe5YPct).toFixed(2))
+      : activeProfile.normalizationPolicy === 'MIN_TTM_AVG3Y'
+      ? Number(Math.min(ttmRoeBasisPct, Math.max(6.0, histRoe3YPct * 1.05)).toFixed(2))
       : ttmRoeBasisPct;
 
-  // FIX 1.1: Single Source of Truth Damodaran/Gordon Equilibrium Justified PBV
+  // FIX 1.1 & FASE 3: Single Source of Truth Damodaran/Gordon Equilibrium Justified PBV
   // justifiedPbv = (sustainableRoe - g) / (ke - g), clamped to [0.35x, 6.50x].
   // Mathematical Invariant: If sustainableRoe < dynamicCostOfEquityPct, justifiedPbv MUST be < 1.00x.
   const sustainableRoe = Math.min(30.5, valuationRoeBasisPct);
   const retentionRatio = Math.max(0.15, 1 - historicalDpr3YPct / 100);
   const rawGrowth = sustainableRoe * retentionRatio * 0.48;
+  const profileGCapPct = activeProfile.gCap * 100;
+  const profileSpreadMinPct = activeProfile.terminalSpreadMin * 100;
   const sustainableGrowthRatePct = Number(
-    Math.max(2.0, Math.min(5.5, Math.min(rawGrowth, dynamicCostOfEquityPct - 4.0))).toFixed(2)
+    Math.max(
+      2.0,
+      Math.min(
+        profileGCapPct,
+        Math.min(rawGrowth, dynamicCostOfEquityPct - profileSpreadMinPct)
+      )
+    ).toFixed(2)
   );
 
   const rawEquilibriumJustifiedPbv =
@@ -3249,7 +3358,7 @@ export function evaluateJoeliardiOosFundamental(
     ? `Model P/E & RIM Diblokir (Laba Operasional Negatif) → Book Survival Floor 0.85× BVPS = Rp ${intrinsicValueIdr.toLocaleString('id-ID')}`
     : ensembleAgg.ensembleFormulaAudit;
 
-  // P1.2: STANDALONE GRAHAM-JOELIARDI "MOAT" FLOOR with 3-5Y Normalized EPS/ROE & HARD INVARIANT (standaloneFloor <= ensembleFairValue)
+  // P1.2 & FASE 3: STANDALONE GRAHAM-JOELIARDI "MOAT" FLOOR with Sector-Aware Weak-Moat & Always-On <= 90% Ensemble Clamp
   const grahamBenchmark = calculateGrahamJoeliardiBenchmark({
     basisEpsIdr: basisEpsForBenchmarkIdr,
     epsAvg3YIdr: rawTickerData.epsAvg3Y,
@@ -3261,6 +3370,10 @@ export function evaluateJoeliardiOosFundamental(
     roeAvg5YPct: (rawTickerData.roeAvg5Y ?? valuationRoeBasisPct / 100) * 100,
     derRatio: sectorProfile.isCorporateDerBypassed ? 0.5 : der,
     ensembleFairValueIdr: intrinsicValueIdr,
+    maxRatioToEnsemble: activeProfile.floorPolicy.maxRatioToEnsemble,
+    roeHaircutThresholdPct: activeProfile.floorPolicy.roeHaircutThresholdPct,
+    derHaircutThreshold: activeProfile.floorPolicy.derHaircutThreshold,
+    weakMoatHaircutFactor: activeProfile.floorPolicy.weakMoatHaircutFactor,
     tickRounder: roundToIdxTick
   });
 
@@ -3512,7 +3625,7 @@ export function evaluateJoeliardiOosFundamental(
   );
 
   // ============================================================================
-  // P2: VOLATILITY-TARGETED BARBELL SIZING, ATR/TRANCHE STOP & DISPERSION PENALTY
+  // P2 & FASE 3: VOLATILITY-TARGETED BARBELL SIZING (UNIFIED BETA), ATR STOP & CONTINUOUS DISPERSION
   // ============================================================================
   const dispersionPenalty = applyDispersionPenalty({
     valuationOutputsIDR: [
@@ -3524,9 +3637,11 @@ export function evaluateJoeliardiOosFundamental(
     isOutlierEnsembleActive: Boolean(dynamicEnsemble.outlierPenalizedLeg)
   });
 
+  // Closing Finding F2: Pass sbnCurve.adjustedBeta into calculateVolatilityTargetedSizingAndStop
+  // so Cost of Equity (Ke) and Position Sizing (1/Beta) use the exact same unified Beta definition!
   const riskSizingResult = calculateVolatilityTargetedSizingAndStop({
     price,
-    beta1Y: stock.beta1Y,
+    beta1Y: sbnCurve.adjustedBeta,
     realizedAnnualVol: stock.volatilityAnn / 100,
     atr20: rawTickerData.atr20,
     marketRegime: inferredMarketRegime,
@@ -3536,6 +3651,9 @@ export function evaluateJoeliardiOosFundamental(
     isHscFlagged: Boolean(stock.isHscFlagged),
     effectiveCostOfEquity: dynamicCostOfEquityPct / 100,
     debtToEquity: sectorProfile.isCorporateDerBypassed ? 0.5 : der,
+    maxDrawdown1YPct: stock.maxDrawdown1YPct,
+    maxArchetypeAllocationPct: activeProfile.sizingParams.maxPositionCapPct,
+    stopLossBandPct: activeProfile.sizingParams.stopPctClamp,
     tickRounder: roundToIdxTick
   });
 
@@ -3991,22 +4109,56 @@ export function evaluateJoeliardiOosFundamental(
     rawGrade === 'A (SOLID VALUE)' ||
     rawGrade === 'B (WATCHLIST / HOLD)';
 
-  // MODUL 2.2 & MODUL 1.6: Uniform Grade Capping
+  // MODUL 2.2 & MODUL 1.6 + FASE 2 SECTOR DATA COMPLETENESS GATE:
   // - If sanityReport.status === 'SEED_WARN' or convictionCappedByLineage === true -> 'C (SEED CAPPED)'
   // - If unprofitable Tech/Growth (operatingProfitTTM <= 0) -> 'C (SPECULATIVE)'
+  // - Confirmed Decision 2: If core fundamentals are fresh (!isSeedWarnActive) but sector-specific required metrics
+  //   (e.g., Bank NIM/NPL/CAR numbers) are missing -> cap score at <= 74 and max Grade at 'B (WATCHLIST / HOLD)'
   const isSeedWarnActive =
     convictionCappedByLineage || sanityReport.status === 'SEED_WARN';
   if (isSeedWarnActive && sanityReport.status !== 'FAIL') {
     sanityReport.status = 'SEED_WARN';
   }
 
+  const isGradeA =
+    rawGrade === 'A+ (CORE CONVICTION)' ||
+    rawGrade === 'A (CORE CONVICTION)' ||
+    rawGrade === 'A- (SOLID VALUE)' ||
+    rawGrade === 'A (SOLID VALUE)';
+
+  const isCappedAtGradeBByIncompleteSectorData =
+    !isSeedWarnActive &&
+    Boolean(sectorProfile.isSectorDataIncomplete) &&
+    sectorProfile.maxAllowedGradeBySectorData === 'B (WATCHLIST / HOLD)';
+
+  if (
+    isCappedAtGradeBByIncompleteSectorData &&
+    riskSizingResult.adjustedConvictionScore > (sectorProfile.maxAllowedScoreBySectorData ?? 74)
+  ) {
+    riskSizingResult.adjustedConvictionScore = sectorProfile.maxAllowedScoreBySectorData ?? 74;
+  }
+
   const convictionGrade: JoeliardiOosEvaluation['convictionGrade'] = isSeedWarnActive
     ? 'C (SEED CAPPED)'
     : sectorProfile.isGradeCappedAtCByUnprofitableTech && isGradeAboveC
     ? 'C (SPECULATIVE)'
+    : isCappedAtGradeBByIncompleteSectorData && isGradeA
+    ? 'B (WATCHLIST / HOLD)'
     : rawGrade;
 
   riskSizingResult.finalConvictionGrade = convictionGrade;
+
+  if (sectorProfile.isSectorDataIncomplete && sectorProfile.sectorDataFlags?.length) {
+    for (const flag of sectorProfile.sectorDataFlags) {
+      const flagNotice = `[${flag}] Metrik spesifik sektor belum lengkap — Conviction Grade dibatasi maksimal B (Skor ≤ 74/100).`;
+      if (!riskSizingResult.penaltyReasons.includes(flagNotice)) {
+        riskSizingResult.penaltyReasons.push(flagNotice);
+      }
+      if (!finalValuationReport.ui_notifications.includes(flagNotice)) {
+        finalValuationReport.ui_notifications.push(flagNotice);
+      }
+    }
+  }
 
   if (convictionCappedByLineage && convictionCapReason) {
     if (!riskSizingResult.penaltyReasons.includes(convictionCapReason)) {
@@ -4176,7 +4328,46 @@ export function evaluateJoeliardiOosFundamental(
     isDualCatalystConfirmed: sanityReport.isDualCatalystConfirmed
   });
 
-  // Build structured ValuationResult (P1 deliverable + Hotfix 2 ValuationLedger)
+  // FASE 3: ROE-Fade Scenarios (Bear / Base / Bull persistence omega) & Ke +/- 1.0pp Sensitivity Matrix
+  const minOmegaProfile = activeProfile.omegaRange.min;
+  const maxOmegaProfile = activeProfile.omegaRange.max;
+  const bearOmega = Number(Math.min(rimPersistenceOmega, minOmegaProfile).toFixed(2));
+  const baseOmega = Number(rimPersistenceOmega.toFixed(2));
+  const bullOmega = Number(Math.max(rimPersistenceOmega, maxOmegaProfile).toFixed(2));
+
+  const omegaExcessRatio = Math.max(0, (valuationRoeBasisPct - dynamicCostOfEquityPct) / 100);
+  const bearOmegaScale = Math.max(0.84, Math.min(1.0, 1 - (baseOmega - bearOmega) * (0.28 + omegaExcessRatio * 0.45)));
+  const bullOmegaScale = Math.max(1.0, Math.min(1.18, 1 + (bullOmega - baseOmega) * (0.28 + omegaExcessRatio * 0.45)));
+
+  const roeFadeScenarios = {
+    bearOmega,
+    baseOmega,
+    bullOmega,
+    bearIdr: roundToIdxTick(Math.max(50, intrinsicValueIdr * bearOmegaScale)),
+    baseIdr: intrinsicValueIdr,
+    bullIdr: roundToIdxTick(Math.max(intrinsicValueIdr, intrinsicValueIdr * bullOmegaScale))
+  };
+
+  const keMinus1ppPct = Number(Math.max(7.5, dynamicCostOfEquityPct - 1.0).toFixed(2));
+  const keBasePct = dynamicCostOfEquityPct;
+  const kePlus1ppPct = Number(Math.min(18.5, dynamicCostOfEquityPct + 1.0).toFixed(2));
+  const spreadBase = Math.max(3.5, keBasePct - sustainableGrowthRatePct);
+  const spreadMinus1 = Math.max(3.0, keMinus1ppPct - sustainableGrowthRatePct);
+  const spreadPlus1 = Math.max(4.0, kePlus1ppPct - sustainableGrowthRatePct);
+
+  const keMinus1Scale = Math.max(1.03, Math.min(1.18, 0.45 + 0.55 * (spreadBase / spreadMinus1)));
+  const kePlus1Scale = Math.max(0.84, Math.min(0.97, 0.45 + 0.55 * (spreadBase / spreadPlus1)));
+
+  const keSensitivityMatrix = {
+    keMinus1ppPct,
+    keBasePct,
+    kePlus1ppPct,
+    keMinus1ppIdr: roundToIdxTick(Math.max(intrinsicValueIdr, intrinsicValueIdr * keMinus1Scale)),
+    keBaseIdr: intrinsicValueIdr,
+    kePlus1ppIdr: roundToIdxTick(Math.max(50, intrinsicValueIdr * kePlus1Scale))
+  };
+
+  // Build structured ValuationResult (P1 deliverable + Hotfix 2 ValuationLedger + Fase 3 Sensitivity & Range)
   const valuationResult: ValuationResult = {
     ticker: stock.ticker,
     appliedModule: effectiveModule,
@@ -4211,7 +4402,11 @@ export function evaluateJoeliardiOosFundamental(
     isOutlierEnsembleActive: Boolean(dynamicEnsemble.outlierPenalizedLeg),
     isDispersionPenalized: dispersionPenalty.isDispersionPenalized,
     dispersionPenaltyPts: dispersionPenalty.dispersionPenaltyPts,
+    continuousDispersionPenaltyPts: dispersionPenalty.continuousPenaltyPts,
     dispersionPenaltyReason: dispersionPenalty.penaltyReason,
+    fairValueRangeIdr: dispersionPenalty.fairValueRangeIdr,
+    roeFadeScenarios,
+    keSensitivityMatrix,
     tacticalOverlay
   };
 
@@ -4597,7 +4792,63 @@ export function evaluateJoeliardiOosFundamental(
     riskSizingResult,
     dataLineage,
     isConvictionCappedBySeed: convictionCappedByLineage,
-    seedCapWarningReason: convictionCapReason
+    seedCapWarningReason: convictionCapReason,
+    sectorClassification: sectorProfile.classification,
+    decision: {
+      ticker: stock.ticker,
+      name: stock.name,
+      sector: stock.sector,
+      spotPriceIdr: price,
+      marketRegime: inferredMarketRegime,
+      rawConvictionScore,
+      finalConvictionScore,
+      finalGrade: convictionGrade,
+      compactHeaderGradeBadge,
+      compactHeaderDataBadge,
+      compactHeaderDataStatus,
+      primaryActionLabel: primaryExecutionActionLabel,
+      holdingFactorsExplanation: executionThesis.holdingFactorsExplanation,
+      narrativeExecutionSentence: executionThesis.narrativeExecutionSentence,
+      intrinsicValueIdr,
+      rawStandaloneFloorIdr: grahamBenchmark.grahamJoeliardiRawIdr,
+      standaloneFloorIdr: grahamBenchmark.grahamJoeliardiBenchmarkIdr,
+      isFloorClamped: grahamBenchmark.isFloorClamped,
+      mosPct: marginOfSafetyPct,
+      mosRequiredPct: decisionTree.dynamicRequiredMosPct,
+      formattedAccumulationZone: decisionTree.formattedAccumulationZone,
+      sbnSpot1YPct,
+      sbnSpot5YPct,
+      sbnSpot10YPct,
+      rfBlendedPct: sbnBlendedSpotRfPct,
+      erpBenchmarkPct,
+      kePct: dynamicCostOfEquityPct,
+      rawBeta1Y: stock.beta1Y,
+      adjustedBeta: sbnCurve.adjustedBeta,
+      omega: rimPersistenceOmega,
+      rimFadeYears,
+      gSustPct: sustainableGrowthRatePct,
+      maxCapPct: maxBarbellCapPct,
+      tranche1Pct,
+      tranche2Pct,
+      stopLossIdr: riskSizingResult.stopLossPriceIDR,
+      stopLossPct: riskSizingResult.stopLossPct,
+      adtv20dIdr,
+      maxSafe5PctAdtvIdr: maxSafeAllocationIdr,
+      formattedAdtv20d: formatAdaptiveIdrValue(adtv20dIdr, '/hr'),
+      formattedMaxSafe5PctAdtv: formatAdaptiveIdrValue(maxSafeAllocationIdr, '/hr'),
+      sectorArchetype: sectorProfile.archetype,
+      sectorSubArchetype: sectorProfile.subArchetype,
+      classificationConfidence: sectorProfile.classification?.classificationConfidence,
+      isSectorDataIncomplete: sectorProfile.isSectorDataIncomplete,
+      sectorDataFlags: sectorProfile.sectorDataFlags,
+      kePremiaBps: sbnCurve.kePremiaBps,
+      erpAsOfDate: sbnCurve.erpAsOfDate,
+      erpSource: sbnCurve.erpSource,
+      continuousDispersionPenaltyPts: dispersionPenalty.continuousPenaltyPts,
+      fairValueRangeIdr: dispersionPenalty.fairValueRangeIdr,
+      roeFadeScenarios,
+      keSensitivityMatrix
+    }
   };
 }
 

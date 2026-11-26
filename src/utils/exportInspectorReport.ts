@@ -12,6 +12,7 @@ import {
 } from '../data/idxKseiHscRegistry';
 import { formatIdrPriceDisplay } from './numberFormat';
 import { resolveUiNotificationBadgeMeta } from './dataLineageEngine';
+import { formatAdaptiveIdrValue } from './quantEngine';
 
 export interface InspectorExportPayload {
   stock: StockMetrics;
@@ -1115,12 +1116,9 @@ export function renderInspectorReportCanvas(
   const basketLabel =
     stock.beta1Y <= 0.85 ? 'Keranjang 1 (Core Defensif)' : 'Keranjang 2 (Tactical Alpha)';
 
-  const safeAdtvMillionsExportStr =
-    joeliardiEval.maxSafeAllocationIdr >= 1_000_000
-      ? (joeliardiEval.maxSafeAllocationIdr / 1_000_000).toLocaleString('id-ID', {
-          maximumFractionDigits: 1
-        })
-      : joeliardiEval.maxSafeAllocationIdr.toLocaleString('id-ID');
+  const formattedMaxSafe5PctAdtvExportStr =
+    joeliardiEval.decision?.formattedMaxSafe5PctAdtv ??
+    formatAdaptiveIdrValue(joeliardiEval.maxSafeAllocationIdr, '/hr');
 
   const exCols = ex
     ? [
@@ -1171,8 +1169,8 @@ export function renderInspectorReportCanvas(
             { k: 'Rentang Ideal:', v: extractedRange, vColor: '#34D399' },
             { k: 'Nilai Wajar:', v: `Rp ${formatIdrPriceDisplay(fairIdr)}`, vColor: '#F9FAFB' },
             {
-              k: 'Spot vs Wajar:',
-              v: `Rp ${formatIdrPriceDisplay(spotIdr)} (${mosVal >= 0 ? '+' : ''}${mosVal.toFixed(1)}%)`,
+              k: 'Margin of Safety (MoS):',
+              v: `${mosVal >= 0 ? '+' : ''}${mosVal.toFixed(1)}% (Spot Rp ${formatIdrPriceDisplay(spotIdr)})`,
               vColor: mosVal >= 0 ? '#34D399' : '#FBBF24'
             }
           ],
@@ -1210,7 +1208,7 @@ export function renderInspectorReportCanvas(
             },
             {
               k: '5% ADTV 20D:',
-              v: `Maks. Rp ${safeAdtvMillionsExportStr} Jt/hr`,
+              v: `Maks. ${formattedMaxSafe5PctAdtvExportStr}`,
               vColor: '#34D399'
             }
           ],
