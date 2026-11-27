@@ -1092,57 +1092,91 @@ export async function syncForkUpstreamAndRebuildPages(
             }
 
             if (newTreeEntries.length > 0 && headTreeData.sha) {
-              const createBundleTreeRes = await fetch(
-                `https://api.github.com/repos/${owner}/${repo}/git/trees`,
-                {
-                  method: 'POST',
-                  headers,
-                  body: JSON.stringify({
-                    base_tree: headTreeData.sha,
-                    tree: newTreeEntries
-                  })
-                }
+              const appTreeEntries = newTreeEntries.filter(
+                (e) => !e.path.startsWith('.github/workflows/')
               );
-              if (createBundleTreeRes.ok) {
-                const createdBundleTree = (await createBundleTreeRes.json()) as { sha?: string };
-                if (createdBundleTree.sha) {
-                  const bundleCommitRes = await fetch(
-                    `https://api.github.com/repos/${owner}/${repo}/git/commits`,
-                    {
-                      method: 'POST',
-                      headers,
-                      body: JSON.stringify({
-                        message: `chore(pages-bundle): sync latest lightweight on-demand inspect & AI committee bundle (${newTreeEntries.length} files)`,
-                        tree: createdBundleTree.sha,
-                        parents: [headCommitSha]
-                      })
-                    }
-                  );
-                  if (bundleCommitRes.ok) {
-                    const bundleCommitData = (await bundleCommitRes.json()) as { sha?: string };
-                    if (bundleCommitData.sha) {
-                      const patchHeadRes = await fetch(
-                        `https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(
-                          targetBranch
-                        )}`,
-                        {
-                          method: 'PATCH',
-                          headers,
-                          body: JSON.stringify({
-                            sha: bundleCommitData.sha,
-                            force: false
-                          })
-                        }
-                      );
-                      if (patchHeadRes.ok) {
-                        merged = true;
-                        syncSummaryNote = `${syncSummaryNote} Bundle produksi terbaru (${newTreeEntries
-                          .map((e) => e.path)
-                          .join(', ')}) berhasil di-push langsung ke ${rawOwner}/${rawRepo}.`.trim();
-                      }
-                    }
+              const workflowTreeEntries = newTreeEntries.filter((e) =>
+                e.path.startsWith('.github/workflows/')
+              );
+
+              let currentParentCommitSha = headCommitSha;
+              let currentBaseTreeSha = headTreeData.sha;
+              const pushedPathLabels: string[] = [];
+
+              const commitTreeBatch = async (
+                batchEntries: typeof newTreeEntries,
+                commitMsg: string
+              ): Promise<boolean> => {
+                if (batchEntries.length === 0) return false;
+                const createTreeRes = await fetch(
+                  `https://api.github.com/repos/${owner}/${repo}/git/trees`,
+                  {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({
+                      base_tree: currentBaseTreeSha,
+                      tree: batchEntries
+                    })
                   }
-                }
+                );
+                if (!createTreeRes.ok) return false;
+                const createdTree = (await createTreeRes.json()) as { sha?: string };
+                if (!createdTree.sha) return false;
+
+                const commitRes = await fetch(
+                  `https://api.github.com/repos/${owner}/${repo}/git/commits`,
+                  {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({
+                      message: commitMsg,
+                      tree: createdTree.sha,
+                      parents: [currentParentCommitSha]
+                    })
+                  }
+                );
+                if (!commitRes.ok) return false;
+                const commitData = (await commitRes.json()) as { sha?: string };
+                if (!commitData.sha) return false;
+
+                const patchRes = await fetch(
+                  `https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${encodeURIComponent(
+                    targetBranch
+                  )}`,
+                  {
+                    method: 'PATCH',
+                    headers,
+                    body: JSON.stringify({
+                      sha: commitData.sha,
+                      force: false
+                    })
+                  }
+                );
+                if (!patchRes.ok) return false;
+
+                currentParentCommitSha = commitData.sha;
+                currentBaseTreeSha = createdTree.sha;
+                pushedPathLabels.push(...batchEntries.map((e) => e.path));
+                return true;
+              };
+
+              // Step 2B-1: Always commit app source, worker, Vite config & prebuilt docs/ bundle first
+              await commitTreeBatch(
+                appTreeEntries,
+                `chore(pages-bundle): sync latest isolated inspect modal, inline worker & docs bundle (${appTreeEntries.length} files)`
+              );
+
+              // Step 2B-2: Commit updated .github/workflows/* separately (gracefully skipped if PAT lacks workflow scope)
+              await commitTreeBatch(
+                workflowTreeEntries,
+                `ci(workflows): add actions:read & dual-mode branch+actions deploy to deploy-pages.yml`
+              );
+
+              if (pushedPathLabels.length > 0) {
+                merged = true;
+                syncSummaryNote = `${syncSummaryNote} Bundle produksi & kode terbaru (${pushedPathLabels.join(
+                  ', '
+                )}) berhasil di-push langsung ke ${rawOwner}/${rawRepo}.`.trim();
               }
             }
           }

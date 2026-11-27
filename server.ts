@@ -1221,15 +1221,27 @@ INSTRUKSI GAYA BAHASA & PENALARAN NOSTRADAMUS WAJIB (HUMANIS, LUGAS & KONSISTEN 
   app.get('/api/github/sync-files', (_req, res) => {
     const syncableRelPaths = [
       'index.html',
+      'vite.config.ts',
       'docs/index.html',
       'docs/assets/app.js',
       'docs/assets/index.css',
       'src/App.tsx',
+      'src/types/quant.ts',
       'src/utils/liveMarketFetcher.ts',
       'src/utils/githubCloudSync.ts',
+      'src/utils/corporateActionMiddleware.ts',
+      'src/utils/dataLineageEngine.ts',
+      'src/utils/quantEngine.ts',
+      'src/utils/quantWorkerBridge.ts',
+      'src/utils/valuationEngine.ts',
+      'src/utils/institutionalGuardrailsEngine.ts',
+      'src/utils/sectorMethodologyRouter.ts',
+      'src/workers/quantValuationWorker.ts',
       'src/components/EmitenFundamentalInspectorModal.tsx',
       'src/data/backendTemplates.ts',
-      'scripts/generate-static-market-bundle.mjs'
+      'scripts/generate-static-market-bundle.mjs',
+      '.github/workflows/deploy-pages.yml',
+      '.github/workflows/sync-idx-market.yml'
     ];
     const files: Record<string, string> = {};
     for (const relPath of syncableRelPaths) {
