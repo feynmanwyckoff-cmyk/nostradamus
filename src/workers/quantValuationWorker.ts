@@ -225,8 +225,12 @@ export function executeQuantRimAndStatArbKernel(
   };
 }
 
-// Web Worker message listener when running inside a dedicated Worker context
-if (typeof self !== 'undefined' && typeof (self as unknown as Worker).postMessage === 'function') {
+// Web Worker message listener ONLY when running inside a dedicated Worker context (never on main window)
+if (
+  typeof window === 'undefined' &&
+  typeof self !== 'undefined' &&
+  typeof (self as unknown as Worker).postMessage === 'function'
+) {
   self.onmessage = (event: MessageEvent<QuantWorkerInputPayload>) => {
     try {
       const payload = event.data;

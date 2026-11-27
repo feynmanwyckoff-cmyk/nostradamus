@@ -1244,6 +1244,34 @@ export default function App() {
     initSync();
   }, []);
 
+  // Lightweight single-stock in-place updater for modal overrides/refreshes (skips 975-stock re-rank & auto GitHub Cloud push)
+  const handleSilentSingleStockSync = useCallback((updatedStock: StockMetrics) => {
+    setStocks((prev) => {
+      const idx = prev.findIndex((s) => s.ticker === updatedStock.ticker);
+      if (idx === -1) return prev;
+      const existing = prev[idx];
+      if (
+        existing.lastPrice === updatedStock.lastPrice &&
+        existing.change1D === updatedStock.change1D &&
+        existing.roe === updatedStock.roe &&
+        existing.revenueTTMIdr === updatedStock.revenueTTMIdr &&
+        existing.netIncomeTTMIdr === updatedStock.netIncomeTTMIdr &&
+        existing.equityAttributableIdr === updatedStock.equityAttributableIdr &&
+        existing.adtv20dIdr === updatedStock.adtv20dIdr &&
+        existing.fundamentalsSource === updatedStock.fundamentalsSource &&
+        existing.isHscFlagged === updatedStock.isHscFlagged
+      ) {
+        return prev;
+      }
+      const next = [...prev];
+      next[idx] = {
+        ...existing,
+        ...updatedStock
+      };
+      return next;
+    });
+  }, []);
+
   const handleAddStock = (newStock: StockMetrics) => {
     setStocks((prev) => {
       const existing = prev.find((s) => s.ticker === newStock.ticker);
@@ -1264,8 +1292,10 @@ export default function App() {
       const filtered = prev.filter((s) => s.ticker !== newStock.ticker);
       const next = rankUniverseWithBuffer([newStock, ...filtered], rebalanceBufferPct);
       if (isGitHubCloudConfigured(githubConfig) && githubConfig.autoSyncOnEdit) {
-        const bundle = buildCloudBundle(undefined, undefined, next, undefined);
-        handlePushToGitHub(githubConfig, bundle, true);
+        window.setTimeout(() => {
+          const bundle = buildCloudBundle(undefined, undefined, next, undefined);
+          void handlePushToGitHub(githubConfig, bundle, true);
+        }, 50);
       }
       return next;
     });
@@ -1725,7 +1755,7 @@ export default function App() {
                 regimeStatus={regime.status}
                 onToggleHscFlag={handleToggleHscFlag}
                 onInspectTicker={(tk) => setGlobalInspectedTicker(tk)}
-                onStockSynced={handleAddStock}
+                onStockSynced={handleSilentSingleStockSync}
               />
             )}
           </>
@@ -1740,7 +1770,7 @@ export default function App() {
           availablePortfolioCashIdr={cashReserveIdr}
           onClose={() => setGlobalInspectedTicker(null)}
           onToggleHscFlag={handleToggleHscFlag}
-          onStockSynced={handleAddStock}
+          onStockSynced={handleSilentSingleStockSync}
         />
       )}
 

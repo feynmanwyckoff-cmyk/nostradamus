@@ -95,11 +95,13 @@ export function isGitHubCloudConfigured(config: GitHubCloudConfig): boolean {
 
 function encodeUtf8ToBase64(str: string): string {
   const bytes = new TextEncoder().encode(str);
-  let binary = '';
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i]);
+  const CHUNK_SIZE = 0x8000; // 32KB chunks to avoid call stack limits and O(N) char-by-char concatenation
+  const chunks: string[] = [];
+  for (let i = 0; i < bytes.byteLength; i += CHUNK_SIZE) {
+    const slice = bytes.subarray(i, Math.min(i + CHUNK_SIZE, bytes.byteLength));
+    chunks.push(String.fromCharCode.apply(null, slice as unknown as number[]));
   }
-  return btoa(binary);
+  return btoa(chunks.join(''));
 }
 
 function decodeBase64ToUtf8(base64Str: string): string {
@@ -320,14 +322,9 @@ export async function pushStateToGitHubRepo(
   if (currentSha && remoteContentStr) {
     try {
       const remoteObj = JSON.parse(remoteContentStr) as Record<string, unknown>;
-      const localObj = JSON.parse(prettyJson) as Record<string, unknown>;
       const remoteNormalized = JSON.stringify({ ...remoteObj, updatedAt: '' });
-      const localNormalized = JSON.stringify({ ...localObj, updatedAt: '' });
-      const [remoteNormSha, localNormSha] = await Promise.all([
-        computeGitBlobSha(remoteNormalized),
-        computeGitBlobSha(localNormalized)
-      ]);
-      if (remoteNormSha === localNormSha) {
+      const localNormalized = JSON.stringify({ ...bundle, updatedAt: '' });
+      if (remoteNormalized === localNormalized) {
         return { sha: currentSha, syncedAt, unchanged: true };
       }
     } catch {

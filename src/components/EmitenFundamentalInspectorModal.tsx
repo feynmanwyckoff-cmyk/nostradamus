@@ -1453,7 +1453,6 @@ export function EmitenFundamentalInspectorModal({
 
         if (hasMeaningfulChange) {
           setLiveStockOverride(currentStock);
-          onStockSynced?.(currentStock);
         }
       } finally {
         if (isMounted) setIsSyncingOnDemand(false);

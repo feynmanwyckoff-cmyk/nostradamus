@@ -1543,6 +1543,10 @@ export async function tryFetchLiveTickerFundamentalsOnDemand(
  * is strictly marked `isLiquid: false` (and `lastPrice: 0` if unquoted) so it NEVER uses fake default prices
  * and NEVER enters Keranjang 1 or Keranjang 2.
  */
+export const IDX_CATALOG_BY_TICKER_MAP: Map<string, IdxDirectoryEntry> = new Map(
+  IDX_SECTOR_CATALOG.map((item) => [item.ticker, item])
+);
+
 export function buildIdx100StockUniverse(
   rebalanceBufferPct: number = 40,
   extraEntries: IdxDirectoryEntry[] = []
@@ -1552,10 +1556,7 @@ export function buildIdx100StockUniverse(
     minute: '2-digit'
   });
 
-  const mergedCatalogMap = new Map<string, IdxDirectoryEntry>();
-  for (const item of IDX_SECTOR_CATALOG) {
-    mergedCatalogMap.set(item.ticker, item);
-  }
+  const mergedCatalogMap = new Map<string, IdxDirectoryEntry>(IDX_CATALOG_BY_TICKER_MAP);
   for (const extra of extraEntries) {
     if (extra.ticker && !mergedCatalogMap.has(extra.ticker)) {
       mergedCatalogMap.set(extra.ticker, extra);
@@ -2395,7 +2396,7 @@ export async function fetchYahooChartSeries(
 
   // Fallback for known IDX catalog tickers (including suspended/FCA tickers) so manual lookup never errors
   const cleanTicker = symbol.replace(/\.JK$/i, '').toUpperCase();
-  const catalogEntry = IDX_SECTOR_CATALOG.find((c) => c.ticker === cleanTicker);
+  const catalogEntry = IDX_CATALOG_BY_TICKER_MAP.get(cleanTicker);
   if (catalogEntry) {
     const fallbackPrice = catalogEntry.approxPrice <= 67 ? catalogEntry.approxPrice : 0;
     return {
@@ -2741,7 +2742,7 @@ export async function fetchLiveIdxTicker(rawTicker: string): Promise<StockMetric
   }
 
   const catalogMatch =
-    IDX_SECTOR_CATALOG.find((c) => c.ticker === cleanTicker) ||
+    IDX_CATALOG_BY_TICKER_MAP.get(cleanTicker) ||
     createCalibratedIdxEntry(cleanTicker);
   const yfSymbol = `${cleanTicker}.JK`;
   const nowStr = new Date().toLocaleTimeString('id-ID', {
@@ -3104,7 +3105,7 @@ export async function refreshLiveGlobalMacroAndIhsg(
     const stageStocks: StockMetrics[] = expandedStocks.map((stock) => {
       const res = activeBatchMap[stock.yfTicker];
       const catEntry =
-        IDX_SECTOR_CATALOG.find((c) => c.ticker === stock.ticker) || {
+        IDX_CATALOG_BY_TICKER_MAP.get(stock.ticker) || {
           defaultRoe: stock.trailingRoePct ?? stock.roe,
           defaultDer: stock.debtToEquity,
           defaultOpMargin: stock.operatingMargin
@@ -3262,13 +3263,14 @@ export async function refreshLiveGlobalMacroAndIhsg(
     ...wave1Map
   };
 
+  let partialState: ReturnType<typeof buildHydratedStateFromMap> | null = null;
   if (onPriorityWaveComplete) {
-    const partial = buildHydratedStateFromMap(combinedWave1Map);
+    partialState = buildHydratedStateFromMap(combinedWave1Map);
     onPriorityWaveComplete({
-      updatedMacro: partial.stageMacro,
-      ihsgReturns30D: partial.stageIhsgReturns30D,
-      liveIhsgQuote: partial.stageIhsgQuote,
-      updatedStocks: partial.stageStocks
+      updatedMacro: partialState.stageMacro,
+      ihsgReturns30D: partialState.stageIhsgReturns30D,
+      liveIhsgQuote: partialState.stageIhsgQuote,
+      updatedStocks: partialState.stageStocks
     });
   }
 
@@ -3297,7 +3299,10 @@ export async function refreshLiveGlobalMacroAndIhsg(
     ...wave2Map
   };
 
-  const finalState = buildHydratedStateFromMap(batchMap);
+  const finalState =
+    partialState && wave2Telemetry.liveNetworkHits === 0 && wave2Telemetry.memoryCacheHits === 0
+      ? partialState
+      : buildHydratedStateFromMap(batchMap);
   for (let i = 0; i < finalState.stageMacro.length; i++) {
     updatedMacro[i] = finalState.stageMacro[i];
   }
@@ -4518,7 +4523,7 @@ export async function fetchLiveEmitenSpecificNews(
     .slice(0, 4);
 
   const catalogEntry =
-    IDX_SECTOR_CATALOG.find((c) => c.ticker === cleanTicker) ||
+    IDX_CATALOG_BY_TICKER_MAP.get(cleanTicker) ||
     createCalibratedIdxEntry(cleanTicker, sector, companyName);
   const resolvedName = companyName || stockMetrics?.name || catalogEntry.name;
   const resolvedSector = sector || stockMetrics?.sector || catalogEntry.sector;

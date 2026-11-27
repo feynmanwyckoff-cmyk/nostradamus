@@ -58,9 +58,16 @@ export default defineConfig(() => {
             const appJsBuf = fs.readFileSync(appJsDist);
             const indexCssBuf = fs.readFileSync(indexCssDist);
 
-            // Sync compiled bundle into tracked docs/assets/ only when Git Blob SHA differs
-            writeFileIfGitShaChanged(path.join(docsAssetsDir, 'app.js'), appJsBuf);
-            writeFileIfGitShaChanged(path.join(docsAssetsDir, 'index.css'), indexCssBuf);
+            // Sync compiled bundle and any extra chunks into tracked docs/assets/ only when Git Blob SHA differs
+            for (const fileName of fs.readdirSync(distAssetsDir)) {
+              const srcPath = path.join(distAssetsDir, fileName);
+              if (fs.statSync(srcPath).isFile()) {
+                writeFileIfGitShaChanged(
+                  path.join(docsAssetsDir, fileName),
+                  fs.readFileSync(srcPath)
+                );
+              }
+            }
 
             // Compute deterministic 8-char content SHA from current bundle
             const bundleVersionHash = crypto
