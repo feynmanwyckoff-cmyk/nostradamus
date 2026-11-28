@@ -57,7 +57,8 @@ import {
 } from './valuationEngine';
 import {
   resolveConvictionGrade,
-  resolveExecutionThesis
+  resolveExecutionThesis,
+  runFinancialAudit
 } from './institutionalGuardrailsEngine';
 import {
   createTrackedField,
@@ -71,8 +72,11 @@ import {
 import { getCachedFundamentalsSnapshot } from './liveMarketFetcher';
 import { computeAuthenticBeta1YFromSnapshotOrSeries } from './institutionalGuardrailsEngine';
 import { resolveSectorMethodologyProfile } from './sectorMethodologyRouter';
-import { INDONESIA_ERP_CONFIG } from '../config/sectorProfiles';
-import { classifyEmitenSectorProfile } from './sectorClassifier';
+import { INDONESIA_ERP_CONFIG, SECTOR_PROFILES } from '../config/sectorProfiles';
+import {
+  classifyEmitenSectorProfile,
+  STANDALONE_NO_STATARB_PEER_TICKERS
+} from './sectorClassifier';
 
 export type RawStockInput = Omit<
   StockMetrics,
@@ -1966,6 +1970,7 @@ const CANONICAL_STATARB_PEERS: Record<
   MEDC: { peerTicker: 'ELSA', peerName: 'Elnusa Tbk', correlation: 0.84, defaultChange1D: 0.95, defaultReturn30D: -1.8 },
   AKRA: { peerTicker: 'PGAS', peerName: 'Perusahaan Gas Negara Tbk', correlation: 0.82, defaultChange1D: 0.75, defaultReturn30D: -2.1 },
   AMMN: { peerTicker: 'MDKA', peerName: 'Merdeka Copper Gold Tbk', correlation: 0.83, defaultChange1D: 1.65, defaultReturn30D: -6.4 },
+  MDKA: { peerTicker: 'AMMN', peerName: 'Amman Mineral Internasional Tbk', correlation: 0.83, defaultChange1D: 1.25, defaultReturn30D: -3.2 },
   ANTM: { peerTicker: 'INCO', peerName: 'Vale Indonesia Tbk', correlation: 0.86, defaultChange1D: 1.15, defaultReturn30D: -2.8 },
   INCO: { peerTicker: 'ANTM', peerName: 'Aneka Tambang Tbk', correlation: 0.86, defaultChange1D: 1.25, defaultReturn30D: -3.1 },
   INKP: { peerTicker: 'TKIM', peerName: 'Pabrik Kertas Tjiwi Kimia Tbk', correlation: 0.92, defaultChange1D: 0.8, defaultReturn30D: -2.2 },
@@ -1999,6 +2004,7 @@ const CANONICAL_STATARB_PEERS: Record<
   SMRA: { peerTicker: 'CTRA', peerName: 'Ciputra Development Tbk', correlation: 0.89, defaultChange1D: 1.1, defaultReturn30D: -1.4 },
   DMAS: { peerTicker: 'PWON', peerName: 'Pakuwon Jati Tbk', correlation: 0.83, defaultChange1D: 0.85, defaultReturn30D: -1.9 },
   ARNA: { peerTicker: 'TOTO', peerName: 'Surya Toto Indonesia Tbk', correlation: 0.84, defaultChange1D: 0.65, defaultReturn30D: 0.9 },
+  TOTO: { peerTicker: 'ARNA', peerName: 'Arwana Citramulia Tbk', correlation: 0.84, defaultChange1D: 0.75, defaultReturn30D: 1.1 },
   AUTO: { peerTicker: 'DRMA', peerName: 'Dharma Polimetal Tbk', correlation: 0.86, defaultChange1D: 0.95, defaultReturn30D: 1.4 },
   DRMA: { peerTicker: 'AUTO', peerName: 'Astra Otoparts Tbk', correlation: 0.86, defaultChange1D: 0.82, defaultReturn30D: 1.1 },
   SMSM: { peerTicker: 'AUTO', peerName: 'Astra Otoparts Tbk', correlation: 0.85, defaultChange1D: 0.82, defaultReturn30D: 1.1 },
@@ -2456,6 +2462,7 @@ function computeStatArbAndAgnosticPeerValuation(params: {
   sectorSpecificFairValueIdr: number;
   rimFairValueIdr: number;
   effectiveModule?: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical';
+  resolvedStatArbPeerTicker?: string;
 }): {
   agnosticPeerFairValueIdr: number;
   statArbPeerTicker: string;
@@ -2469,6 +2476,7 @@ function computeStatArbAndAgnosticPeerValuation(params: {
   statArbSignalLabel: string;
   statArbImpliedTargetIdr: number;
   statArbRationale: string;
+  isStatArbValid: boolean;
 } {
   const {
     stock,
@@ -2480,31 +2488,44 @@ function computeStatArbAndAgnosticPeerValuation(params: {
     forwardDividendYieldPct,
     sectorSpecificFairValueIdr,
     rimFairValueIdr,
-    effectiveModule
+    effectiveModule,
+    resolvedStatArbPeerTicker
   } = params;
 
   const clean = stock.ticker.trim().toUpperCase().replace(/\.JK$/i, '');
-  const peerInfo =
-    CANONICAL_STATARB_PEERS[clean] ||
-    SECTOR_DEFAULT_BENCHMARK_PEER[stock.sector] || {
-      peerTicker: 'IHSG-SEC',
-      peerName: `Indeks Sektor ${stock.sector}`,
-      correlation: 0.82,
-      defaultChange1D: 0.65,
-      defaultReturn30D: -1.8
-    };
 
-  // If the stock happens to match the default sector benchmark ticker, swap to the secondary twin
+  // STRICT STATARB FILTER (Syarat Wajib Pair StatArb):
+  // 1. Same sub-industry & economic driver (never pair paint producer AVIA with gold/nickel miner ANTM)
+  // 2. Significant historical return correlation (rho >= 0.75)
+  // 3. Cointegration test passes
+  const isNoFundamentalPeer =
+    STANDALONE_NO_STATARB_PEER_TICKERS.has(clean) ||
+    resolvedStatArbPeerTicker === 'N/A';
+
+  const canonicalPeer = CANONICAL_STATARB_PEERS[clean];
+  const fallbackPeerTicker =
+    !isNoFundamentalPeer && resolvedStatArbPeerTicker && resolvedStatArbPeerTicker !== 'N/A'
+      ? resolvedStatArbPeerTicker
+      : canonicalPeer?.peerTicker;
+
+  const peerCatalogEntry = fallbackPeerTicker
+    ? CATALOG_FUNDAMENTAL_ANCHOR_MAP.get(fallbackPeerTicker)
+    : undefined;
+
   const resolvedPeer =
-    peerInfo.peerTicker === clean
-      ? CANONICAL_STATARB_PEERS[clean] || {
-          peerTicker: 'BBCA',
-          peerName: 'Bank Central Asia Tbk',
-          correlation: 0.88,
-          defaultChange1D: 1.45,
-          defaultReturn30D: -3.8
-        }
-      : peerInfo;
+    isNoFundamentalPeer || !fallbackPeerTicker
+      ? null
+      : canonicalPeer && canonicalPeer.peerTicker === fallbackPeerTicker
+      ? canonicalPeer
+      : canonicalPeer
+      ? canonicalPeer
+      : {
+          peerTicker: fallbackPeerTicker,
+          peerName: peerCatalogEntry?.name || `${fallbackPeerTicker} Tbk`,
+          correlation: 0.80,
+          defaultChange1D: 0.65,
+          defaultReturn30D: -1.5
+        };
 
   // Bartram & Grinblatt (2018) Agnostic Fundamental Cross-Sectional Peer Hedonic Value:
   // Linear combination of cross-sectional peer multiples on Book Value, Operating Cash Flow, and Earnings + Dividend
@@ -2550,6 +2571,26 @@ function computeStatArbAndAgnosticPeerValuation(params: {
     0.20 * ((sectorSpecificFairValueIdr + rimFairValueIdr) / 2);
   const agnosticPeerFairValueIdr = roundToIdxTick(Math.max(50, rawAgnosticPeer));
 
+  if (!resolvedPeer || resolvedPeer.correlation < 0.75) {
+    void SECTOR_DEFAULT_BENCHMARK_PEER;
+    return {
+      agnosticPeerFairValueIdr,
+      statArbPeerTicker: 'N/A',
+      statArbPeerName: 'N/A - Tidak ada peer fundamental yang berkorelasi',
+      statArbCorrelation: 0,
+      statArbBetaRatio: 1.0,
+      statArbSpread1DPct: 0,
+      statArbSpread30DPct: 0,
+      statArbZScore: 0,
+      statArbSignal: 'FUNDAMENTAL_DIVERGENCE',
+      statArbSignalLabel: 'N/A - Tidak ada peer fundamental yang berkorelasi',
+      statArbImpliedTargetIdr: agnosticPeerFairValueIdr,
+      statArbRationale:
+        'N/A - Tidak ada peer fundamental yang berkorelasi (larangan keras memasangkan saham lintas model bisnis atau sub-industri yang tidak memiliki driver ekonomi dan kointegrasi yang sama).',
+      isStatArbValid: false
+    };
+  }
+
   // Beta-Adjusted Statistical Arbitrage Pair Spread & Z-Score Calculation:
   // If Stock A has beta_A = 1.2 and Peer B has beta_B = 0.8, daily & 30D fluctuations are normalized
   // by the exact beta ratio (beta_A / beta_B) so IHSG market swings never print false convergence signals.
@@ -2564,6 +2605,7 @@ function computeStatArbAndAgnosticPeerValuation(params: {
     ANTM: 1.28,
     INCO: 1.24,
     MDKA: 1.35,
+    AMMN: 1.18,
     ICBP: 0.58,
     INDF: 0.64,
     MYOR: 0.62,
@@ -2578,7 +2620,9 @@ function computeStatArbAndAgnosticPeerValuation(params: {
     CTRA: 1.15,
     BSDE: 1.12,
     PWON: 1.08,
-    MAPI: 0.98
+    MAPI: 0.98,
+    TOTO: 0.72,
+    ARNA: 0.75
   };
   const stockBeta = Math.max(0.35, Number(stock.beta1Y) || 1.0);
   const peerBeta = Math.max(0.35, peerBetaLookup[resolvedPeer.peerTicker] ?? 0.95);
@@ -2658,7 +2702,8 @@ function computeStatArbAndAgnosticPeerValuation(params: {
     statArbSignal,
     statArbSignalLabel,
     statArbImpliedTargetIdr,
-    statArbRationale
+    statArbRationale,
+    isStatArbValid: true
   };
 }
 
@@ -2716,7 +2761,7 @@ export function evaluateJoeliardiOosFundamental(
   const roe = Math.max(0.5, forwardRoePct); // Forward ROE drives growth & forward valuation
 
   const preRouteInfo = ValuationEngine.resolveRoute(stock);
-  const effectiveModule = preRouteInfo.applied_module;
+  let effectiveModule = preRouteInfo.applied_module;
 
   const gpAccrual = computeGrossProfitabilityAndAccruals(
     { ...stock, roe: forwardRoePct },
@@ -3116,8 +3161,16 @@ export function evaluateJoeliardiOosFundamental(
     ? 0
     : rawAccrualPenaltyScore * (accrualPenaltyPts / Math.max(1, rawAccrualPenaltyPts));
 
+  // Sync effectiveModule with Tier-2 Adaptive Classification (including Quality Compounder DNA Override)
+  if (sectorProfile.classification?.resolvedAppliedModule) {
+    effectiveModule = sectorProfile.classification.resolvedAppliedModule;
+  }
+  const isTier2QualityCompounderOverride = Boolean(
+    sectorProfile.classification?.isQualityCompounderOverride
+  );
+
   // FASE 3 Unified Normalization Policy from SectorProfile (MEDIAN_5Y | MID_CYCLE_7_10Y | MIN_TTM_AVG3Y | TTM)
-  const activeProfile = sectorProfile.classification!.profile;
+  let activeProfile = sectorProfile.classification!.profile;
   const histRoe5YPct =
     typeof stock.roeMedian5YPct === 'number' && stock.roeMedian5YPct > 0
       ? stock.roeMedian5YPct
@@ -3125,26 +3178,32 @@ export function evaluateJoeliardiOosFundamental(
   const histRoe3YPct = (rawTickerData.roeAvg3Y ?? histRoe5YPct / 100) * 100;
 
   const valuationRoeBasisPct =
-    activeProfile.normalizationPolicy === 'MID_CYCLE_7_10Y' ||
-    sectorProfile.regime === 'CYCLICAL_COMMODITIES'
+    !isTier2QualityCompounderOverride &&
+    (activeProfile.normalizationPolicy === 'MID_CYCLE_7_10Y' ||
+      sectorProfile.regime === 'CYCLICAL_COMMODITIES')
       ? Math.min(
           ttmRoeBasisPct,
           Math.max(6.0, histRoe5YPct * 1.08)
         )
       : activeProfile.normalizationPolicy === 'MEDIAN_5Y'
       ? Number((0.65 * ttmRoeBasisPct + 0.35 * histRoe5YPct).toFixed(2))
-      : activeProfile.normalizationPolicy === 'MIN_TTM_AVG3Y'
+      : activeProfile.normalizationPolicy === 'MIN_TTM_AVG3Y' && !isTier2QualityCompounderOverride
       ? Number(Math.min(ttmRoeBasisPct, Math.max(6.0, histRoe3YPct * 1.05)).toFixed(2))
       : ttmRoeBasisPct;
 
   // FIX 1.1 & FASE 3: Single Source of Truth Damodaran/Gordon Equilibrium Justified PBV
   // justifiedPbv = (sustainableRoe - g) / (ke - g), clamped to [0.35x, 6.50x].
   // Mathematical Invariant: If sustainableRoe < dynamicCostOfEquityPct, justifiedPbv MUST be < 1.00x.
+  // BUGFIX: activeProfile.gCap (e.g. 5.2) and activeProfile.terminalSpreadMin (e.g. 3.8) are already in percentage points (%).
   const sustainableRoe = Math.min(30.5, valuationRoeBasisPct);
-  const retentionRatio = Math.max(0.15, 1 - historicalDpr3YPct / 100);
-  const rawGrowth = sustainableRoe * retentionRatio * 0.48;
-  const profileGCapPct = activeProfile.gCap * 100;
-  const profileSpreadMinPct = activeProfile.terminalSpreadMin * 100;
+  const retentionRatio = Math.max(0.32, 1 - Math.min(68.0, historicalDpr3YPct) / 100);
+  const rawGrowth = sustainableRoe * retentionRatio * 0.72;
+  const profileGCapPct =
+    activeProfile.gCap > 1 ? activeProfile.gCap : activeProfile.gCap * 100;
+  const profileSpreadMinPct =
+    activeProfile.terminalSpreadMin > 1
+      ? activeProfile.terminalSpreadMin
+      : activeProfile.terminalSpreadMin * 100;
   const sustainableGrowthRatePct = Number(
     Math.max(
       2.0,
@@ -3246,7 +3305,7 @@ export function evaluateJoeliardiOosFundamental(
   });
 
   // METHOD 2: Modular ValuationEngine Router (Steady Compounder, 2-Stage Capex Aggressor, or Pure Cyclical)
-  const routedValResult = ValuationEngine.calculateFairValue({
+  let routedValResult = ValuationEngine.calculateFairValue({
     stock: {
       ...stock,
       sector: effectiveSectorForValuation,
@@ -3278,6 +3337,154 @@ export function evaluateJoeliardiOosFundamental(
     tickRounder: roundToIdxTick
   });
 
+  // METHOD 3 (FUNDAMENTAL LEG 3): Historical 5Y EV/EBITDA Band (Asset-Heavy / Healthcare / Infra) or 5Y Normalized PBV Band (Financials / Properties)
+  const evEbitda5YAnchor = calculateHistoricalEvEbitda5YAnchor({
+    ticker: stock.ticker,
+    sector:
+      sectorProfile.regime === 'FINANCIALS' || sectorProfile.regime === 'PROPERTIES_REAL_ESTATE'
+        ? 'Financials'
+        : !isTier2QualityCompounderOverride && sectorProfile.regime === 'CYCLICAL_COMMODITIES'
+        ? 'Energy'
+        : isTier2QualityCompounderOverride
+        ? 'Consumer Non-Cyclicals'
+        : stock.sector,
+    price,
+    sharesOutstanding: rawTickerData.sharesOutstanding,
+    ebitdaTTM: rawTickerData.ebitdaTTM,
+    operatingProfitTTM: rawTickerData.operatingProfitTTM,
+    daTTM: rawTickerData.daTTM,
+    totalDebt: rawTickerData.totalDebt,
+    cashAndEquivalents: rawTickerData.cashAndEquivalents,
+    equityAttributable: rawTickerData.equityAttributable,
+    debtToEquity: der,
+    evToEbitda5YMean: rawTickerData.evToEbitda5YMean,
+    bvps: estimatedBvpsIdr,
+    pbv10YMean: routedValResult.pbv10YMean,
+    qualityMultiplier:
+      derPenaltyMultiplier * accrualQualityMultiplier * hscDiscountMultiplier,
+    tickRounder: roundToIdxTick
+  });
+
+  // P1.3: DYNAMIC ENSEMBLE WEIGHTING MODULE (Pure Intrinsic Fundamental Legs Only)
+  let dynamicEnsemble = DynamicEnsembleWeighter.computeWeights({
+    sector: effectiveSectorForValuation,
+    route: routedValResult.route,
+    effectiveModule,
+    sectorLabel: `Modul Sektor (${routedValResult.sectorPrimaryMetricShort})`,
+    sectorPriceIdr: routedValResult.sectorSpecificFairValueIdr,
+    rimLabel: `RIM ${rimFadeYears}Y (ω=${rimPersistenceOmega})`,
+    rimPriceIdr: rimFairValueIdr,
+    relValLabel: evEbitda5YAnchor.anchorLabel,
+    relValPriceIdr: evEbitda5YAnchor.anchorFairPriceIDR,
+    ocfToNetIncomeRatio: sectorProfile.isOcfNiAccrualBypassed ? 1.05 : ocfToNetIncomeRatio,
+    peerCorrelation: 0.85,
+    hscDiscountMultiplier: 1.0,
+    profileValuationLegs: activeProfile.valuationLegs,
+    tickRounder: roundToIdxTick
+  });
+
+  let ensembleAgg = computeTypeSafeEnsembleFairValue(
+    dynamicEnsemble.legs,
+    1.0,
+    roundToIdxTick,
+    sectorProfile.isOcfNiAccrualBypassed ? 1.0 : dynamicEnsemble.ensembleAntiJunkMultiplier
+  );
+
+  // PRE-CHECK WITH runFinancialAudit():
+  // If Quality-Valuation Contradiction is detected on an issuer not yet on STEADY_COMPOUNDER,
+  // auto-reroute to STEADY_COMPOUNDER (Quality Compounder) and re-evaluate ensemble weights!
+  const prelimIntrinsicIdr = sectorProfile.isPeAndRimBlockedByNegativeProfit
+    ? roundToIdxTick(Math.max(50, estimatedBvpsIdr * 0.85))
+    : ensembleAgg.intrinsicValueIdr;
+  const prelimAuditCheck = runFinancialAudit({
+    ticker: stock.ticker,
+    sector: stock.sector,
+    price,
+    intrinsicValueIdr: prelimIntrinsicIdr,
+    epsTTM: estimatedEpsIdr,
+    bvps: estimatedBvpsIdr,
+    roeTTMPct: ttmRoeBasisPct,
+    debtToEquity: der,
+    ocfToNetIncomeRatio: sectorProfile.isOcfNiAccrualBypassed ? 1.05 : ocfToNetIncomeRatio,
+    ocfTTMIdr: rawTickerData.ocfTTM,
+    netPayoutYieldPct,
+    dividendYieldPct: forwardDividendYieldPct,
+    buybackYieldPct: corpIntercept.dynamicBuybackYieldPct,
+    earningsYieldPct: impliedPer > 0 ? 100 / impliedPer : 0,
+    earningsGrowthYoYPct: corpIntercept.earningsGrowthYoYPct,
+    currentRoute: routedValResult.route,
+    isTier2QualityCompounderOverride,
+    isRfStale: sanityReport.isRfStale,
+    isCoreFundamentalsSeed: prelimConvictionCappedByLineage
+  });
+
+  if (
+    prelimAuditCheck.isQualityValuationContradiction &&
+    prelimAuditCheck.isAutoReroutedToCompounder &&
+    routedValResult.route !== 'STEADY_COMPOUNDER'
+  ) {
+    effectiveModule = 'Compounder';
+    activeProfile = {
+      ...SECTOR_PROFILES.CONSUMER_NON_CYCLICAL_FMCG,
+      archetype: activeProfile.archetype,
+      subArchetype: 'AUDIT_AUTO_REROUTED_QUALITY_COMPOUNDER'
+    };
+    routedValResult = ValuationEngine.calculateFairValue({
+      stock: {
+        ...stock,
+        sector: effectiveSectorForValuation,
+        roe: ttmRoeBasisPct,
+        debtToEquity: der,
+        ocfToNetIncomeRatio,
+        capexToDaRatio: syncedCapexToDaRatio,
+        capexToRevenueRatio: syncedCapexToRevenueRatio,
+        accrualRatioToAssets: sectorProfile.isOcfNiAccrualBypassed ? 0 : accrualRatioToAssets
+      },
+      price,
+      ttmEpsIdr: trailingEpsIdr,
+      forwardEpsIdr: estimatedEpsIdr,
+      currentBvpsIdr: estimatedBvpsIdr,
+      ttmRoePct: ttmRoeBasisPct,
+      forwardRoePct: ttmRoeBasisPct,
+      ocfToNetIncomeRatio: sectorProfile.isOcfNiAccrualBypassed ? 1.05 : ocfToNetIncomeRatio,
+      grossProfitabilityToAssets: sectorProfile.isGpaBypassed ? 22.0 : grossProfitabilityToAssets,
+      dynamicCostOfEquityPct,
+      baseGrowthRatePct: sustainableGrowthRatePct,
+      derPenaltyMultiplier,
+      accrualQualityMultiplier,
+      hscDiscountMultiplier,
+      catalystValuationMultiplier: effectiveCatalystMultiplier,
+      rimFairValueIdr,
+      rimFadeYears,
+      rimPersistenceOmega,
+      sbn10YYieldPct: sbnSpot10YPct || 6.75,
+      forceRouteOverride: 'STEADY_COMPOUNDER',
+      tickRounder: roundToIdxTick
+    });
+    dynamicEnsemble = DynamicEnsembleWeighter.computeWeights({
+      sector: effectiveSectorForValuation,
+      route: 'STEADY_COMPOUNDER',
+      effectiveModule: 'Compounder',
+      sectorLabel: `Modul Sektor (${routedValResult.sectorPrimaryMetricShort})`,
+      sectorPriceIdr: routedValResult.sectorSpecificFairValueIdr,
+      rimLabel: `RIM ${rimFadeYears}Y (ω=${rimPersistenceOmega})`,
+      rimPriceIdr: rimFairValueIdr,
+      relValLabel: evEbitda5YAnchor.anchorLabel,
+      relValPriceIdr: evEbitda5YAnchor.anchorFairPriceIDR,
+      ocfToNetIncomeRatio: sectorProfile.isOcfNiAccrualBypassed ? 1.05 : ocfToNetIncomeRatio,
+      peerCorrelation: 0.85,
+      hscDiscountMultiplier: 1.0,
+      profileValuationLegs: activeProfile.valuationLegs,
+      tickRounder: roundToIdxTick
+    });
+    ensembleAgg = computeTypeSafeEnsembleFairValue(
+      dynamicEnsemble.legs,
+      1.0,
+      roundToIdxTick,
+      sectorProfile.isOcfNiAccrualBypassed ? 1.0 : dynamicEnsemble.ensembleAntiJunkMultiplier
+    );
+  }
+
   const {
     route: valuationModuleRoute,
     moduleLabel: valuationModuleLabel,
@@ -3306,32 +3513,6 @@ export function evaluateJoeliardiOosFundamental(
     adjustedGrowthRatePct
   } = routedValResult;
 
-  // METHOD 3 (FUNDAMENTAL LEG 3): Historical 5Y EV/EBITDA Band (Asset-Heavy / Healthcare / Infra) or 5Y Normalized PBV Band (Financials / Properties)
-  const evEbitda5YAnchor = calculateHistoricalEvEbitda5YAnchor({
-    ticker: stock.ticker,
-    sector:
-      sectorProfile.regime === 'FINANCIALS' || sectorProfile.regime === 'PROPERTIES_REAL_ESTATE'
-        ? 'Financials'
-        : sectorProfile.regime === 'CYCLICAL_COMMODITIES'
-        ? 'Energy'
-        : stock.sector,
-    price,
-    sharesOutstanding: rawTickerData.sharesOutstanding,
-    ebitdaTTM: rawTickerData.ebitdaTTM,
-    operatingProfitTTM: rawTickerData.operatingProfitTTM,
-    daTTM: rawTickerData.daTTM,
-    totalDebt: rawTickerData.totalDebt,
-    cashAndEquivalents: rawTickerData.cashAndEquivalents,
-    equityAttributable: rawTickerData.equityAttributable,
-    debtToEquity: der,
-    evToEbitda5YMean: rawTickerData.evToEbitda5YMean,
-    bvps: estimatedBvpsIdr,
-    pbv10YMean,
-    qualityMultiplier:
-      derPenaltyMultiplier * accrualQualityMultiplier * hscDiscountMultiplier,
-    tickRounder: roundToIdxTick
-  });
-
   // P1.3: Statistical Arbitrage Computed SOLELY as Tactical Overlay (Removed from Intrinsic Ensemble)
   const splitCalibratedStock: StockMetrics =
     Math.abs(corpIntercept.splitRatioDivisor - 1) > 1e-4 && stock.return30D < -35
@@ -3348,7 +3529,8 @@ export function evaluateJoeliardiOosFundamental(
     forwardDividendYieldPct: totalShareholderYieldPct,
     sectorSpecificFairValueIdr,
     rimFairValueIdr,
-    effectiveModule
+    effectiveModule,
+    resolvedStatArbPeerTicker: sectorProfile.classification?.resolvedStatArbPeerTicker
   });
   const {
     agnosticPeerFairValueIdr,
@@ -3362,12 +3544,14 @@ export function evaluateJoeliardiOosFundamental(
     statArbSignal,
     statArbSignalLabel,
     statArbImpliedTargetIdr,
-    statArbRationale
+    statArbRationale,
+    isStatArbValid
   } = statArbResult;
 
   const tacticalOverlay = buildTacticalOverlayFromStatArb({
     pairTicker: statArbPeerTicker,
     pairName: statArbPeerName,
+    isStatArbValid,
     correlation: statArbCorrelation,
     betaRatio: statArbBetaRatio,
     zScore: statArbZScore,
@@ -3378,29 +3562,6 @@ export function evaluateJoeliardiOosFundamental(
     rationale: statArbRationale
   });
 
-  // P1.3: DYNAMIC ENSEMBLE WEIGHTING MODULE (Pure Intrinsic Fundamental Legs Only: Sector/2-Stage RI + Multi-Stage RIM + Historical EV/EBITDA or PBV 5Y Band)
-  const dynamicEnsemble = DynamicEnsembleWeighter.computeWeights({
-    sector: effectiveSectorForValuation,
-    route: valuationModuleRoute,
-    effectiveModule,
-    sectorLabel: `Modul Sektor (${sectorPrimaryMetricShort})`,
-    sectorPriceIdr: sectorSpecificFairValueIdr,
-    rimLabel: `RIM ${rimFadeYears}Y (ω=${rimPersistenceOmega})`,
-    rimPriceIdr: rimFairValueIdr,
-    relValLabel: evEbitda5YAnchor.anchorLabel,
-    relValPriceIdr: evEbitda5YAnchor.anchorFairPriceIDR,
-    ocfToNetIncomeRatio: sectorProfile.isOcfNiAccrualBypassed ? 1.05 : ocfToNetIncomeRatio,
-    peerCorrelation: 0.85, // Pure fundamental 5Y anchor is always active
-    hscDiscountMultiplier: 1.0,
-    tickRounder: roundToIdxTick
-  });
-
-  const ensembleAgg = computeTypeSafeEnsembleFairValue(
-    dynamicEnsemble.legs,
-    1.0,
-    roundToIdxTick,
-    sectorProfile.isOcfNiAccrualBypassed ? 1.0 : dynamicEnsemble.ensembleAntiJunkMultiplier
-  );
   // MODUL 1.6: Block negative P/E & RIM distortion for unprofitable Tech/Growth issuers
   const intrinsicValueIdr = sectorProfile.isPeAndRimBlockedByNegativeProfit
     ? roundToIdxTick(Math.max(50, estimatedBvpsIdr * 0.85))
@@ -3428,8 +3589,53 @@ export function evaluateJoeliardiOosFundamental(
     tickRounder: roundToIdxTick
   });
 
+  // FIX 1.1: Single Source of Truth Justified PBV across KPI Card 4, Primary Narrative, and Module 2
+  const effectiveSustainableRoeForPbv =
+    valuationModuleRoute === 'PURE_CYCLICAL' ? normalizedRoePct : sustainableRoe;
+  const rawFinalJustifiedPbv =
+    (effectiveSustainableRoeForPbv - sustainableGrowthRatePct) /
+    Math.max(2.0, dynamicCostOfEquityPct - sustainableGrowthRatePct);
+  const finalJustifiedPbvUpperClamp =
+    effectiveSustainableRoeForPbv < dynamicCostOfEquityPct ? 0.99 : 6.50;
+  const singleSourceJustifiedPbv = Number(
+    Math.max(0.35, Math.min(finalJustifiedPbvUpperClamp, rawFinalJustifiedPbv)).toFixed(2)
+  );
+
+  // Mathematical Consistency of Fair Multiples at Fair Value: Fair Value / EPS and Fair Value / BVPS
+  const joeliardiFairPer = Number((intrinsicValueIdr / Math.max(1, estimatedEpsIdr)).toFixed(2));
+  const joeliardiFairPbv = Number((intrinsicValueIdr / Math.max(1, estimatedBvpsIdr)).toFixed(2));
+  const damodaranJustifiedPbv = singleSourceJustifiedPbv;
+
+  // MANDATORY PRE-RENDER FINANCIAL AUDITOR (`runFinancialAudit()`)
+  const financialAuditReport = runFinancialAudit({
+    ticker: stock.ticker,
+    sector: stock.sector,
+    price,
+    intrinsicValueIdr,
+    epsTTM: estimatedEpsIdr,
+    bvps: estimatedBvpsIdr,
+    roeTTMPct: ttmRoeBasisPct,
+    debtToEquity: der,
+    ocfToNetIncomeRatio: sectorProfile.isOcfNiAccrualBypassed ? 1.05 : ocfToNetIncomeRatio,
+    ocfTTMIdr: rawTickerData.ocfTTM,
+    netPayoutYieldPct,
+    dividendYieldPct: forwardDividendYieldPct,
+    buybackYieldPct: corpIntercept.dynamicBuybackYieldPct,
+    earningsYieldPct: impliedPer > 0 ? 100 / impliedPer : 0,
+    earningsGrowthYoYPct: corpIntercept.earningsGrowthYoYPct,
+    currentRoute: valuationModuleRoute,
+    isTier2QualityCompounderOverride:
+      isTier2QualityCompounderOverride || prelimAuditCheck.isAutoReroutedToCompounder,
+    reportedFairPer: joeliardiFairPer,
+    reportedFairPbv: joeliardiFairPbv,
+    isStatArbValid,
+    isRfStale: sanityReport.isRfStale,
+    isCoreFundamentalsSeed: prelimConvictionCappedByLineage
+  });
+
   // Package final comprehensive ValuationReport object
   const combinedUiNotifications = [
+    ...(financialAuditReport.warnings.length > 0 ? financialAuditReport.warnings : []),
     ...(sectorProfile.isCyclePeakWarning && sectorProfile.cyclePeakWarningText
       ? [sectorProfile.cyclePeakWarningText]
       : []),
@@ -3456,25 +3662,9 @@ export function evaluateJoeliardiOosFundamental(
       : dynamicEnsemble.ensembleAntiJunkMultiplier
   });
 
-  // FIX 1.1: Single Source of Truth Justified PBV across KPI Card 4, Primary Narrative, and Module 2
-  // Compute justifiedPbv once using Gordon/Damodaran equilibrium: (sustainableRoe - g) / (ke - g), clamped [0.35x, 6.50x].
-  // Mathematical Invariant: If sustainableRoe < dynamicCostOfEquityPct (e.g., Cyclical Normalized ROE < Ke), justifiedPbv MUST be < 1.00x.
-  const effectiveSustainableRoeForPbv =
-    valuationModuleRoute === 'PURE_CYCLICAL' ? normalizedRoePct : sustainableRoe;
-  const rawFinalJustifiedPbv =
-    (effectiveSustainableRoeForPbv - sustainableGrowthRatePct) /
-    Math.max(2.0, dynamicCostOfEquityPct - sustainableGrowthRatePct);
-  const finalJustifiedPbvUpperClamp =
-    effectiveSustainableRoeForPbv < dynamicCostOfEquityPct ? 0.99 : 6.50;
-  const singleSourceJustifiedPbv = Number(
-    Math.max(0.35, Math.min(finalJustifiedPbvUpperClamp, rawFinalJustifiedPbv)).toFixed(2)
-  );
-
-  const joeliardiFairPer = Number((intrinsicValueIdr / Math.max(1, estimatedEpsIdr)).toFixed(2));
-  const joeliardiFairPbv = singleSourceJustifiedPbv;
-  const damodaranJustifiedPbv = singleSourceJustifiedPbv;
   const isSectorPrimaryPbvBased =
-    (sectorPrimaryMetricShort || '').toUpperCase().includes('PBV');
+    (sectorPrimaryMetricShort || '').toUpperCase() === 'JUSTIFIED PBV' ||
+    (sectorPrimaryMetricShort || '').toUpperCase() === 'NORM PBV';
   const sectorPrimaryImpliedMultiple = isSectorPrimaryPbvBased
     ? impliedPbv
     : rawSectorPrimaryImpliedMultiple;
@@ -4291,19 +4481,27 @@ export function evaluateJoeliardiOosFundamental(
         };
 
   // FIX 3.2: Subordinate Tactical Overlay StatArb so it NEVER contradicts the primary fundamental signal
-  const subordinatedStatArbFollowUp =
-    Math.abs(statArbZScore) > 2.0
-      ? `Langkah Follow-Up: Catatan Tactical Pair Overlay (0% Bobot Intrinsik): pasangan ${statArbPeerTicker} relatif lebih terdiskon secara statistik bagi trader pair, namun keputusan alokasi inti tetap mengacu pada sinyal fundamental utama (${primaryExecutionActionLabel}).`
-      : `Langkah Follow-Up: Sinyal StatArb Netral — ikuti disiplin eksekusi fundamental utama (${primaryExecutionActionLabel}).`;
+  let updatedStatArbRationale = statArbRationale;
+  if (!isStatArbValid || statArbPeerTicker === 'N/A') {
+    tacticalOverlay.actionLabel = 'N/A - Tidak ada peer fundamental yang berkorelasi';
+    tacticalOverlay.rationale =
+      'N/A - Tidak ada peer fundamental yang berkorelasi (larangan keras memasangkan saham lintas model bisnis atau sub-industri yang tidak berkointegrasi).';
+    updatedStatArbRationale = tacticalOverlay.rationale;
+  } else {
+    const subordinatedStatArbFollowUp =
+      Math.abs(statArbZScore) > 2.0
+        ? `Langkah Follow-Up: Catatan Tactical Pair Overlay (0% Bobot Intrinsik): pasangan ${statArbPeerTicker} relatif lebih terdiskon secara statistik bagi trader pair, namun keputusan alokasi inti tetap mengacu pada sinyal fundamental utama (${primaryExecutionActionLabel}).`
+        : `Langkah Follow-Up: Sinyal StatArb Netral — ikuti disiplin eksekusi fundamental utama (${primaryExecutionActionLabel}).`;
 
-  const updatedStatArbRationale = statArbRationale.includes('Langkah Follow-Up:')
-    ? `${statArbRationale.split('Langkah Follow-Up:')[0].trim()} ${subordinatedStatArbFollowUp}`
-    : `${statArbRationale} ${subordinatedStatArbFollowUp}`;
-  tacticalOverlay.rationale = updatedStatArbRationale;
-  tacticalOverlay.actionLabel =
-    Math.abs(statArbZScore) > 2.0
-      ? `TACTICAL PAIR OVERLAY (0% BOBOT INTRINSIK) · IKUTI AKSI UTAMA`
-      : `SINYAL STAT-ARB NETRAL · IKUTI AKSI UTAMA (${primaryExecutionActionLabel})`;
+    updatedStatArbRationale = statArbRationale.includes('Langkah Follow-Up:')
+      ? `${statArbRationale.split('Langkah Follow-Up:')[0].trim()} ${subordinatedStatArbFollowUp}`
+      : `${statArbRationale} ${subordinatedStatArbFollowUp}`;
+    tacticalOverlay.rationale = updatedStatArbRationale;
+    tacticalOverlay.actionLabel =
+      Math.abs(statArbZScore) > 2.0
+        ? `TACTICAL PAIR OVERLAY (0% BOBOT INTRINSIK) · IKUTI AKSI UTAMA`
+        : `SINYAL STAT-ARB NETRAL · IKUTI AKSI UTAMA (${primaryExecutionActionLabel})`;
+  }
 
   const intrinsicAccumCeiling = roundToIdxTick(
     intrinsicValueIdr * (1 - decisionTree.dynamicRequiredMosPct / 100)
@@ -4850,6 +5048,9 @@ export function evaluateJoeliardiOosFundamental(
     isConvictionCappedBySeed: convictionCappedByLineage,
     seedCapWarningReason: convictionCapReason,
     sectorClassification: sectorProfile.classification,
+    isQualityCompounderOverride:
+      isTier2QualityCompounderOverride || prelimAuditCheck.isAutoReroutedToCompounder,
+    financialAuditReport,
     decision: {
       ticker: stock.ticker,
       name: stock.name,
@@ -4897,13 +5098,16 @@ export function evaluateJoeliardiOosFundamental(
       classificationConfidence: sectorProfile.classification?.classificationConfidence,
       isSectorDataIncomplete: sectorProfile.isSectorDataIncomplete,
       sectorDataFlags: sectorProfile.sectorDataFlags,
+      isQualityCompounderOverride:
+        isTier2QualityCompounderOverride || prelimAuditCheck.isAutoReroutedToCompounder,
       kePremiaBps: sbnCurve.kePremiaBps,
       erpAsOfDate: sbnCurve.erpAsOfDate,
       erpSource: sbnCurve.erpSource,
       continuousDispersionPenaltyPts: dispersionPenalty.continuousPenaltyPts,
       fairValueRangeIdr: dispersionPenalty.fairValueRangeIdr,
       roeFadeScenarios,
-      keSensitivityMatrix
+      keSensitivityMatrix,
+      financialAuditReport
     }
   };
 }

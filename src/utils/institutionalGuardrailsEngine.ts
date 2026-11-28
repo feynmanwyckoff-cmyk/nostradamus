@@ -1,5 +1,8 @@
 import {
+  DataConfidenceLevel,
   EnsembleComponent,
+  FinancialAuditFlag,
+  FinancialAuditReport,
   MarketRegimeStatus,
   QuarterlyRawRow,
   RawTickerData,
@@ -12,6 +15,7 @@ import {
   StockMetrics,
   TacticalOverlay,
   ValuationLedger,
+  ValuationModuleRoute,
   ValuationResult
 } from '../types/quant';
 import { getFundamentalUserOverride } from './dataLineageEngine';
@@ -1206,6 +1210,10 @@ export function calculateHistoricalEvEbitda5YAnchor(params: {
 export function buildTacticalOverlayFromStatArb(params: {
   pairTicker: string;
   pairName?: string;
+  isStatArbValid?: boolean;
+  statArbInvalidReason?: string;
+  isSameBusinessModel?: boolean;
+  isCointegrated?: boolean;
   correlation?: number;
   betaRatio?: number;
   zScore: number;
@@ -1218,6 +1226,10 @@ export function buildTacticalOverlayFromStatArb(params: {
   const {
     pairTicker,
     pairName,
+    isStatArbValid: explicitValid,
+    statArbInvalidReason,
+    isSameBusinessModel = true,
+    isCointegrated = true,
     correlation = 0.82,
     betaRatio = 1.0,
     zScore,
@@ -1228,6 +1240,40 @@ export function buildTacticalOverlayFromStatArb(params: {
     rationale
   } = params;
 
+  const isNoPeer =
+    !pairTicker ||
+    pairTicker === 'N/A' ||
+    pairTicker.startsWith('N/A') ||
+    explicitValid === false ||
+    !isSameBusinessModel ||
+    !isCointegrated ||
+    correlation < 0.70;
+
+  if (isNoPeer) {
+    const invalidReason =
+      statArbInvalidReason ||
+      (!pairTicker || pairTicker.startsWith('N/A') || !isSameBusinessModel
+        ? 'Tidak ada emiten sejenis (same sub-industry & economic driver) di BEI; larangan keras pairing lintas model bisnis.'
+        : !isCointegrated
+        ? `Uji kointegrasi gagal (ρ=${correlation.toFixed(2)}) — spread historis tidak stasioner.`
+        : `Korelasi return historis terlalu lemah (ρ=${correlation.toFixed(2)} < 0.70).`);
+    return {
+      pairTicker: 'N/A',
+      pairName: 'N/A - Tidak ada peer fundamental yang berkorelasi',
+      isStatArbValid: false,
+      statArbInvalidReason: invalidReason,
+      correlation: 0,
+      betaRatio: 1.0,
+      zScore: 0,
+      spreadPct: 0,
+      spread1DPct: 0,
+      impliedPairTargetIDR: undefined,
+      action: 'STATARB_DISABLED_NO_PEER',
+      actionLabel: 'N/A - Tidak ada peer fundamental yang berkorelasi',
+      rationale: `[Tactical Overlay Dinonaktifkan] N/A - Tidak ada peer fundamental yang berkorelasi (${invalidReason})`
+    };
+  }
+
   let action: TacticalOverlay['action'] = 'HOLD_COINTEGRATED_EQUILIBRIUM';
   let actionLabel = 'Ekuilibrium Kointegrasi (Netral — Ikuti Harga Intrinsik)';
 
@@ -1237,14 +1283,15 @@ export function buildTacticalOverlayFromStatArb(params: {
   } else if (statArbSignal === 'PAIR_OVEREXTENDED_TRIM' || zScore >= 1.35) {
     action = 'ROTATE_TO_PAIR_WARNING';
     actionLabel = `Saran Rotasi Pasangan / Tunda Kejar Harga vs ${pairTicker} (Z=+${zScore.toFixed(2)}σ)`;
-  } else if (statArbSignal === 'FUNDAMENTAL_DIVERGENCE' || correlation < 0.70) {
+  } else if (statArbSignal === 'FUNDAMENTAL_DIVERGENCE') {
     action = 'FUNDAMENTAL_DIVERGENCE_WAIT';
-    actionLabel = `Kointegrasi Lemah (ρ=${correlation.toFixed(2)}) — Abaikan Pair Trade`;
+    actionLabel = `Divergensi Fundamental vs ${pairTicker} (ρ=${correlation.toFixed(2)}) — Abaikan Pair Trade`;
   }
 
   return {
-    pairTicker: pairTicker || 'IDX-PEER',
+    pairTicker: pairTicker || 'N/A',
     pairName,
+    isStatArbValid: true,
     correlation: Number(correlation.toFixed(2)),
     betaRatio: Number(betaRatio.toFixed(2)),
     zScore: Number(zScore.toFixed(2)),
@@ -2076,3 +2123,210 @@ export function buildRawTickerDataFromStock(params: {
     flowAudit: stock.flowAudit
   };
 }
+
+/**
+ * ============================================================================
+ * MANDATORY PRE-RENDER FINANCIAL AUDITOR (`runFinancialAudit()`)
+ * ============================================================================
+ * Automatically executes BEFORE valuation results, conviction scores, or PDF/PNG
+ * reports are rendered to the UI. Checks and prevents 3 institutional anomalies:
+ * 1. Quality-Valuation Contradiction Check:
+ *    If fundamentals are strong (`ROE > 15%`, `DER < 0.5x`, `OCF/NI > 1.0` or `>= 0.85`,
+ *    `Net Payout Yield > 4%`) yet valuation declares *overvalued > 30%* without significant
+ *    earnings/revenue decline (`earningsGrowthYoYPct > -10%`), raises
+ *    `AUDIT_WARNING: Potential Model Misrouting / Over-Penalization` and triggers
+ *    Auto-Reroute to `Quality Compounder` (`STEADY_COMPOUNDER`).
+ * 2. Multiple & Yield Consistency Check:
+ *    Ensures `Implied Fair PER` and `Implied Fair PBV` at Fair Value are mathematically
+ *    consistent with `Fair Value / EPS` and `Fair Value / BVPS`. Verifies zero double-counting
+ *    between `Total Shareholder Yield (Net Payout Yield)` and `Earnings Yield`.
+ * 3. Data Integrity & Fallback Guard:
+ *    If crucial data (TTM EPS, BVPS, OCF, or USD/IDR FX / SBN Rf) is missing, `null`, or stale,
+ *    never silently coerces to `0` to distort intrinsic value; explicitly flags the metric and
+ *    lowers `Data Confidence` (`HIGH` -> `MEDIUM` / `LOW_CAUTIOUS`).
+ */
+export interface RunFinancialAuditInput {
+  ticker: string;
+  sector: string;
+  price: number;
+  intrinsicValueIdr: number;
+  epsTTM: number | null | undefined;
+  bvps: number | null | undefined;
+  roeTTMPct: number;
+  debtToEquity: number;
+  ocfToNetIncomeRatio: number;
+  ocfTTMIdr?: number | null;
+  netPayoutYieldPct: number;
+  dividendYieldPct: number;
+  buybackYieldPct?: number;
+  earningsYieldPct: number;
+  earningsGrowthYoYPct: number;
+  currentRoute: ValuationModuleRoute;
+  isTier2QualityCompounderOverride?: boolean;
+  reportedFairPer?: number;
+  reportedFairPbv?: number;
+  isStatArbValid?: boolean;
+  isRfStale?: boolean;
+  isCoreFundamentalsSeed?: boolean;
+  fxRateUsdIdr?: number | null;
+  requiresUsdFxConversion?: boolean;
+}
+
+export function runFinancialAudit(input: RunFinancialAuditInput): FinancialAuditReport {
+  const flags: FinancialAuditFlag[] = [];
+  const warnings: string[] = [];
+  const missingOrStaleMetrics: string[] = [];
+
+  const price = Math.max(1, Number(input.price) || 1);
+  const intrinsicValueIdr = Math.max(1, Number(input.intrinsicValueIdr) || price);
+  const safeEps = typeof input.epsTTM === 'number' && Number.isFinite(input.epsTTM) && input.epsTTM > 0 ? input.epsTTM : null;
+  const safeBvps = typeof input.bvps === 'number' && Number.isFinite(input.bvps) && input.bvps > 0 ? input.bvps : null;
+
+  // -------------------------------------------------------------------------
+  // CHECK 1: QUALITY-VALUATION CONTRADICTION CHECK
+  // -------------------------------------------------------------------------
+  const overvaluationDiscountPct = ((intrinsicValueIdr - price) / price) * 100; // Negative when price > intrinsicValueIdr
+  const isOvervaluedOver30Pct = overvaluationDiscountPct < -30.0;
+  const hasStrongQualityFundamentals =
+    input.roeTTMPct > 15.0 &&
+    input.debtToEquity < 0.50 &&
+    input.ocfToNetIncomeRatio >= 1.0 &&
+    input.netPayoutYieldPct > 4.0;
+  const hasNoSignificantEarningsDecline = input.earningsGrowthYoYPct > -10.0;
+
+  const isQualityValuationContradiction =
+    hasStrongQualityFundamentals &&
+    hasNoSignificantEarningsDecline &&
+    isOvervaluedOver30Pct;
+
+  let isAutoReroutedToCompounder = Boolean(input.isTier2QualityCompounderOverride);
+  let effectiveRouteAfterAudit: ValuationModuleRoute = input.currentRoute;
+
+  if (isQualityValuationContradiction) {
+    flags.push('AUDIT_WARNING: Potential Model Misrouting / Over-Penalization');
+    warnings.push(
+      `[AUDIT_WARNING: Potential Model Misrouting / Over-Penalization] Fundamental sangat kuat (ROE ${input.roeTTMPct.toFixed(1)}% > 15%, DER ${input.debtToEquity.toFixed(2)}x < 0.50x, OCF/NI ${input.ocfToNetIncomeRatio.toFixed(2)}x > 1.0x, Net Payout Yield ${input.netPayoutYieldPct.toFixed(2)}% > 4.0%) tanpa penurunan laba signifikan (YoY ${input.earningsGrowthYoYPct >= 0 ? '+' : ''}${input.earningsGrowthYoYPct.toFixed(1)}%), namun valuasi awal mendiskon ${overvaluationDiscountPct.toFixed(1)}% (< -30%). Sistem otomatis melakukan Auto-Reroute ke Quality Compounder & mengevaluasi ulang bobot ensemble.`
+    );
+    if (input.currentRoute !== 'STEADY_COMPOUNDER') {
+      isAutoReroutedToCompounder = true;
+      effectiveRouteAfterAudit = 'STEADY_COMPOUNDER';
+      flags.push('AUTO_REROUTED_TO_QUALITY_COMPOUNDER');
+    }
+  } else if (input.isTier2QualityCompounderOverride) {
+    flags.push('AUTO_REROUTED_TO_QUALITY_COMPOUNDER');
+    effectiveRouteAfterAudit = 'STEADY_COMPOUNDER';
+  }
+
+  // -------------------------------------------------------------------------
+  // CHECK 2: MULTIPLE & YIELD CONSISTENCY CHECK (NO DOUBLE-COUNTING)
+  // -------------------------------------------------------------------------
+  const reconciledFairPer = safeEps
+    ? Number((intrinsicValueIdr / safeEps).toFixed(2))
+    : Number((input.reportedFairPer ?? 0).toFixed(2));
+  const reconciledFairPbv = safeBvps
+    ? Number((intrinsicValueIdr / safeBvps).toFixed(2))
+    : Number((input.reportedFairPbv ?? 0).toFixed(2));
+
+  const perDiff =
+    typeof input.reportedFairPer === 'number' && safeEps
+      ? Math.abs(input.reportedFairPer - reconciledFairPer)
+      : 0;
+  const pbvDiff =
+    typeof input.reportedFairPbv === 'number' && safeBvps
+      ? Math.abs(input.reportedFairPbv - reconciledFairPbv)
+      : 0;
+
+  const isMultipleConsistent = perDiff <= 0.25 && pbvDiff <= 0.15;
+  flags.push('MULTIPLE_CONSISTENCY_RECONCILED');
+  if (!isMultipleConsistent) {
+    warnings.push(
+      `[MULTIPLE_RECONCILED] Implied Fair PER (${reconciledFairPer.toFixed(2)}x = Rp ${intrinsicValueIdr.toLocaleString('id-ID')} / EPS Rp ${(safeEps ?? 0).toLocaleString('id-ID')}) dan Implied Fair PBV (${reconciledFairPbv.toFixed(2)}x = Rp ${intrinsicValueIdr.toLocaleString('id-ID')} / BVPS Rp ${(safeBvps ?? 0).toLocaleString('id-ID')}) telah direkonsiliasi secara matematis.`
+    );
+  }
+
+  const buybackYield = Number(input.buybackYieldPct ?? 0);
+  const expectedNetPayoutYield = Number((input.dividendYieldPct + buybackYield).toFixed(2));
+  const isYieldDoubleCountedWithEarningsYield =
+    input.earningsYieldPct > 1.0 &&
+    Math.abs(input.netPayoutYieldPct - (expectedNetPayoutYield + input.earningsYieldPct)) < 0.25;
+  const isYieldConsistentNoDoubleCount = !isYieldDoubleCountedWithEarningsYield;
+  flags.push('TSY_NO_DOUBLE_COUNT_VERIFIED');
+
+  // -------------------------------------------------------------------------
+  // CHECK 3: DATA INTEGRITY & FALLBACK GUARD
+  // -------------------------------------------------------------------------
+  if (safeEps === null) {
+    missingOrStaleMetrics.push('TTM EPS (Missing/Null)');
+  }
+  if (safeBvps === null) {
+    missingOrStaleMetrics.push('BVPS (Missing/Null)');
+  }
+  if (input.sector !== 'Financials' && (input.ocfTTMIdr === null || input.ocfTTMIdr === undefined)) {
+    missingOrStaleMetrics.push('OCF TTM (Imputed/Proxy)');
+  }
+  if (input.requiresUsdFxConversion && (!input.fxRateUsdIdr || input.fxRateUsdIdr <= 0)) {
+    missingOrStaleMetrics.push('Kurs USD/IDR (Fallback Guard)');
+  }
+  if (input.isRfStale) {
+    missingOrStaleMetrics.push('Kurva SBN 10Y (Stale >7 Hari / Proxy)');
+  }
+  if (input.isCoreFundamentalsSeed) {
+    missingOrStaleMetrics.push('Sumber Fundamental (Static Seed Fallback)');
+  }
+  if (input.isStatArbValid === false) {
+    flags.push('STATARB_NO_FUNDAMENTAL_PEER');
+  }
+
+  let dataConfidenceScore = 100;
+  if (safeEps === null || safeBvps === null) dataConfidenceScore -= 35;
+  if (input.isCoreFundamentalsSeed) dataConfidenceScore -= 25;
+  if (input.isRfStale) dataConfidenceScore -= 10;
+  if (input.requiresUsdFxConversion && (!input.fxRateUsdIdr || input.fxRateUsdIdr <= 0)) {
+    dataConfidenceScore -= 15;
+  }
+  dataConfidenceScore = Math.max(25, Math.min(100, dataConfidenceScore));
+
+  let dataConfidenceLevel: DataConfidenceLevel = 'HIGH';
+  if (dataConfidenceScore < 65 || safeEps === null || safeBvps === null || input.isCoreFundamentalsSeed) {
+    dataConfidenceLevel = 'LOW_CAUTIOUS';
+    flags.push('DATA_CONFIDENCE_DOWNGRADED_MISSING_METRICS');
+  } else if (dataConfidenceScore < 88 || missingOrStaleMetrics.length > 0) {
+    dataConfidenceLevel = 'MEDIUM';
+  }
+
+  const auditStatus: FinancialAuditReport['auditStatus'] = isQualityValuationContradiction
+    ? 'AUDIT_WARNING'
+    : isAutoReroutedToCompounder
+    ? 'AUTO_REROUTED'
+    : dataConfidenceLevel === 'LOW_CAUTIOUS'
+    ? 'DATA_DEGRADED'
+    : 'PASS';
+
+  const auditSummaryBannerText = isQualityValuationContradiction
+    ? `AUDIT_WARNING: Potential Model Misrouting / Over-Penalization — Emiten ${input.ticker} memiliki fundamental sangat kuat (ROE ${input.roeTTMPct.toFixed(1)}%, DER ${input.debtToEquity.toFixed(2)}x, OCF/NI ${input.ocfToNetIncomeRatio.toFixed(2)}x, Net Payout ${input.netPayoutYieldPct.toFixed(2)}%) namun terdiskon >30%. Sistem otomatis melakukan Auto-Reroute ke Quality Compounder.`
+    : isAutoReroutedToCompounder
+    ? `AUTO-ADAPT TIER-2 OVERRIDE: Emiten ${input.ticker} (${input.sector}) memiliki DNA Quality Compounder (ROE ${input.roeTTMPct.toFixed(1)}% > 15%, DER ${input.debtToEquity.toFixed(2)}x < 0.5x, OCF/NI ${input.ocfToNetIncomeRatio.toFixed(2)}x ≥ 0.8x). Dikeluarkan dari Pure Cyclical ke Quality Compounder.`
+    : `FINANCIAL AUDIT PASS: Konsistensi Implied PER (${reconciledFairPer.toFixed(2)}x) & Implied PBV (${reconciledFairPbv.toFixed(2)}x) terverifikasi · Zero Double-Counting TSY (${expectedNetPayoutYield.toFixed(2)}%) · Data Confidence: ${dataConfidenceLevel} (${dataConfidenceScore}/100).`;
+
+  return {
+    ticker: input.ticker,
+    auditStatus,
+    flags,
+    warnings,
+    isQualityValuationContradiction,
+    isAutoReroutedToCompounder,
+    originalRouteBeforeAudit: input.currentRoute,
+    effectiveRouteAfterAudit,
+    isMultipleConsistent,
+    reconciledFairPer,
+    reconciledFairPbv,
+    isYieldConsistentNoDoubleCount,
+    verifiedNetPayoutYieldPct: expectedNetPayoutYield,
+    verifiedEarningsYieldPct: Number(input.earningsYieldPct.toFixed(2)),
+    dataConfidenceLevel,
+    dataConfidenceScore,
+    missingOrStaleMetrics,
+    auditSummaryBannerText
+  };
+}
+

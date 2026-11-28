@@ -112,6 +112,7 @@ export interface SectorClassificationResult {
   hasVerifiedCapexAndDa: boolean;
   isCapexOverrideTriggered: boolean;
   isSyntheticCapexBlocked: boolean;
+  isQualityCompounderOverride?: boolean;
   // Ohlson-Penman Persistence SSOT (Closes Finding A omega mismatch)
   resolvedOmega: number;
   resolvedFadeYears: number;
@@ -128,6 +129,26 @@ export interface SectorClassificationResult {
   // Business-Model-Matched StatArb Peer
   resolvedStatArbPeerTicker: string;
 }
+
+/**
+ * Branded Consumer-Like / Quality Compounder issuers residing in IDX-IC Basic Materials or Industrials
+ * whose business model is B2C branded building/packaging/sanitary products rather than commodity price-takers.
+ */
+export const BRANDED_QUALITY_COMPOUNDER_CYCLICAL_TICKERS = new Set<string>([
+  'AVIA', // Avia Avian Tbk (Branded Architectural Paint — Basic Materials)
+  'ARNA', // Arwana Citramulia Tbk (Low-Cost Branded Ceramics — Industrials)
+  'TOTO', // Surya Toto Indonesia Tbk (Branded Sanitaryware — Industrials)
+  'PBID', // Panca Budi Idaman Tbk (Branded Consumer Packaging — Basic Materials)
+  'IMPC'  // Impack Pratama Industri Tbk (Branded Roofing & Building Materials — Industrials)
+]);
+
+/**
+ * Issuers in IDX-IC parent sectors that have NO true same-business-model & cointegrated twin on BEI.
+ * Pairing these with commodity mines, pulp mills, or petrochemical crackers is strictly prohibited.
+ */
+export const STANDALONE_NO_STATARB_PEER_TICKERS = new Set<string>([
+  'AVIA' // Only large-cap pure-play architectural paint compounder in Basic Materials
+]);
 
 /**
  * Curated OJK Banking Regulatory Supplement for Major Audited IDX Banks
@@ -207,23 +228,36 @@ export function resolveProfileOmegaAndFade(params: {
 
 /**
  * Resolves the business-model-matched Statistical Arbitrage peer ticker from `profile.statArbPeerPool`.
- * Ensures e.g. BTPS pairs with BRIS (Micro/Sharia Bank), BFIN pairs with ADMF (Multifinance),
- * and LSIP pairs with AALI (CPO Plantation) rather than cross-model peers.
+ * Strictly enforces same sub-industry & economic driver. If no valid fundamental peer exists
+ * (e.g., AVIA as a standalone architectural paint producer in Basic Materials), returns `'N/A'`.
  */
 export function resolveProfileStatArbPeer(
   ticker: string,
   profile: SectorProfile,
-  subIndustryEnum?: IdxSubIndustryEnum
+  subIndustryEnum?: IdxSubIndustryEnum,
+  isQualityCompounderOverride?: boolean
 ): string {
   const clean = (ticker || '').trim().toUpperCase().replace(/\.JK$/i, '');
+
+  if (STANDALONE_NO_STATARB_PEER_TICKERS.has(clean)) {
+    return 'N/A';
+  }
 
   const subIndustryPools: Partial<Record<IdxSubIndustryEnum, readonly string[]>> = {
     [IdxSubIndustryEnum.PLANTATION_CPO]: ['AALI', 'LSIP', 'TAPG', 'DSNG', 'SIMP'],
     [IdxSubIndustryEnum.COAL_MINING]: ['ADRO', 'ITMG', 'PTBA', 'BSSR', 'UNTR'],
     [IdxSubIndustryEnum.OIL_GAS_ENERGY]: ['MEDC', 'PGAS', 'AKRA', 'ELSA'],
+    [IdxSubIndustryEnum.METALS_MINING_DOWNSTREAM]: ['ANTM', 'INCO', 'MDKA', 'AMMN', 'NCKL', 'MBMA', 'TINS'],
+    [IdxSubIndustryEnum.CEMENT_CHEMICALS_BASIC]: ['SMGR', 'INTP', 'TPIA', 'BRPT', 'ESSA'],
+    [IdxSubIndustryEnum.PULP_PAPER_PACKAGING]: ['INKP', 'TKIM'],
+    [IdxSubIndustryEnum.BANK_KBMI3_4]: ['BBCA', 'BMRI', 'BBRI', 'BBNI', 'BNGA', 'NISP'],
     [IdxSubIndustryEnum.BANK_MICRO_SHARIA]: ['BRIS', 'BTPS', 'ARTO', 'BANK', 'PNBS'],
     [IdxSubIndustryEnum.MULTIFINANCE]: ['ADMF', 'BFIN', 'CFIN', 'WOMF', 'MFIN']
   };
+
+  if (clean === 'ARNA' || clean === 'TOTO') {
+    return clean === 'ARNA' ? 'TOTO' : 'ARNA';
+  }
 
   if (subIndustryEnum && subIndustryPools[subIndustryEnum]) {
     for (const candidate of subIndustryPools[subIndustryEnum]!) {
@@ -231,15 +265,24 @@ export function resolveProfileStatArbPeer(
         return candidate;
       }
     }
+    return 'N/A';
+  }
+
+  // If overridden to Quality Compounder from Basic Materials/Industrials without a dedicated sub-industry peer pool, block cross-model commodity pairing
+  if (
+    isQualityCompounderOverride &&
+    (profile.archetype === 'BASIC_MATERIALS_CYCLICAL' || profile.archetype === 'INDUSTRIALS_HOLDING')
+  ) {
+    return 'N/A';
   }
 
   const pool = profile.statArbPeerPool || [];
   for (const candidate of pool) {
-    if (candidate !== clean) {
+    if (candidate !== clean && !STANDALONE_NO_STATARB_PEER_TICKERS.has(candidate)) {
       return candidate;
     }
   }
-  return clean === 'BBCA' ? 'BMRI' : 'BBCA';
+  return 'N/A';
 }
 
 /**
@@ -281,9 +324,12 @@ export function classifyEmitenSectorProfile(
   let profile: SectorProfile = SECTOR_PROFILES[archetype] || SECTOR_PROFILES.CONSERVATIVE_FALLBACK;
 
   // ==========================================================================
-  // STAGE 2: DATA-DRIVEN EVALUATION (CYCLICALITY, VERIFIED CAPEX, TROUGH MODE)
+  // STAGE 2: DATA-DRIVEN EVALUATION (CYCLICALITY, DNA OVERRIDE, CAPEX, TROUGH)
   // ==========================================================================
-  const roeTTM = typeof input.roeTTM === 'number' && Number.isFinite(input.roeTTM) ? input.roeTTM : 12.0;
+  const roeTTM =
+    typeof input.roeTTM === 'number' && Number.isFinite(input.roeTTM)
+      ? input.roeTTM
+      : catalogEntry?.defaultRoe ?? 12.0;
   const roeAvg5Y =
     typeof input.roeMedian5YPct === 'number' && Number.isFinite(input.roeMedian5YPct)
       ? input.roeMedian5YPct
@@ -299,6 +345,24 @@ export function classifyEmitenSectorProfile(
       ? input.roicTTMPct
       : roeTTM;
 
+  const der =
+    typeof input.debtToEquityRatio === 'number' && Number.isFinite(input.debtToEquityRatio)
+      ? input.debtToEquityRatio
+      : catalogEntry?.defaultDer ?? 0.50;
+  const gpaPct =
+    typeof input.grossProfitabilityToAssetsPct === 'number' &&
+    Number.isFinite(input.grossProfitabilityToAssetsPct)
+      ? input.grossProfitabilityToAssetsPct
+      : BRANDED_QUALITY_COMPOUNDER_CYCLICAL_TICKERS.has(cleanTicker)
+      ? Math.max(24.5, roeTTM * 1.35)
+      : roeTTM / Math.max(1.0, 1 + der * 0.65);
+  const ocfNi =
+    typeof input.ocfToNetIncomeRatio === 'number' && Number.isFinite(input.ocfToNetIncomeRatio)
+      ? input.ocfToNetIncomeRatio
+      : BRANDED_QUALITY_COMPOUNDER_CYCLICAL_TICKERS.has(cleanTicker)
+      ? 1.05
+      : 0.90;
+
   // 2A. Cyclicality Score (0 - 100)
   const roeSpread5Y = Math.abs(roeTTM - roeAvg5Y);
   const roeStd5Y =
@@ -309,11 +373,66 @@ export function classifyEmitenSectorProfile(
     typeof input.earningsCv5Y === 'number' && Number.isFinite(input.earningsCv5Y)
       ? input.earningsCv5Y
       : roeStd5Y / Math.max(5.0, Math.abs(roeAvg5Y));
+
+  // 2B. TIER 2 QUANTITATIVE DNA OVERRIDE: QUALITY COMPOUNDER IN CYCLICAL SECTOR
+  // Rule: If an issuer is in a cyclical/industrial sector (Basic Materials or Industrials)
+  // AND is NOT an upstream commodity price-taker (Coal, Oil & Gas, CPO, Metals Mining)
+  // AND exhibits stable Quality Compounder DNA:
+  //   GP/A > 20%, DER < 0.50x, ROE TTM > 15%, OCF/NI >= 0.80x
+  // THEN eject it from Pure_Cyclical and route to Quality Compounder (STEADY_COMPOUNDER / Compounder).
+  const isUpstreamCommoditySubIndustry =
+    subIndustryEnum === IdxSubIndustryEnum.COAL_MINING ||
+    subIndustryEnum === IdxSubIndustryEnum.OIL_GAS_ENERGY ||
+    subIndustryEnum === IdxSubIndustryEnum.PLANTATION_CPO ||
+    subIndustryEnum === IdxSubIndustryEnum.METALS_MINING_DOWNSTREAM;
+
+  const isEligibleCyclicalParentForDnaOverride =
+    (sectorEnum === IdxSectorEnum.BASIC_MATERIALS || sectorEnum === IdxSectorEnum.INDUSTRIALS) &&
+    !isUpstreamCommoditySubIndustry;
+
+  const meetsQuantitativeQualityCompounderDna =
+    gpaPct > 20.0 &&
+    der < 0.50 &&
+    roeTTM > 15.0 &&
+    ocfNi >= 0.80 &&
+    roeStd5Y <= 6.5;
+
+  const isQualityCompounderOverride =
+    input.userSectorArchetypeOverride === undefined &&
+    isEligibleCyclicalParentForDnaOverride &&
+    (meetsQuantitativeQualityCompounderDna ||
+      (BRANDED_QUALITY_COMPOUNDER_CYCLICAL_TICKERS.has(cleanTicker) &&
+        roeTTM > 15.0 &&
+        der < 0.50));
+
+  if (isQualityCompounderOverride) {
+    profile = {
+      ...SECTOR_PROFILES.CONSUMER_NON_CYCLICAL_FMCG,
+      archetype: profile.archetype,
+      subArchetype: 'TIER2_QUALITY_COMPOUNDER_OVERRIDE',
+      displayName: `${profile.displayName} → Override Quality Compounder`,
+      shortBadgeLabel: 'TIER-2 OVERRIDE: QUALITY COMPOUNDER',
+      statArbPeerPool: profile.statArbPeerPool
+    };
+    classificationStage = 'STAGE_2_DATA_DRIVEN';
+    reasons.push(
+      `Tier-2 Quantitative DNA Override: Emiten di sektor '${sectorEnum}' memiliki DNA Quality Compounder (GP/A ${gpaPct.toFixed(1)}% > 20%, DER ${der.toFixed(2)}x < 0.50x, ROE TTM ${roeTTM.toFixed(1)}% > 15%, OCF/NI ${ocfNi.toFixed(2)}x ≥ 0.80x) → Dikeluarkan dari Pure Cyclical ke Quality Compounder (STEADY_COMPOUNDER)`
+    );
+  }
+
   const cyclicalityScore = Number(
-    Math.min(100, Math.max(0, (profile.isCyclicalArchetype ? 55 : 20) + roeStd5Y * 2.2 + earningsCv * 18)).toFixed(1)
+    Math.min(
+      100,
+      Math.max(
+        0,
+        (isQualityCompounderOverride ? 18 : profile.isCyclicalArchetype ? 55 : 20) +
+          roeStd5Y * 2.2 +
+          earningsCv * 18
+      )
+    ).toFixed(1)
   );
 
-  // 2B. Verified Capital Intensity vs Synthetic CWIP Block (Closes Finding D)
+  // 2C. Verified Capital Intensity vs Synthetic CWIP Block (Closes Finding D)
   const hasRealCapex =
     typeof input.capexTTMIdr === 'number' && Number.isFinite(input.capexTTMIdr) && input.capexTTMIdr > 0;
   const hasRealDa =
@@ -336,8 +455,11 @@ export function classifyEmitenSectorProfile(
     Math.min(100, Math.max(0, reportedCapexToDa * 18 + reportedCapexToRev * 120)).toFixed(1)
   );
 
-  let resolvedValuationRoute: ValuationModuleRoute = profile.valuationRoute;
-  let resolvedAppliedModule: SectorClassificationResult['resolvedAppliedModule'] = profile.appliedModule;
+  let resolvedValuationRoute: ValuationModuleRoute = isQualityCompounderOverride
+    ? 'STEADY_COMPOUNDER'
+    : profile.valuationRoute;
+  let resolvedAppliedModule: SectorClassificationResult['resolvedAppliedModule'] =
+    isQualityCompounderOverride ? 'Compounder' : profile.appliedModule;
   let isCapexOverrideTriggered = false;
   let isSyntheticCapexBlocked = false;
 
@@ -360,7 +482,7 @@ export function classifyEmitenSectorProfile(
         }; dialihkan ke ${resolvedAppliedModule}`
       );
     }
-  } else if (isHighCapexRatio && resolvedValuationRoute !== 'CAPEX_AGGRESSOR') {
+  } else if (isHighCapexRatio && resolvedValuationRoute !== 'CAPEX_AGGRESSOR' && !isQualityCompounderOverride) {
     // Data-driven CapEx override check for non-Capex base profiles
     if (hasVerifiedCapexAndDa && isRoicAboveKe && sectorEnum !== IdxSectorEnum.FINANCIALS) {
       resolvedValuationRoute = 'CAPEX_AGGRESSOR';
@@ -378,7 +500,7 @@ export function classifyEmitenSectorProfile(
     }
   }
 
-  // 2C. Unprofitable & Cyclical Trough Mode Evaluation (Closes Finding C)
+  // 2D. Unprofitable & Cyclical Trough Mode Evaluation (Closes Finding C)
   const niTTM = input.netIncomeTTMIdr ?? 1;
   const opTTM = input.operatingProfitTTMIdr ?? 1;
   const isUnprofitable = niTTM <= 0 || opTTM <= 0 || roeTTM <= 1.0;
@@ -387,7 +509,9 @@ export function classifyEmitenSectorProfile(
   let isCyclicalTroughMode = false;
   let isCyclicalPeakWarning = false;
   let isPreProfitTechSpeculative = false;
-  let legacyRegime: LegacySectorMethodologyRegime = profile.legacyRegime;
+  let legacyRegime: LegacySectorMethodologyRegime = isQualityCompounderOverride
+    ? 'CORE_CORPORATE'
+    : profile.legacyRegime;
 
   if (isUnprofitable) {
     if (profile.isCyclicalArchetype) {
@@ -421,6 +545,7 @@ export function classifyEmitenSectorProfile(
     }
   } else if (
     profile.isCyclicalArchetype &&
+    !isQualityCompounderOverride &&
     roeTTM > roeAvg5Y * 1.25 &&
     roeTTM >= 18.0
   ) {
@@ -478,8 +603,8 @@ export function classifyEmitenSectorProfile(
   // Resolve Unified Ohlson-Penman Persistence (ω) and Fade Years from SectorProfile
   const omegaInfo = resolveProfileOmegaAndFade({
     profile,
-    grossProfitabilityToAssetsPct: input.grossProfitabilityToAssetsPct,
-    ocfToNetIncomeRatio: input.ocfToNetIncomeRatio,
+    grossProfitabilityToAssetsPct: gpaPct,
+    ocfToNetIncomeRatio: ocfNi,
     accrualPenaltyScore: input.accrualPenaltyScore,
     roeTTM,
     costOfEquityKePct: kePct,
@@ -489,7 +614,8 @@ export function classifyEmitenSectorProfile(
   const resolvedStatArbPeerTicker = resolveProfileStatArbPeer(
     cleanTicker,
     profile,
-    subIndustryEnum
+    subIndustryEnum,
+    isQualityCompounderOverride
   );
 
   return {
@@ -514,6 +640,7 @@ export function classifyEmitenSectorProfile(
     hasVerifiedCapexAndDa,
     isCapexOverrideTriggered,
     isSyntheticCapexBlocked,
+    isQualityCompounderOverride,
     resolvedOmega: omegaInfo.rimPersistenceOmega,
     resolvedFadeYears: omegaInfo.rimFadeYears,
     resolvedOmegaTierLabel: omegaInfo.omegaTierLabel,

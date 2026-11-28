@@ -611,19 +611,11 @@ export const SECTOR_PROFILES: Record<SectorArchetypeId, SectorProfile> = {
     valuationLegs: [
       {
         id: 'normalized_pcf_pe',
-        label: 'Normalized Mid-Cycle P/CF & Earnings Power',
-        shortMetric: 'Norm P/CF',
+        label: 'Normalized Mid-Cycle PBV & Cash Flow Anchor',
+        shortMetric: 'Norm PBV/CF',
         baseWeight: 0.45,
         clusterGroup: 'EARNINGS_FLOW',
-        parameterNote: 'Mid-Cycle 5–7Y Normalized Cash Flow & Earnings'
-      },
-      {
-        id: 'ev_ebitda_midcycle',
-        label: 'Normalized EV/EBITDA & Net Cash Reserve Anchor',
-        shortMetric: 'EV/EBITDA 5Y',
-        baseWeight: 0.35,
-        clusterGroup: 'ASSET_NAV',
-        parameterNote: 'Through-the-Cycle 4.5x–6.0x EV/EBITDA'
+        parameterNote: 'Mid-Cycle 5–7Y Normalized Book & Cash Flow'
       },
       {
         id: 'multistage_rim_fast_fade',
@@ -632,6 +624,14 @@ export const SECTOR_PROFILES: Record<SectorArchetypeId, SectorProfile> = {
         baseWeight: 0.20,
         clusterGroup: 'BOOK_RETURN',
         parameterNote: '5Y Fade, ω 0.40–0.58'
+      },
+      {
+        id: 'ev_ebitda_midcycle',
+        label: 'Normalized EV/EBITDA & Net Cash Reserve Anchor',
+        shortMetric: 'EV/EBITDA 5Y',
+        baseWeight: 0.35,
+        clusterGroup: 'ASSET_NAV',
+        parameterNote: 'Through-the-Cycle 4.5x–6.0x EV/EBITDA'
       }
     ],
     // [TODO-CALIBRATE: Fase 4] Mean-reverting commodity supercycle persistence
@@ -795,7 +795,7 @@ export const SECTOR_PROFILES: Record<SectorArchetypeId, SectorProfile> = {
     academicCitation: 'Koller, Goedhart & Wessels (McKinsey Valuation) Capital-Intensive Cyclicals'
   },
 
-  // 6. Bahan Dasar Siklikal: Semen, Kimia, Pulp & Paper (SMGR, INTP, TPIA, INKP, TKIM, AVIA)
+  // 6. Bahan Dasar Siklikal: Semen, Kimia, Pulp & Paper (SMGR, INTP, TPIA, INKP, TKIM)
   BASIC_MATERIALS_CYCLICAL: {
     archetype: 'BASIC_MATERIALS_CYCLICAL',
     subArchetype: 'CEMENT_CHEMICALS_PULP',
@@ -818,20 +818,12 @@ export const SECTOR_PROFILES: Record<SectorArchetypeId, SectorProfile> = {
     normalizationPolicy: 'MID_CYCLE_7_10Y',
     valuationLegs: [
       {
-        id: 'ev_ebitda_midcycle',
-        label: 'Mid-Cycle EV/EBITDA Multiple',
-        shortMetric: 'EV/EBITDA',
-        baseWeight: 0.45,
-        clusterGroup: 'ASSET_NAV',
-        parameterNote: 'Mid-Cycle Industrial Materials EV/EBITDA'
-      },
-      {
         id: 'normalized_pcf',
-        label: 'Normalized P/CF Cash Flow Anchor',
-        shortMetric: 'Norm P/CF',
-        baseWeight: 0.35,
+        label: 'Mid-Cycle Normalized PBV & Cash Flow Anchor',
+        shortMetric: 'Norm PBV/CF',
+        baseWeight: 0.45,
         clusterGroup: 'EARNINGS_FLOW',
-        parameterNote: 'Operating Cash Flow per Share'
+        parameterNote: 'Mid-Cycle Normalized Book & Operating Cash Flow'
       },
       {
         id: 'multistage_rim',
@@ -840,6 +832,14 @@ export const SECTOR_PROFILES: Record<SectorArchetypeId, SectorProfile> = {
         baseWeight: 0.20,
         clusterGroup: 'BOOK_RETURN',
         parameterNote: '5Y Fade, ω 0.45–0.60'
+      },
+      {
+        id: 'ev_ebitda_midcycle',
+        label: 'Mid-Cycle EV/EBITDA Multiple (5Y Band)',
+        shortMetric: 'EV/EBITDA 5Y',
+        baseWeight: 0.35,
+        clusterGroup: 'ASSET_NAV',
+        parameterNote: 'Mid-Cycle Industrial Materials EV/EBITDA'
       }
     ],
     omegaRange: {
@@ -888,7 +888,7 @@ export const SECTOR_PROFILES: Record<SectorArchetypeId, SectorProfile> = {
       minInstitutionalAdtvIdr: 5_000_000_000,
       maxAdtvParticipationPct: 5.0
     },
-    statArbPeerPool: ['SMGR', 'INTP', 'INKP', 'TKIM', 'TPIA', 'BRPT', 'ESSA', 'AVIA'],
+    statArbPeerPool: ['SMGR', 'INTP', 'INKP', 'TKIM', 'TPIA', 'BRPT', 'ESSA'],
     dataRequirements: {
       coreFields: ['revenueTTM', 'netIncomeTTM', 'equityAttributable', 'sharesOutstanding'],
       sectorSpecificFields: ['ebitdaTTM', 'ocfTTM'],
@@ -925,25 +925,25 @@ export const SECTOR_PROFILES: Record<SectorArchetypeId, SectorProfile> = {
         id: 'rnav_affo_book_discount',
         label: 'RNAV / P-AFFO & Landbank Book Discount',
         shortMetric: 'P/AFFO & RNAV',
-        baseWeight: 0.55,
+        baseWeight: 0.50,
         clusterGroup: 'ASSET_NAV',
         parameterNote: 'Discount to Landbank RNAV & Recurring Mall/Hotel AFFO'
+      },
+      {
+        id: 'multistage_rim_property',
+        label: 'Residual Income (Interest-Rate & Gearing Adjusted)',
+        shortMetric: 'RIM (15%)',
+        baseWeight: 0.15,
+        clusterGroup: 'BOOK_RETURN',
+        parameterNote: '5Y Fade, ω 0.45–0.60'
       },
       {
         id: 'ev_ebitda_property',
         label: '5Y Historical EV/EBITDA Anchor',
         shortMetric: 'EV/EBITDA 5Y',
-        baseWeight: 0.45,
+        baseWeight: 0.35,
         clusterGroup: 'EARNINGS_FLOW',
         parameterNote: '5Y Mean EV/EBITDA'
-      },
-      {
-        id: 'multistage_rim_zero',
-        label: 'Residual Income (Bypassed 0% on Landbank Property)',
-        shortMetric: 'RIM (0%)',
-        baseWeight: 0.0,
-        clusterGroup: 'BOOK_RETURN',
-        parameterNote: '0% Weight due to PSAK 72 recognition lag'
       }
     ],
     omegaRange: {

@@ -3742,6 +3742,51 @@ export function EmitenFundamentalInspectorModal({
               </div>
             </div>
 
+            {/* Pre-Render runFinancialAudit() Guardrail & Auto-Adapt Banner */}
+            {joeliardiEval.financialAuditReport && (
+              <div
+                className={`px-3.5 py-2.5 border rounded-xs flex flex-col gap-1.5 text-[11px] font-mono shadow-2xs ${
+                  joeliardiEval.financialAuditReport.auditStatus === 'AUTO_REROUTED' ||
+                  joeliardiEval.isQualityCompounderOverride
+                    ? 'bg-emerald-50 border-emerald-400 text-emerald-950'
+                    : joeliardiEval.financialAuditReport.auditStatus === 'AUDIT_WARNING'
+                    ? 'bg-amber-50 border-amber-400 text-amber-950'
+                    : 'bg-white border-[#E4E2DD] text-[#111315]'
+                }`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span
+                      className={`px-2 py-0.5 rounded-xs text-[9.5px] font-extrabold uppercase tracking-wider ${
+                        joeliardiEval.financialAuditReport.auditStatus === 'AUTO_REROUTED' ||
+                        joeliardiEval.isQualityCompounderOverride
+                          ? 'bg-[#0D5C46] text-white'
+                          : joeliardiEval.financialAuditReport.auditStatus === 'AUDIT_WARNING'
+                          ? 'bg-[#D97706] text-white'
+                          : 'bg-[#059669]/15 text-[#0D5C46] border border-[#059669]/40'
+                      }`}
+                    >
+                      {joeliardiEval.isQualityCompounderOverride
+                        ? 'AUTO-ADAPT TIER-2 DNA OVERRIDE → QUALITY COMPOUNDER'
+                        : `PRE-RENDER FINANCIAL AUDIT: ${joeliardiEval.financialAuditReport.auditStatus}`}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-xs text-[9.5px] font-bold bg-[#FAF9F6] border border-[#E4E2DD] text-neutral-700">
+                      DATA CONFIDENCE: {joeliardiEval.financialAuditReport.dataConfidenceLevel} ({joeliardiEval.financialAuditReport.dataConfidenceScore}/100)
+                    </span>
+                    <span className="px-2 py-0.5 rounded-xs text-[9.5px] font-bold bg-[#FAF9F6] border border-[#E4E2DD] text-[#0D5C46]">
+                      Implied PER Wajar: {joeliardiEval.financialAuditReport.reconciledFairPer.toFixed(2)}x · Implied PBV Wajar: {joeliardiEval.financialAuditReport.reconciledFairPbv.toFixed(2)}x
+                    </span>
+                    <span className="px-2 py-0.5 rounded-xs text-[9.5px] font-bold bg-[#FAF9F6] border border-[#E4E2DD] text-neutral-700">
+                      TSY: {joeliardiEval.financialAuditReport.verifiedNetPayoutYieldPct.toFixed(2)}% (Zero Double-Counting ✓)
+                    </span>
+                  </div>
+                </div>
+                <div className="text-[10.5px] font-semibold leading-relaxed">
+                  {joeliardiEval.financialAuditReport.auditSummaryBannerText}
+                </div>
+              </div>
+            )}
+
             {/* UI Notification Flags Banner (Dynamic Context-Aware Warning Badges) */}
             {(joeliardiEval.valuationReport?.ui_notifications ?? joeliardiEval.uiNotifications ?? []).length > 0 && (
               <div className="space-y-1.5">
@@ -4134,15 +4179,18 @@ export function EmitenFundamentalInspectorModal({
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                   <div className="text-[10px] font-bold uppercase tracking-wider text-[#0284C7] bb-cyan">
                     <MetricTooltip
-                      label={`STATISTICAL ARBITRAGE & RELATIVE VALUE (${activeStock.ticker} ↔ ${joeliardiEval.statArbPeerTicker ?? 'PEER'})`}
-                      title="Kointegrasi Pairs Trading & Relative Value (Gatev et al. 2006)"
-                      laymanExplanation="Mengukur penyimpangan harga jangka pendek (Z-Score Spread) antara emiten dengan pasangan kointegrasi terdekatnya di sektor yang sama."
-                      practicalGuide="Z ≤ -0.80σ menandakan saham tertinggal (peluang Mean-Reversion Buy); Z antara -0.80σ s/d +1.25σ menandakan Kointegrasi Seimbang; Z ≥ +1.25σ menandakan harga sudah berlari melampaui peer."
+                      label={`STATISTICAL ARBITRAGE & RELATIVE VALUE (${activeStock.ticker} ↔ ${joeliardiEval.statArbPeerTicker ?? 'N/A'})`}
+                      title="Kointegrasi Pairs Trading & Strict Fundamental Peer Filter (Gatev et al. 2006)"
+                      laymanExplanation="Pasangan StatArb hanya diaktifkan jika memenuhi 3 syarat wajib: (1) Sub-industri & driver ekonomi sama, (2) Korelasi return historis signifikan (ρ ≥ 0,75), dan (3) Lolos uji kointegrasi. Dilarang memasangkan lintas model bisnis hanya karena kesamaan label sektor induk."
+                      practicalGuide="Jika tidak ada peer fundamental yang sejenis di BEI, overlay StatArb dinonaktifkan otomatis agar tidak mencemari sinyal taktis."
                     />
                   </div>
                   <span
                     className={`px-2.5 py-0.5 text-[10px] font-mono font-extrabold rounded-xs border ${
-                      joeliardiEval.statArbSignal === 'MEAN_REVERSION_BUY'
+                      joeliardiEval.tacticalOverlay?.isStatArbValid === false ||
+                      joeliardiEval.statArbPeerTicker === 'N/A'
+                        ? 'bg-stone-100 text-stone-700 border-stone-300'
+                        : joeliardiEval.statArbSignal === 'MEAN_REVERSION_BUY'
                         ? 'bg-[#059669]/15 text-[#0D5C46] border-[#059669]/50'
                         : joeliardiEval.statArbSignal === 'PAIR_OVEREXTENDED_TRIM'
                         ? 'bg-[#E11D48]/15 text-[#9E2A2B] border-[#E11D48]/50'
@@ -4151,51 +4199,70 @@ export function EmitenFundamentalInspectorModal({
                         : 'bg-[#0284C7]/15 text-[#0284C7] bb-cyan border-[#0284C7]/50'
                     }`}
                   >
-                    {joeliardiEval.statArbSignalLabel ||
-                      (joeliardiEval.statArbSignal === 'MEAN_REVERSION_BUY'
-                        ? 'LONG SPREAD (MEAN-REVERSION BUY)'
-                        : joeliardiEval.statArbSignal === 'PAIR_OVEREXTENDED_TRIM'
-                        ? 'SHORT SPREAD (OVEREXTENDED VS PEER)'
-                        : 'KOINTEGRASI SEIMBANG (NEUTRAL PAIR)')}
+                    {joeliardiEval.tacticalOverlay?.isStatArbValid === false ||
+                    joeliardiEval.statArbPeerTicker === 'N/A'
+                      ? 'N/A - Tidak ada peer fundamental yang berkorelasi'
+                      : joeliardiEval.statArbSignalLabel ||
+                        (joeliardiEval.statArbSignal === 'MEAN_REVERSION_BUY'
+                          ? 'LONG SPREAD (MEAN-REVERSION BUY)'
+                          : joeliardiEval.statArbSignal === 'PAIR_OVEREXTENDED_TRIM'
+                          ? 'SHORT SPREAD (OVEREXTENDED VS PEER)'
+                          : 'KOINTEGRASI SEIMBANG (NEUTRAL PAIR)')}
                   </span>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-mono bg-[#FAF9F6] p-2 rounded-xs border border-[#E4E2DD]/80 mb-2">
                   <div>
                     <span className="text-neutral-500 block text-[9.5px]">PEER TWIN</span>
                     <strong className="text-[#111315]">
-                      {joeliardiEval.statArbPeerTicker} ({joeliardiEval.statArbPeerName})
+                      {joeliardiEval.tacticalOverlay?.isStatArbValid === false ||
+                      joeliardiEval.statArbPeerTicker === 'N/A'
+                        ? 'N/A - Tidak ada peer fundamental yang berkorelasi'
+                        : `${joeliardiEval.statArbPeerTicker} (${joeliardiEval.statArbPeerName})`}
                     </strong>
                   </div>
                   <div>
                     <span className="text-neutral-500 block text-[9.5px]">KORELASI HIST (ρ)</span>
                     <strong className="text-[#0D5C46]">
-                      {(joeliardiEval.statArbCorrelation ?? 0.85).toFixed(2)}
+                      {joeliardiEval.tacticalOverlay?.isStatArbValid === false ||
+                      joeliardiEval.statArbPeerTicker === 'N/A'
+                        ? 'N/A'
+                        : (joeliardiEval.statArbCorrelation ?? 0.85).toFixed(2)}
                     </strong>
                   </div>
                   <div>
                     <span className="text-neutral-500 block text-[9.5px]">Z-SCORE SPREAD</span>
                     <strong
                       className={
-                        (joeliardiEval.statArbZScore ?? 0) <= -1.0
+                        joeliardiEval.tacticalOverlay?.isStatArbValid === false ||
+                        joeliardiEval.statArbPeerTicker === 'N/A'
+                          ? 'text-neutral-500'
+                          : (joeliardiEval.statArbZScore ?? 0) <= -1.0
                           ? 'text-[#0D5C46]'
                           : (joeliardiEval.statArbZScore ?? 0) >= 1.25
                           ? 'text-[#9E2A2B]'
                           : 'text-[#111315]'
                       }
                     >
-                      {(joeliardiEval.statArbZScore ?? 0) >= 0 ? '+' : ''}
-                      {(joeliardiEval.statArbZScore ?? 0).toFixed(2)}σ (1D{' '}
-                      {(joeliardiEval.statArbSpread1DPct ?? 0) >= 0 ? '+' : ''}
-                      {(joeliardiEval.statArbSpread1DPct ?? 0).toFixed(2)}%)
+                      {joeliardiEval.tacticalOverlay?.isStatArbValid === false ||
+                      joeliardiEval.statArbPeerTicker === 'N/A'
+                        ? 'N/A (Nonaktif)'
+                        : `${(joeliardiEval.statArbZScore ?? 0) >= 0 ? '+' : ''}${(
+                            joeliardiEval.statArbZScore ?? 0
+                          ).toFixed(2)}σ (1D ${
+                            (joeliardiEval.statArbSpread1DPct ?? 0) >= 0 ? '+' : ''
+                          }${(joeliardiEval.statArbSpread1DPct ?? 0).toFixed(2)}%)`}
                     </strong>
                   </div>
                   <div>
                     <span className="text-neutral-500 block text-[9.5px]">TARGET KONVERGENSI</span>
                     <strong className="text-[#0284C7] bb-cyan">
-                      Rp{' '}
-                      {formatIdrPriceDisplay(
-                        joeliardiEval.statArbImpliedTargetIdr ?? joeliardiEval.intrinsicValueIdr
-                      )}
+                      {joeliardiEval.tacticalOverlay?.isStatArbValid === false ||
+                      joeliardiEval.statArbPeerTicker === 'N/A'
+                        ? 'N/A (Murni Intrinsik)'
+                        : `Rp ${formatIdrPriceDisplay(
+                            joeliardiEval.statArbImpliedTargetIdr ??
+                              joeliardiEval.intrinsicValueIdr
+                          )}`}
                     </strong>
                   </div>
                 </div>

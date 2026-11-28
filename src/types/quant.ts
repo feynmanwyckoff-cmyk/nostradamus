@@ -476,8 +476,45 @@ export interface JoeliardiOosEvaluation {
   seedCapWarningReason?: string;
   // FASE 2: SINGLE SOURCE OF TRUTH SECTOR CLASSIFICATION & PROFILE
   sectorClassification?: import('../utils/sectorClassifier').SectorClassificationResult;
+  isQualityCompounderOverride?: boolean;
+  // PRE-RENDER FINANCIAL AUDITOR REPORT (runFinancialAudit)
+  financialAuditReport?: FinancialAuditReport;
   // FASE 1: IMMUTABLE SINGLE SOURCE OF TRUTH (SSOT) DECISION OBJECT
   decision?: EmitenDecision;
+}
+
+export type DataConfidenceLevel = 'HIGH' | 'MEDIUM' | 'LOW_CAUTIOUS';
+
+export type FinancialAuditFlag =
+  | 'AUDIT_WARNING: Potential Model Misrouting / Over-Penalization'
+  | 'AUTO_REROUTED_TO_QUALITY_COMPOUNDER'
+  | 'MULTIPLE_CONSISTENCY_RECONCILED'
+  | 'TSY_NO_DOUBLE_COUNT_VERIFIED'
+  | 'DATA_CONFIDENCE_DOWNGRADED_MISSING_METRICS'
+  | 'STATARB_NO_FUNDAMENTAL_PEER';
+
+export interface FinancialAuditReport {
+  ticker: string;
+  auditStatus: 'PASS' | 'AUDIT_WARNING' | 'AUTO_REROUTED' | 'DATA_DEGRADED';
+  flags: FinancialAuditFlag[];
+  warnings: string[];
+  // Check 1: Quality-Valuation Contradiction Check
+  isQualityValuationContradiction: boolean;
+  isAutoReroutedToCompounder: boolean;
+  originalRouteBeforeAudit?: ValuationModuleRoute;
+  effectiveRouteAfterAudit: ValuationModuleRoute;
+  // Check 2: Multiple & Yield Consistency Check
+  isMultipleConsistent: boolean;
+  reconciledFairPer: number;
+  reconciledFairPbv: number;
+  isYieldConsistentNoDoubleCount: boolean;
+  verifiedNetPayoutYieldPct: number;
+  verifiedEarningsYieldPct: number;
+  // Check 3: Data Integrity & Fallback Guard
+  dataConfidenceLevel: DataConfidenceLevel;
+  dataConfidenceScore: number; // 0 - 100
+  missingOrStaleMetrics: string[];
+  auditSummaryBannerText?: string;
 }
 
 /**
@@ -539,6 +576,7 @@ export interface EmitenDecision {
   classificationConfidence?: 'HIGH' | 'MEDIUM' | 'LOW_CONSERVATIVE';
   isSectorDataIncomplete?: boolean;
   sectorDataFlags?: string[];
+  isQualityCompounderOverride?: boolean;
   // FASE 3: Unified Persistence, Epistemic Fair Value Range, ROE-Fade Scenarios & Ke Sensitivity SSOT
   kePremiaBps?: number;
   erpAsOfDate?: string;
@@ -547,6 +585,8 @@ export interface EmitenDecision {
   fairValueRangeIdr?: [number, number];
   roeFadeScenarios?: RoeFadeScenarioAnalysis;
   keSensitivityMatrix?: KeSensitivityMatrix;
+  // Pre-Render Financial Audit SSOT
+  financialAuditReport?: FinancialAuditReport;
 }
 
 export interface RoeFadeScenarioAnalysis {
@@ -765,6 +805,8 @@ export interface SanityReport {
 export interface TacticalOverlay {
   pairTicker: string;
   pairName?: string;
+  isStatArbValid?: boolean;
+  statArbInvalidReason?: string;
   correlation?: number;
   betaRatio?: number;
   zScore: number;
@@ -775,7 +817,8 @@ export interface TacticalOverlay {
     | 'TACTICAL_ENTRY_FAVORABLE'
     | 'ROTATE_TO_PAIR_WARNING'
     | 'HOLD_COINTEGRATED_EQUILIBRIUM'
-    | 'FUNDAMENTAL_DIVERGENCE_WAIT';
+    | 'FUNDAMENTAL_DIVERGENCE_WAIT'
+    | 'STATARB_DISABLED_NO_PEER';
   actionLabel: string;
   rationale: string;
 }

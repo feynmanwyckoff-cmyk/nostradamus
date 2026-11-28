@@ -453,7 +453,16 @@ export interface RoutedValuationModuleOutput extends ValuationReport {
  * - Module 3: The Pure Cyclical Module (Energy/Coal, Agri/CPO, Cyclical Property & Materials)
  */
 export const ValuationEngine = {
-  resolveRoute(stock: StockMetrics, customCwipRatio?: number): {
+  resolveRoute(
+    stock: StockMetrics,
+    customCwipRatio?: number,
+    extraMetrics?: {
+      grossProfitabilityToAssetsPct?: number;
+      ocfToNetIncomeRatio?: number;
+      debtToEquityRatio?: number;
+      forceRouteOverride?: ValuationModuleRoute;
+    }
+  ): {
     route: ValuationModuleRoute;
     applied_module: ValuationReport['applied_module'];
     cwipToAssetsRatio: number;
@@ -461,6 +470,7 @@ export const ValuationEngine = {
     capexToRevenueRatio: number;
     isCapexOverrideTriggered: boolean;
     isSyntheticCapexBlocked?: boolean;
+    isQualityCompounderOverride?: boolean;
     ui_notifications: string[];
   } {
     const clean = stock.ticker.trim().toUpperCase().replace(/\.JK$/i, '');
@@ -530,6 +540,9 @@ export const ValuationEngine = {
       roeTTM: stock.roe,
       roeAvg5YPct: stock.roeAvg5YPct,
       roicTTMPct: stock.roicTTMPct ?? stock.roe,
+      debtToEquityRatio: extraMetrics?.debtToEquityRatio ?? stock.debtToEquity,
+      grossProfitabilityToAssetsPct: extraMetrics?.grossProfitabilityToAssetsPct,
+      ocfToNetIncomeRatio: extraMetrics?.ocfToNetIncomeRatio,
       cwipToAssetsRatio,
       capexToDaRatio,
       capexToRevenueRatio,
@@ -542,15 +555,32 @@ export const ValuationEngine = {
     if (classification.isCapexOverrideTriggered) {
       ui_notifications.push(CAPEX_ANOMALY_NOTIFICATION_TEXT);
     }
+    if (classification.isQualityCompounderOverride) {
+      ui_notifications.push(
+        `✅ TIER-2 QUANTITATIVE DNA OVERRIDE: Emiten ${stock.ticker} berada di sektor '${stock.sector}' namun memiliki DNA bisnis stabil (GP/A > 20%, DER < 0.50x, ROE TTM > 15%, OCF/NI ≥ 0.80x). Dikeluarkan dari modul Pure Cyclical ke Quality Compounder (Core Fundamental).`
+      );
+    }
+
+    const resolvedRoute: ValuationModuleRoute =
+      extraMetrics?.forceRouteOverride ?? classification.resolvedValuationRoute;
+    const resolvedModule: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical' =
+      resolvedRoute === 'CAPEX_AGGRESSOR'
+        ? 'Capex_Aggressor'
+        : resolvedRoute === 'PURE_CYCLICAL'
+        ? 'Pure_Cyclical'
+        : 'Compounder';
 
     return {
-      route: classification.resolvedValuationRoute,
-      applied_module: classification.resolvedAppliedModule,
+      route: resolvedRoute,
+      applied_module: resolvedModule,
       cwipToAssetsRatio,
       capexToDaRatio,
       capexToRevenueRatio,
       isCapexOverrideTriggered: classification.isCapexOverrideTriggered,
       isSyntheticCapexBlocked: classification.isSyntheticCapexBlocked,
+      isQualityCompounderOverride:
+        Boolean(classification.isQualityCompounderOverride) ||
+        extraMetrics?.forceRouteOverride === 'STEADY_COMPOUNDER',
       ui_notifications
     };
   },
@@ -603,13 +633,13 @@ export const ValuationEngine = {
     rimFadeYears: number;
     rimPersistenceOmega: number;
     sbn10YYieldPct?: number;
+    forceRouteOverride?: ValuationModuleRoute;
     tickRounder: (rawPrice: number) => number;
   }): RoutedValuationModuleOutput {
     const {
       stock,
       price,
       ttmEpsIdr,
-      forwardEpsIdr,
       currentBvpsIdr,
       ttmRoePct,
       forwardRoePct,
@@ -617,7 +647,6 @@ export const ValuationEngine = {
       grossProfitabilityToAssets,
       dynamicCostOfEquityPct,
       baseGrowthRatePct,
-      derPenaltyMultiplier,
       accrualQualityMultiplier: rawAccrualQualityMultiplier,
       hscDiscountMultiplier,
       catalystValuationMultiplier,
@@ -625,6 +654,7 @@ export const ValuationEngine = {
       rimFadeYears,
       rimPersistenceOmega,
       sbn10YYieldPct = 6.75,
+      forceRouteOverride,
       tickRounder
     } = params;
 
@@ -637,8 +667,14 @@ export const ValuationEngine = {
       capexToDaRatio,
       capexToRevenueRatio,
       isCapexOverrideTriggered,
+      isQualityCompounderOverride,
       ui_notifications
-    } = ValuationEngine.resolveRoute(stock);
+    } = ValuationEngine.resolveRoute(stock, undefined, {
+      grossProfitabilityToAssetsPct: grossProfitabilityToAssets,
+      ocfToNetIncomeRatio,
+      debtToEquityRatio: stock.debtToEquity,
+      forceRouteOverride
+    });
 
     // Contextual Anti-Junk (OCF/NI) Penalty Policy based on effective_module (`applied_module`)
     const contextualOcfPolicy = resolveContextualOcfNiPolicy({
@@ -660,11 +696,11 @@ export const ValuationEngine = {
     ): ValuationReport => {
       const defaultWeights =
         stock.sector === 'Financials'
-          ? { pcf: 0.10, rim: 0.70, relval: 0.20 }
-          : stock.sector === 'Properties & Real Estate' || route === 'PURE_CYCLICAL'
-          ? { pcf: 0.80, rim: 0.00, relval: 0.20 }
-          : stock.sector === 'Healthcare' || stock.sector === 'Consumer Non-Cyclicals'
-          ? { pcf: 0.55, rim: 0.30, relval: 0.15 }
+          ? { pcf: 0.45, rim: 0.35, relval: 0.20 }
+          : stock.sector === 'Properties & Real Estate'
+          ? { pcf: 0.50, rim: 0.15, relval: 0.35 }
+          : route === 'PURE_CYCLICAL'
+          ? { pcf: 0.45, rim: 0.20, relval: 0.35 }
           : { pcf: 0.45, rim: 0.35, relval: 0.20 };
       const gj = calculateGrahamJoeliardiBenchmark({
         basisEpsIdr,
@@ -687,8 +723,8 @@ export const ValuationEngine = {
     };
 
     // =========================================================================
-    // MODULE 1: THE STEADY COMPOUNDER MODULE (Financials, FMCG)
-    // Trigger: Sector == Financials OR Consumer_Non_Cyclical
+    // MODULE 1: THE STEADY COMPOUNDER MODULE (Financials, FMCG & Tier-2 Quality Compounder Override)
+    // Trigger: Sector == Financials OR Consumer_Non_Cyclical OR Tier-2 Quality Compounder DNA Override
     // P0.3 Guardrail: Strict TTM default basis (no linear 9M * 1.33x annualization in primary intrinsic value)
     // Anchor: Justified PBV = (ROE_TTM - g) / (Ke - g) -> Target Price = Justified PBV * Current BVPS
     // =========================================================================
@@ -715,7 +751,8 @@ export const ValuationEngine = {
       const impliedPbv = Number((price / Math.max(1, currentBvpsIdr)).toFixed(2));
       const pbvTargetPriceIdr = currentBvpsIdr * justifiedPbv;
 
-      // For Consumer Non-Cyclicals, blend Justified PBV with TTM Cash-Adjusted Quality P/E
+      // For Non-Financial Quality Compounders (FMCG or Tier-2 DNA Override like AVIA / ARNA),
+      // blend Justified PBV with TTM Cash-Adjusted Quality P/E
       if (stock.sector !== 'Financials') {
         const moatMultiplier =
           grossProfitabilityToAssets >= 22.0
@@ -746,20 +783,26 @@ export const ValuationEngine = {
         );
         const valuationReport = buildDefaultReport(blendedCompounderPrice, ttmEpsIdr, g, effectiveRoe);
 
+        const moduleTitle = isQualityCompounderOverride
+          ? 'Quality Compounder Override (TTM Quality P/E & Justified PBV)'
+          : 'Steady Compounder (TTM Quality P/E & Justified PBV)';
+
         return {
           ...valuationReport,
           valuationReport,
           route: 'STEADY_COMPOUNDER',
-          moduleLabel: 'Steady Compounder (TTM Quality P/E & Justified PBV)',
+          moduleLabel: moduleTitle,
           sectorValuationArchetype: 'CONSUMER_HEALTH_QUALITY_PE',
-          sectorPrimaryMetricShort: 'Quality P/E',
-          sectorPrimaryMetricLabel: 'Steady Compounder: TTM Quality P/E & Justified PBV',
+          sectorPrimaryMetricShort: 'Quality P/E & PBV',
+          sectorPrimaryMetricLabel: isQualityCompounderOverride
+            ? 'Quality Compounder (Tier-2 DNA Override): TTM Quality P/E & Justified PBV'
+            : 'Steady Compounder: TTM Quality P/E & Justified PBV',
           sectorPrimaryImpliedMultiple: impliedQualityPe,
           sectorPrimaryFairMultiple: fairQualityPe,
           sectorPrimaryPerShareIdr: cashEpsIdr,
           sectorPrimaryPerShareLabel: 'TTM Cash EPS',
           sectorSpecificFairValueIdr: blendedCompounderPrice,
-          sectorAcademicRationale: `[Modul 1: Steady Compounder — FMCG (Basis TTM Default)] Menggunakan jangkar ROE TTM berkelanjutan ${effectiveRoe.toFixed(1)}% (g ${g.toFixed(1)}%, Ke ${dynamicCostOfEquityPct.toFixed(2)}%) dengan Justified PBV ${justifiedPbv}x (Rp ${Math.round(pbvTargetPriceIdr).toLocaleString('id-ID')}) dan Quality P/E ${fairQualityPe}x atas TTM Cash EPS Rp ${cashEpsIdr.toLocaleString('id-ID')}/shm (GP/A ${grossProfitabilityToAssets.toFixed(1)}%, OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x, ω=${rimPersistenceOmega.toFixed(2)}).`,
+          sectorAcademicRationale: `[Modul 1: ${isQualityCompounderOverride ? 'Tier-2 Quality Compounder Override' : 'Steady Compounder — FMCG'} (Basis TTM Default)] Menggunakan jangkar ROE TTM berkelanjutan ${effectiveRoe.toFixed(1)}% (g ${g.toFixed(1)}%, Ke ${dynamicCostOfEquityPct.toFixed(2)}%) tanpa kompresi siklikal dengan Justified PBV ${justifiedPbv}x (Rp ${Math.round(pbvTargetPriceIdr).toLocaleString('id-ID')}) dan Quality P/E ${fairQualityPe}x atas TTM Cash EPS Rp ${cashEpsIdr.toLocaleString('id-ID')}/shm (GP/A ${grossProfitabilityToAssets.toFixed(1)}%, DER ${stock.debtToEquity.toFixed(2)}x, OCF/NI ${ocfToNetIncomeRatio.toFixed(2)}x, ω=${rimPersistenceOmega.toFixed(2)}).`,
           cwipToAssetsRatio,
           capexToDaRatio,
           capexToRevenueRatio,
@@ -911,22 +954,23 @@ export const ValuationEngine = {
     }
 
     // =========================================================================
-    // MODULE 3: THE PURE CYCLICAL MODULE (Coal, CPO, Energy, Cyclical Property)
-    // Trigger: Sector == Energy_Coal OR Agri_CPO OR Cyclical Property/Materials
-    // Logic: Turn off P/E and TTM EPS entirely. Focus on 7Y-10Y Mid-Cycle Normalized Earnings
-    //        and Book Value Stability + 10Y PBV Standard Deviation Z-Score.
-    // QMJ Hard-Filter: Penalize/drop if Net DER > 1.0x.
-    // Buy Signal Anchor: Trigger "STRONG BUY" if Current PBV Z-Score <= -1.5σ.
+    // MODULE 3: THE PURE CYCLICAL MODULE (Upstream Coal, CPO, Metals, Cyclical Property)
+    // Trigger: Verified Price-Taker Commodity / Cyclical Asset-Heavy Issuer
+    // Logic: Focus on 7Y-10Y Mid-Cycle Normalized Earnings and Book Value Stability
+    //        + 10Y PBV Standard Deviation Z-Score (without double-compressing already-normalized ROE).
     // =========================================================================
     const cycStats = CALIBRATED_CYCLICAL_10Y_PBV_STATS[clean];
     const pbv10YMean = Number((stock.pbv10YMean ?? cycStats?.meanPbv10Y ?? 1.32).toFixed(2));
     const pbv10YStdDev = Number((stock.pbv10YStdDev ?? cycStats?.stdDevPbv10Y ?? 0.35).toFixed(2));
 
-    // Normalized 7Y-10Y Mid-Cycle ROE & EPS (prevents buying at peak commodity earnings)
+    // Normalized 7Y-10Y Mid-Cycle ROE & EPS:
+    // Avoid double-compression when `ttmRoePct` passed in is already normalized or moderate (< 20%)
     const midCycleNormalizedRoePct = Number(
       (
         cycStats?.normalizedMidCycleRoePct ??
-        Math.max(8.5, Math.min(18.5, ttmRoePct * 0.55 + 12.0 * 0.45))
+        (ttmRoePct > 22.0
+          ? Math.max(10.0, Math.min(20.0, ttmRoePct * 0.72 + 12.5 * 0.28))
+          : Math.max(6.5, Math.min(20.0, ttmRoePct)))
       ).toFixed(2)
     );
     const normalizedEps7YIdr = Math.max(
@@ -941,11 +985,6 @@ export const ValuationEngine = {
 
     // QMJ Hard-Filter for Cyclicals: Heavy penalty if DER > 1.0x, bonus for low-cost high GP/A producers
     const isCyclicalDerPenalized = der > 1.0;
-    const cyclicalQmjMultiplier = isCyclicalDerPenalized
-      ? Math.max(0.58, 0.78 - (der - 1.0) * 0.18)
-      : grossProfitabilityToAssets >= 18
-      ? 1.08
-      : 1.0;
 
     const cyclicalGrowthPct = Number(Math.min(5.5, baseGrowthRatePct).toFixed(2));
     const rawCyclicalJustifiedPbv =
@@ -1028,17 +1067,20 @@ export interface DynamicEnsembleWeightingResult {
 }
 
 /**
- * 4. DYNAMIC ENSEMBLE WEIGHTING MODULE (DynamicEnsembleWeighter — P1.3 Refactored)
+ * 4. DYNAMIC ENSEMBLE WEIGHTING MODULE (DynamicEnsembleWeighter — Auto-Adapt Refactored)
  * Pure Intrinsic Valuation Engine (StatArb 100% removed to TacticalOverlay):
  * - Combines 3 pure fundamental intrinsic methods:
  *   1. Sector Primary / Normalized Earnings Power (`SECTOR_PRIMARY`)
  *   2. 2-Stage / Multi-Stage Residual Income Model (`MULTI_STAGE_RIM`)
  *   3. Historical 5Y EV/EBITDA Band Anchor (`HISTORICAL_EVEBITDA_5Y`)
- * - Sector Alignment:
- *   * Financials: 70% RIM / Justified PBV, 10% Sector/P/CF, 20% Hist PBV Band 5Y.
- *   * Properties & Pure Cyclicals: 80% PBV Replacement / Cyclical Normalized Book, 0% RIM (disabled), 20% Hist EV/EBITDA 5Y.
- *   * Healthcare & Consumer Non-Cyclicals: 50% Quality P/E & Cash Return, 30% 2-Stage RIM, 20% Hist EV/EBITDA Band 5Y.
- *   * Capex Aggressors / Others: 45% 2-Stage RI + Earnings Power Blended, 35% Multi-Stage RIM, 20% Hist EV/EBITDA Band 5Y.
+ * - Dynamic Regime-Matched Weighting (Zero 80% Single-Model Concentration):
+ *   * Financials: 45% Damodaran Justified PBV, 35% Multi-Stage RIM, 20% Hist PBV Band 5Y.
+ *   * Pure Cyclicals (Upstream Commodities): 45% Norm PBV & Cash Flow, 20% Fast-Fade RIM, 35% Hist EV/EBITDA 5Y.
+ *   * Properties & Real Estate: 50% RNAV / P-AFFO Book Discount, 15% RIM, 35% Hist EV/EBITDA 5Y.
+ *   * Quality Compounders (Consumer/Healthcare/Tier-2 Override): 45% Quality P/E & Justified PBV, 35% Multi-Stage RIM, 20% Hist EV/EBITDA 5Y.
+ *   * Capex Aggressors: 45% 2-Stage RI + Earnings Power Blended, 35% Multi-Stage RIM, 20% Hist EV/EBITDA Band 5Y.
+ * - Outlier Slashing (>40% deviation from consensus):
+ *   * Slashes outlier leg weight strictly to 5% (0.05) and redistributes 95% proportionally across consistent models.
  */
 export const DynamicEnsembleWeighter = {
   computeWeights(params: {
@@ -1088,7 +1130,7 @@ export const DynamicEnsembleWeighter = {
 
     const confidenceNotes: string[] = [];
 
-    // Step 1: Sector Alignment Base Weights from SectorProfile.valuationLegs (or deterministic sector fallback)
+    // Step 1: Dynamic Regime-Matched Base Weights from SectorProfile.valuationLegs (or balanced archetype fallback)
     let wSector = 0.45;
     let wRim = 0.35;
     let wEvEbitda5Y = 0.20;
@@ -1101,28 +1143,30 @@ export const DynamicEnsembleWeighter = {
         `SectorProfile Ensemble (${profileValuationLegs[0].shortMetric} ${Math.round(wSector * 100)}% [${profileValuationLegs[0].clusterGroup}] · ${profileValuationLegs[1].shortMetric} ${Math.round(wRim * 100)}% [${profileValuationLegs[1].clusterGroup}] · ${profileValuationLegs[2].shortMetric} ${Math.round(wEvEbitda5Y * 100)}% [${profileValuationLegs[2].clusterGroup}])`
       );
     } else if (sector === 'Financials') {
-      wSector = 0.10;
-      wRim = 0.70;
+      wSector = 0.45;
+      wRim = 0.35;
       wEvEbitda5Y = 0.20;
-      confidenceNotes.push('Sektor Finansial (Pure Intrinsic): Bobot RIM/BVPS 70% · Sektor 10% · Hist PBV Band 5Y 20%');
-    } else if (sector === 'Properties & Real Estate' || route === 'PURE_CYCLICAL') {
-      wSector = 0.80;
-      wRim = 0.00;
-      wEvEbitda5Y = 0.20;
-      confidenceNotes.push('Sektor Siklikal/Properti (Pure Intrinsic): 80% Norm PBV · 0% RIM · 20% Hist EV/EBITDA 5Y');
-    } else if (
-      (sector === 'Healthcare' || sector === 'Consumer Non-Cyclicals') &&
-      effectiveModule !== 'Capex_Aggressor'
-    ) {
+      confidenceNotes.push('Sektor Finansial (Dynamic Balanced): 45% Justified PBV · 35% Multi-Stage RIM · 20% Hist PBV Band 5Y');
+    } else if (sector === 'Properties & Real Estate') {
       wSector = 0.50;
-      wRim = 0.30;
+      wRim = 0.15;
+      wEvEbitda5Y = 0.35;
+      confidenceNotes.push('Sektor Properti & Kawasan (Dynamic Balanced): 50% RNAV/Book Discount · 15% RIM · 35% Hist EV/EBITDA 5Y');
+    } else if (route === 'PURE_CYCLICAL') {
+      wSector = 0.45;
+      wRim = 0.20;
+      wEvEbitda5Y = 0.35;
+      confidenceNotes.push('Sektor Komoditas Siklikal (Dynamic Balanced): 45% Norm PBV & Cash Flow · 20% Fast-Fade RIM · 35% Hist EV/EBITDA 5Y');
+    } else if (effectiveModule === 'Compounder') {
+      wSector = 0.45;
+      wRim = 0.35;
       wEvEbitda5Y = 0.20;
-      confidenceNotes.push('Sektor Kesehatan/Konsumen (Pure Intrinsic): 50% TTM Quality P/E · 30% RIM · 20% Hist EV/EBITDA 5Y');
+      confidenceNotes.push('Quality Compounder (Dynamic Balanced): 45% Quality P/E & Justified PBV · 35% Multi-Stage RIM · 20% Hist EV/EBITDA 5Y');
     } else {
       wSector = 0.45;
       wRim = 0.35;
       wEvEbitda5Y = 0.20;
-      confidenceNotes.push('Capex Aggressor (Pure Intrinsic): 45% 2-Stage RI Blended · 35% RIM · 20% Hist EV/EBITDA Band 5Y');
+      confidenceNotes.push('Capex Aggressor (Dynamic Balanced): 45% 2-Stage RI Blended · 35% Multi-Stage RIM · 20% Hist EV/EBITDA Band 5Y');
     }
 
     // FASE 3 Cluster Correlation Anti-Double-Counting:
@@ -1167,7 +1211,7 @@ export const DynamicEnsembleWeighter = {
       rimDisabled = false;
     }
 
-    // Step 3: Symmetric Outlier Filter & Continuous Epistemic Model Dispersion ((maxVal - minVal) / medianVal)
+    // Step 3: Symmetric Outlier Filter (>40% deviation -> slash outlier weight to 5% and redistribute 95% proportionally)
     const activeCandidatePrices = [
       wSector > 0 ? sectorPriceIdr : null,
       wRim > 0 ? rimPriceIdr : null,
@@ -1200,30 +1244,54 @@ export const DynamicEnsembleWeighter = {
     const devRim = Math.abs(rimPriceIdr - medianPriceIdr) / medianPriceIdr;
     const devEvEbitda = Math.abs(relValPriceIdr - medianPriceIdr) / medianPriceIdr;
 
-    let sectorSlashed = false;
-    let rimSlashed = false;
-    let evEbitdaSlashed = false;
-    const outlierNames: string[] = [];
+    const sectorSlashed = wSector > 0 && devSector > 0.40;
+    const rimSlashed = wRim > 0 && devRim > 0.40;
+    const evEbitdaSlashed = wEvEbitda5Y > 0 && devEvEbitda > 0.40;
 
-    if (wSector > 0 && devSector > 0.40) {
-      wSector *= 0.5;
-      sectorSlashed = true;
-      outlierNames.push(`${sectorLabel} (deviasi ${(devSector * 100).toFixed(0)}% > 40%)`);
+    const outlierNames: string[] = [];
+    if (sectorSlashed) {
+      outlierNames.push(`${sectorLabel} (deviasi ${(devSector * 100).toFixed(0)}% > 40% → dipangkas ke 5%)`);
     }
-    if (wRim > 0 && devRim > 0.40) {
-      wRim *= 0.5;
-      rimSlashed = true;
-      outlierNames.push(`${rimLabel} (deviasi ${(devRim * 100).toFixed(0)}% > 40%)`);
+    if (rimSlashed) {
+      outlierNames.push(`${rimLabel} (deviasi ${(devRim * 100).toFixed(0)}% > 40% → dipangkas ke 5%)`);
     }
-    if (wEvEbitda5Y > 0 && devEvEbitda > 0.40) {
-      wEvEbitda5Y *= 0.5;
-      evEbitdaSlashed = true;
-      outlierNames.push(`${relValLabel} (deviasi ${(devEvEbitda * 100).toFixed(0)}% > 40%)`);
+    if (evEbitdaSlashed) {
+      outlierNames.push(`${relValLabel} (deviasi ${(devEvEbitda * 100).toFixed(0)}% > 40% → dipangkas ke 5%)`);
+    }
+
+    const outlierCount =
+      (sectorSlashed ? 1 : 0) + (rimSlashed ? 1 : 0) + (evEbitdaSlashed ? 1 : 0);
+    const nonOutlierActiveSum =
+      (!sectorSlashed ? wSector : 0) +
+      (!rimSlashed ? wRim : 0) +
+      (!evEbitdaSlashed ? wEvEbitda5Y : 0);
+
+    let normSector: number;
+    let normRim: number;
+    let normEvEbitda: number;
+
+    if (outlierCount > 0 && nonOutlierActiveSum > 0) {
+      // Strictly cap each outlier model at 5% (0.05) and redistribute the remaining (1 - 0.05 * outlierCount) proportionally
+      const remainingPool = Math.max(0.10, 1.0 - 0.05 * outlierCount);
+      normSector = sectorSlashed
+        ? 0.05
+        : Number(((wSector / nonOutlierActiveSum) * remainingPool).toFixed(4));
+      normRim = rimSlashed
+        ? 0.05
+        : Number(((wRim / nonOutlierActiveSum) * remainingPool).toFixed(4));
+      normEvEbitda = Number(Math.max(0, 1.0 - normSector - normRim).toFixed(4));
+    } else {
+      const rawSum = wSector + wRim + wEvEbitda5Y || 1;
+      normSector = Number((wSector / rawSum).toFixed(4));
+      normRim = Number((wRim / rawSum).toFixed(4));
+      normEvEbitda = Number(Math.max(0, 1.0 - normSector - normRim).toFixed(4));
     }
 
     const outlierPenalizedLeg = outlierNames.length > 0 ? outlierNames.join(', ') : undefined;
     if (outlierPenalizedLeg) {
-      confidenceNotes.push(`Penalti Outlier Simetris (-50% Bobot): ${outlierPenalizedLeg}`);
+      confidenceNotes.push(
+        `Audit Epistemic Dispersion (Outlier >40% → Bobot Dipangkas ke 5% & Redistribusi Proporsional 95%): ${outlierPenalizedLeg}`
+      );
     }
 
     // FASE 3: Continuous dispersion penalty starts at delta > 0.15; outlier flag alone never forces a cliff penalty
@@ -1236,12 +1304,6 @@ export const DynamicEnsembleWeighter = {
         `P2.3 Continuous Epistemic Uncertainty: Dispersi Model ${(modelDispersion * 100).toFixed(1)}% → Penalti Kontinu -${continuousDispersionPts} pts`
       );
     }
-
-    // Step 4: Proportional Redistribution so active weights sum strictly to 1.00 (100%)
-    const rawSum = wSector + wRim + wEvEbitda5Y || 1;
-    const normSector = Number((wSector / rawSum).toFixed(4));
-    const normRim = Number((wRim / rawSum).toFixed(4));
-    const normEvEbitda = Number(Math.max(0, 1 - normSector - normRim).toFixed(4));
 
     const legs: readonly [EnsembleValuationLeg, EnsembleValuationLeg, EnsembleValuationLeg] = [
       {
