@@ -1887,10 +1887,12 @@ export function EmitenFundamentalInspectorModal({
   };
 
   const finalConvictionScore =
+    joeliardiEval.decision?.finalConvictionScore ??
     joeliardiEval.finalConvictionScore ??
     joeliardiEval.riskSizingResult?.adjustedConvictionScore ??
     joeliardiEval.totalConvictionScore;
   const finalConvictionGrade =
+    joeliardiEval.decision?.finalGrade ??
     joeliardiEval.riskSizingResult?.finalConvictionGrade ??
     joeliardiEval.convictionGrade;
 
@@ -3359,40 +3361,66 @@ export function EmitenFundamentalInspectorModal({
             <div className="p-3.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between h-full tabular-nums">
               <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-500 whitespace-nowrap overflow-hidden truncate">
                 <MetricTooltip
-                  label="MARGIN OF SAFETY & STATE"
-                  title="Sabuk Pengaman Valuasi Dinamis (Excess Return) & Guardrail Konflik Aksi"
-                  laymanExplanation="Syarat MoS dikompresi ke 0%–10% bila Excess Return (Forward ROE − Ke) > 10% (atau dikunci minimal 25,0% saat IHSG VOLATIL). Aksi Strong Buy / Buy on Strength hanya menyala apabila Sanity PASS, bebas Seed Cap, dan Grade mencapai A/A+ (≥75/100)."
-                  practicalGuide="MoS ≥ Syarat Dinamis & Grade A = Akumulasi Rasional; Grade B/C = Watchlist / Hold."
+                  label="UPSIDE / DOWNSIDE & MOS"
+                  title="Pemisahan Matematis Upside/Downside vs Margin of Safety (MoS)"
+                  laymanExplanation="Upside/Downside = ((Harga Wajar − Harga Pasar) ÷ Harga Pasar) × 100%, sedangkan Margin of Safety (MoS) = ((Harga Wajar − Harga Pasar) ÷ Harga Wajar) × 100%. Menampilkan Upside/Downside sebagai metrik utama mencegah distorsi persepsi risiko saat harga pasar melampaui nilai wajar."
+                  practicalGuide="Upside positif & MoS ≥ Syarat Dinamis + Grade A = Akumulasi Rasional; Grade B/C atau Upside negatif = Watchlist / Hold (Active Allocation 0% Standby)."
                 />
               </div>
-              <div
-                className={`text-lg font-bold font-mono tabular-nums my-1 whitespace-nowrap ${
-                  joeliardiEval.isHighConvictionActionEligible &&
-                  (joeliardiEval.marginOfSafetyPct >= 10 ||
-                    joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST' ||
-                    joeliardiEval.decisionState === 'STRONG_BUY_CYCLICAL_ZSCORE' ||
-                    joeliardiEval.decisionState === 'ACCUMULATE_QUALITY_FAIR_VALUE')
-                    ? 'text-[#0D5C46]'
-                    : joeliardiEval.marginOfSafetyPct >= 0
-                    ? 'text-[#D97706]'
-                    : 'text-[#9E2A2B]'
-                }`}
-              >
-                {joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}
-                {joeliardiEval.marginOfSafetyPct.toFixed(1)}%
-              </div>
-              <span
-                className={`text-[10.5px] font-mono tabular-nums font-bold block truncate ${
-                  joeliardiEval.isHighConvictionActionEligible &&
-                  (joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST' ||
-                    joeliardiEval.decisionState === 'STRONG_BUY_CYCLICAL_ZSCORE')
-                    ? 'text-[#0D5C46]'
-                    : 'text-neutral-600'
-                }`}
-                title={joeliardiEval.valuationLabel}
-              >
-                {joeliardiEval.valuationLabel}
-              </span>
+              {(() => {
+                const upsideVal =
+                  joeliardiEval.upsideDownsidePct ??
+                  Number(
+                    (
+                      ((joeliardiEval.intrinsicValueIdr - activeStock.lastPrice) /
+                        Math.max(1, activeStock.lastPrice)) *
+                      100
+                    ).toFixed(1)
+                  );
+                const mosVal = joeliardiEval.marginOfSafetyPct;
+                return (
+                  <>
+                    <div className="flex items-baseline justify-between gap-1.5 my-1 whitespace-nowrap">
+                      <div
+                        className={`text-lg font-bold font-mono tabular-nums ${
+                          joeliardiEval.isHighConvictionActionEligible &&
+                          (mosVal >= 10 ||
+                            joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST' ||
+                            joeliardiEval.decisionState === 'STRONG_BUY_CYCLICAL_ZSCORE' ||
+                            joeliardiEval.decisionState === 'ACCUMULATE_QUALITY_FAIR_VALUE')
+                            ? 'text-[#0D5C46]'
+                            : upsideVal >= 0
+                            ? 'text-[#D97706]'
+                            : 'text-[#9E2A2B]'
+                        }`}
+                        title={`Upside / Downside terhadap Harga Pasar: ${upsideVal >= 0 ? '+' : ''}${upsideVal.toFixed(1)}%`}
+                      >
+                        {upsideVal >= 0 ? '+' : ''}
+                        {upsideVal.toFixed(1)}%
+                      </div>
+                      <span
+                        className="text-[10px] font-mono tabular-nums font-semibold text-neutral-500"
+                        title={`Margin of Safety terhadap Harga Wajar: ${mosVal >= 0 ? '+' : ''}${mosVal.toFixed(1)}%`}
+                      >
+                        MoS: {mosVal >= 0 ? '+' : ''}
+                        {mosVal.toFixed(1)}%
+                      </span>
+                    </div>
+                    <span
+                      className={`text-[10.5px] font-mono tabular-nums font-bold block truncate ${
+                        joeliardiEval.isHighConvictionActionEligible &&
+                        (joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST' ||
+                          joeliardiEval.decisionState === 'STRONG_BUY_CYCLICAL_ZSCORE')
+                          ? 'text-[#0D5C46]'
+                          : 'text-neutral-600'
+                      }`}
+                      title={joeliardiEval.valuationLabel}
+                    >
+                      {joeliardiEval.valuationLabel}
+                    </span>
+                  </>
+                );
+              })()}
             </div>
 
             <div className="p-3.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between h-full tabular-nums">
@@ -3695,11 +3723,29 @@ export function EmitenFundamentalInspectorModal({
                   ).toFixed(2)}
                   x (β {activeStock.beta1Y.toFixed(2)}x)
                 </div>
-                <div className="truncate">
-                  Batas Alokasi Maks (1/β Cap):{' '}
-                  <strong className="text-[#0284C7]">
-                    Maks. {(joeliardiEval.maxBarbellCapPct ?? joeliardiEval.betaWeightedSizingCapPct ?? 14).toFixed(2)}% (T1 {(joeliardiEval.tranche1Pct ?? 8.4).toFixed(2)}% + T2 {(joeliardiEval.tranche2Pct ?? 5.6).toFixed(2)}%)
-                  </strong>
+                <div
+                  className="truncate"
+                  title={
+                    joeliardiEval.isStandbyAllocation
+                      ? `Active Allocation: 0% (Standby) · Proyeksi Plafon Jika Trigger Terpenuhi: Maks. ${(joeliardiEval.maxBarbellCapPct ?? joeliardiEval.betaWeightedSizingCapPct ?? 14).toFixed(2)}% (T1 [${joeliardiEval.tranche1SharePct ?? 60}%]: ${(joeliardiEval.tranche1Pct ?? 8.4).toFixed(2)}% + T2 [${joeliardiEval.tranche2SharePct ?? 40}%]: ${(joeliardiEval.tranche2Pct ?? 5.6).toFixed(2)}%)`
+                      : `Active Allocation: Maks. ${(joeliardiEval.maxBarbellCapPct ?? joeliardiEval.betaWeightedSizingCapPct ?? 14).toFixed(2)}% (T1 [${joeliardiEval.tranche1SharePct ?? 60}%]: ${(joeliardiEval.tranche1Pct ?? 8.4).toFixed(2)}% + T2 [${joeliardiEval.tranche2SharePct ?? 40}%]: ${(joeliardiEval.tranche2Pct ?? 5.6).toFixed(2)}%)`
+                  }
+                >
+                  {joeliardiEval.isStandbyAllocation ? (
+                    <>
+                      Active: <strong className="text-[#D97706]">0% (Standby)</strong> · Proyeksi Plafon:{' '}
+                      <strong className="text-[#0284C7]">
+                        {(joeliardiEval.maxBarbellCapPct ?? joeliardiEval.betaWeightedSizingCapPct ?? 14).toFixed(2)}%
+                      </strong>
+                    </>
+                  ) : (
+                    <>
+                      Alokasi Aktif (1/β):{' '}
+                      <strong className="text-[#0284C7]">
+                        Maks. {(joeliardiEval.maxBarbellCapPct ?? joeliardiEval.betaWeightedSizingCapPct ?? 14).toFixed(2)}% (T1 {(joeliardiEval.tranche1Pct ?? 8.4).toFixed(2)}% + T2 {(joeliardiEval.tranche2Pct ?? 5.6).toFixed(2)}%)
+                      </strong>
+                    </>
+                  )}
                 </div>
               </div>
             </div>
@@ -3991,22 +4037,42 @@ export function EmitenFundamentalInspectorModal({
                             </div>
 
                             <div className="mt-2 pt-2 border-t border-[#E4E2DD]/60 flex-1 flex flex-col">
-                              <div className="flex items-baseline justify-between gap-2">
+                              <div className="flex items-baseline justify-between gap-1.5">
                                 <div className="text-lg sm:text-xl font-extrabold font-mono text-[#111315] whitespace-nowrap">
                                   Rp {formatIdrPriceDisplay(m.fairPriceIdr)}
                                 </div>
-                                <span
-                                  className={`text-[10.5px] font-mono font-bold whitespace-nowrap ${
-                                    m.mosPct >= 10
-                                      ? 'text-[#0D5C46]'
-                                      : m.mosPct >= 0
-                                      ? 'text-[#D97706]'
-                                      : 'text-[#9E2A2B]'
-                                  }`}
-                                >
-                                  {m.mosPct >= 0 ? '+' : ''}
-                                  {m.mosPct.toFixed(1)}%
-                                </span>
+                                {(() => {
+                                  const mUpside =
+                                    m.upsideDownsidePct ??
+                                    Number(
+                                      (
+                                        ((m.fairPriceIdr - activeStock.lastPrice) /
+                                          Math.max(1, activeStock.lastPrice)) *
+                                        100
+                                      ).toFixed(1)
+                                    );
+                                  return (
+                                    <div className="text-right leading-tight shrink-0">
+                                      <span
+                                        className={`text-[10.5px] font-mono font-bold whitespace-nowrap block ${
+                                          m.mosPct >= 10
+                                            ? 'text-[#0D5C46]'
+                                            : mUpside >= 0
+                                            ? 'text-[#D97706]'
+                                            : 'text-[#9E2A2B]'
+                                        }`}
+                                        title={`Upside / Downside: ${mUpside >= 0 ? '+' : ''}${mUpside.toFixed(1)}%`}
+                                      >
+                                        {mUpside >= 0 ? '+' : ''}
+                                        {mUpside.toFixed(1)}%
+                                      </span>
+                                      <span className="text-[8.5px] font-mono text-neutral-500 whitespace-nowrap block">
+                                        MoS {m.mosPct >= 0 ? '+' : ''}
+                                        {m.mosPct.toFixed(1)}%
+                                      </span>
+                                    </div>
+                                  );
+                                })()}
                               </div>
 
                               {/* Visual Accumulation Bar: Stacked Bar on Model Final vs Proportional Contribution Bar on Components */}
@@ -4141,23 +4207,38 @@ export function EmitenFundamentalInspectorModal({
                         </div>
 
                         <div className="flex sm:flex-row lg:flex-col items-baseline lg:items-end justify-between gap-2 shrink-0 lg:min-w-[165px]">
-                          <div className="flex items-baseline gap-2">
-                            <span className="text-lg sm:text-xl font-extrabold font-mono text-[#111315] whitespace-nowrap">
-                              Rp {formatIdrPriceDisplay(standaloneFloorMethod.fairPriceIdr)}
-                            </span>
-                            <span
-                              className={`text-[11px] font-mono font-bold whitespace-nowrap ${
-                                standaloneFloorMethod.mosPct >= 10
-                                  ? 'text-[#0D5C46]'
-                                  : standaloneFloorMethod.mosPct >= 0
-                                  ? 'text-[#D97706]'
-                                  : 'text-[#9E2A2B]'
-                              }`}
-                            >
-                              {standaloneFloorMethod.mosPct >= 0 ? '+' : ''}
-                              {standaloneFloorMethod.mosPct.toFixed(1)}%
-                            </span>
-                          </div>
+                          {(() => {
+                            const flUpside =
+                              standaloneFloorMethod.upsideDownsidePct ??
+                              Number(
+                                (
+                                  ((standaloneFloorMethod.fairPriceIdr - activeStock.lastPrice) /
+                                    Math.max(1, activeStock.lastPrice)) *
+                                  100
+                                ).toFixed(1)
+                              );
+                            return (
+                              <div className="flex items-baseline gap-2">
+                                <span className="text-lg sm:text-xl font-extrabold font-mono text-[#111315] whitespace-nowrap">
+                                  Rp {formatIdrPriceDisplay(standaloneFloorMethod.fairPriceIdr)}
+                                </span>
+                                <span
+                                  className={`text-[11px] font-mono font-bold whitespace-nowrap ${
+                                    standaloneFloorMethod.mosPct >= 10
+                                      ? 'text-[#0D5C46]'
+                                      : flUpside >= 0
+                                      ? 'text-[#D97706]'
+                                      : 'text-[#9E2A2B]'
+                                  }`}
+                                  title={`Upside / Downside Floor: ${flUpside >= 0 ? '+' : ''}${flUpside.toFixed(1)}% | MoS Floor: ${standaloneFloorMethod.mosPct >= 0 ? '+' : ''}${standaloneFloorMethod.mosPct.toFixed(1)}%`}
+                                >
+                                  {flUpside >= 0 ? '+' : ''}
+                                  {flUpside.toFixed(1)}% (MoS {standaloneFloorMethod.mosPct >= 0 ? '+' : ''}
+                                  {standaloneFloorMethod.mosPct.toFixed(1)}%)
+                                </span>
+                              </div>
+                            );
+                          })()}
                           <span className="text-[9.5px] font-mono text-neutral-500">
                             Selisih vs Model Final:{' '}
                             <strong className="text-[#111315]">
@@ -4804,6 +4885,21 @@ export function EmitenFundamentalInspectorModal({
                           joeliardiEval.tranche2Pct ??
                           joeliardiEval.riskSizingResult?.tranche2AllocationPct ??
                           Number((betaCapPct - t1AllocPct).toFixed(2));
+                        const t1SharePct =
+                          joeliardiEval.tranche1SharePct ??
+                          joeliardiEval.riskSizingResult?.tranche1SharePct ??
+                          (betaCapPct > 0 ? Math.round((t1AllocPct / betaCapPct) * 100) : 60);
+                        const t2SharePct =
+                          joeliardiEval.tranche2SharePct ??
+                          joeliardiEval.riskSizingResult?.tranche2SharePct ??
+                          Math.max(0, 100 - t1SharePct);
+                        const isStandbyAlloc = Boolean(
+                          joeliardiEval.isStandbyAllocation ??
+                            joeliardiEval.riskSizingResult?.isStandbyAllocation
+                        );
+                        const upsideVal =
+                          joeliardiEval.upsideDownsidePct ??
+                          Number((((fairIdr - spotIdr) / Math.max(1, spotIdr)) * 100).toFixed(1));
                         const basketLabel =
                           activeStock.beta1Y <= 0.85 ? 'Keranjang 1 (Core Defensif)' : 'Keranjang 2 (Tactical Alpha)';
                         const actionBadge = activeStock.isHscFlagged
@@ -4847,47 +4943,49 @@ export function EmitenFundamentalInspectorModal({
                               </div>
                               <ul className="pt-2 border-t border-[#E4E2DD]/70 space-y-1 text-[10.5px] text-neutral-600">
                                 <li className="flex items-start gap-1.5">
-                                  <span className="text-[#0D5C46] font-bold">▸</span>
-                                  <span>
-                                    {activeStock.isHscFlagged
-                                      ? 'Jangan alokasikan modal inti pada saham berstatus konsentrasi HSC.'
-                                      : joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST'
-                                      ? 'Momentum laba/buyback aktif memvalidasi akumulasi bertahap tanpa menunggu diskon dalam.'
-                                      : 'Bagi order beli dalam 2 termin (60% Tranche 1 / 40% Tranche 2) untuk mengoptimalkan harga rata-rata.'}
-                                  </span>
-                                </li>
-                              </ul>
-                            </div>
-
-                            {/* Card 2: Zona Akumulasi Ideal */}
-                            <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2 min-w-0 overflow-hidden">
-                              <div className="space-y-2 min-w-0">
-                                <div className="flex items-center justify-between gap-1 border-b border-[#E4E2DD]/80 pb-1.5 min-w-0">
-                                  <span className="text-[8.5px] tracking-tight font-bold uppercase text-[#0D5C46] whitespace-nowrap truncate min-w-0">
-                                    2. Zona Akumulasi Ideal
-                                  </span>
-                                  <span className={`px-1 py-0.5 text-[7.5px] tracking-tighter font-mono font-bold uppercase border rounded-xs whitespace-nowrap shrink-0 ${zoneStatusBadge.cls}`}>
-                                    {zoneStatusBadge.label}
-                                  </span>
-                                </div>
-
-                                <div className="space-y-1.5 font-mono tabular-nums text-[9.5px] bg-[#FFFFFF] p-2 rounded-xs border border-[#E4E2DD]/80">
-                                  <div className="flex items-center justify-between gap-1 whitespace-nowrap">
-                                    <span className="text-neutral-500 text-[9px] shrink-0">Rentang Ideal:</span>
-                                    <strong className="text-[#0D5C46] text-[9.5px] shrink-0">{extractedRange}</strong>
-                                  </div>
-                                  <div className="flex items-center justify-between gap-1 whitespace-nowrap">
-                                    <span className="text-neutral-500 text-[9px] shrink-0">Nilai Wajar:</span>
-                                    <strong className="text-[#111315] text-[9.5px] shrink-0">Rp {formatIdrPriceDisplay(fairIdr)}</strong>
-                                  </div>
-                                  <div className="flex items-center justify-between gap-1 whitespace-nowrap">
-                                    <span className="text-neutral-500 text-[9px] shrink-0">Margin of Safety (MoS):</span>
-                                    <strong className={`text-[9.5px] shrink-0 ${mosVal >= 0 ? 'text-[#0D5C46]' : 'text-[#D97706] bb-amber'}`}>
-                                      {mosVal >= 0 ? `+${mosVal.toFixed(1)}%` : `${mosVal.toFixed(1)}%`} (Spot Rp {formatIdrPriceDisplay(spotIdr)})
-                                    </strong>
-                                  </div>
-                                </div>
+                                    <span className="text-[#0D5C46] font-bold">▸</span>
+                                    <span>
+                                      {activeStock.isHscFlagged
+                                        ? 'Jangan alokasikan modal inti pada saham berstatus konsentrasi HSC (Active Allocation = 0% Standby).'
+                                        : isStandbyAlloc
+                                        ? `Active Allocation = 0% (Standby). Proyeksi Plafon Jika Trigger Terpenuhi: Maks. ${betaCapPct.toFixed(2)}% (${t1SharePct}% Tranche 1 [${t1AllocPct.toFixed(2)}%] / ${t2SharePct}% Tranche 2 [${t2AllocPct.toFixed(2)}%]).`
+                                        : joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST'
+                                        ? `Momentum laba/buyback aktif memvalidasi akumulasi bertahap (${t1SharePct}% Tranche 1 [${t1AllocPct.toFixed(2)}%] / ${t2SharePct}% Tranche 2 [${t2AllocPct.toFixed(2)}%]).`
+                                        : `Bagi order beli dalam 2 termin (${t1SharePct}% Tranche 1 [${t1AllocPct.toFixed(2)}%] / ${t2SharePct}% Tranche 2 [${t2AllocPct.toFixed(2)}%]) untuk mengoptimalkan harga rata-rata.`}
+                                    </span>
+                                  </li>
+                                </ul>
                               </div>
+
+                              {/* Card 2: Zona Akumulasi Ideal */}
+                              <div className="p-2.5 bg-[#FAF9F6] border border-[#E4E2DD] rounded-xs flex flex-col justify-between space-y-2 min-w-0 overflow-hidden">
+                                <div className="space-y-2 min-w-0">
+                                  <div className="flex items-center justify-between gap-1 border-b border-[#E4E2DD]/80 pb-1.5 min-w-0">
+                                    <span className="text-[8.5px] tracking-tight font-bold uppercase text-[#0D5C46] whitespace-nowrap truncate min-w-0">
+                                      2. Zona Akumulasi Ideal
+                                    </span>
+                                    <span className={`px-1 py-0.5 text-[7.5px] tracking-tighter font-mono font-bold uppercase border rounded-xs whitespace-nowrap shrink-0 ${zoneStatusBadge.cls}`}>
+                                      {zoneStatusBadge.label}
+                                    </span>
+                                  </div>
+
+                                  <div className="space-y-1.5 font-mono tabular-nums text-[9.5px] bg-[#FFFFFF] p-2 rounded-xs border border-[#E4E2DD]/80">
+                                    <div className="flex items-center justify-between gap-1 whitespace-nowrap">
+                                      <span className="text-neutral-500 text-[9px] shrink-0">Rentang Ideal:</span>
+                                      <strong className="text-[#0D5C46] text-[9.5px] shrink-0">{extractedRange}</strong>
+                                    </div>
+                                    <div className="flex items-center justify-between gap-1 whitespace-nowrap">
+                                      <span className="text-neutral-500 text-[9px] shrink-0">Nilai Wajar:</span>
+                                      <strong className="text-[#111315] text-[9.5px] shrink-0">Rp {formatIdrPriceDisplay(fairIdr)}</strong>
+                                    </div>
+                                    <div className="flex items-center justify-between gap-1 whitespace-nowrap">
+                                      <span className="text-neutral-500 text-[9px] shrink-0">Upside / MoS:</span>
+                                      <strong className={`text-[9.5px] shrink-0 ${upsideVal >= 0 ? 'text-[#0D5C46]' : 'text-[#D97706] bb-amber'}`}>
+                                        {upsideVal >= 0 ? `+${upsideVal.toFixed(1)}%` : `${upsideVal.toFixed(1)}%`} (MoS {mosVal >= 0 ? `+${mosVal.toFixed(1)}%` : `${mosVal.toFixed(1)}%`})
+                                      </strong>
+                                    </div>
+                                  </div>
+                                </div>
 
                               <p className="text-[10.5px] text-neutral-600 leading-snug pt-1">
                                 {mosVal >= 10
@@ -4951,18 +5049,38 @@ export function EmitenFundamentalInspectorModal({
                                   <span className="text-[8.5px] tracking-tight font-bold uppercase text-[#0284C7] bb-cyan whitespace-nowrap truncate min-w-0">
                                     4. Vol-Targeted Barbell &amp; ADTV
                                   </span>
-                                  <span className="px-1 py-0.5 text-[7.5px] tracking-tighter font-mono font-bold uppercase bg-[#0284C7]/15 text-[#0284C7] bb-cyan border border-[#0284C7]/40 rounded-xs whitespace-nowrap shrink-0">
-                                    Maks. {betaCapPct.toFixed(2)}%
+                                  <span
+                                    className={`px-1 py-0.5 text-[7.5px] tracking-tighter font-mono font-bold uppercase border rounded-xs whitespace-nowrap shrink-0 ${
+                                      isStandbyAlloc
+                                        ? 'bg-[#D97706]/15 text-[#D97706] bb-amber border-[#D97706]/40'
+                                        : 'bg-[#0284C7]/15 text-[#0284C7] bb-cyan border-[#0284C7]/40'
+                                    }`}
+                                  >
+                                    {isStandbyAlloc
+                                      ? `Active 0% (Plafon ${betaCapPct.toFixed(2)}%)`
+                                      : `Maks. ${betaCapPct.toFixed(2)}%`}
                                   </span>
                                 </div>
 
                                 <div className="space-y-1.5 font-mono tabular-nums text-[9.5px] bg-[#FFFFFF] p-2 rounded-xs border border-[#E4E2DD]/80">
                                   <div className="flex items-center justify-between gap-1 whitespace-nowrap">
-                                    <span className="text-neutral-500 text-[9px] shrink-0">Alokasi:</span>
-                                    <strong className="text-[#111315] text-[9px] tracking-tight shrink-0">{basketLabel}</strong>
+                                    <span className="text-neutral-500 text-[9px] shrink-0">
+                                      {isStandbyAlloc ? 'Active Allocation:' : 'Alokasi:'}
+                                    </span>
+                                    <strong
+                                      className={`text-[9px] tracking-tight shrink-0 ${
+                                        isStandbyAlloc ? 'text-[#D97706] bb-amber' : 'text-[#111315]'
+                                      }`}
+                                    >
+                                      {isStandbyAlloc ? '0% (Standby)' : basketLabel}
+                                    </strong>
                                   </div>
                                   <div className="flex items-center justify-between gap-1 whitespace-nowrap">
-                                    <span className="text-neutral-500 text-[9px] shrink-0">T1 (60%) + T2 (40%):</span>
+                                    <span className="text-neutral-500 text-[9px] shrink-0">
+                                      {isStandbyAlloc
+                                        ? `Proyeksi (${t1SharePct}%/${t2SharePct}%):`
+                                        : `T1 (${t1SharePct}%) + T2 (${t2SharePct}%):`}
+                                    </span>
                                     <strong className="text-[#0284C7] bb-cyan text-[9px] tracking-tight shrink-0">
                                       {t1AllocPct.toFixed(2)}% + {t2AllocPct.toFixed(2)}% = {betaCapPct.toFixed(2)}%
                                     </strong>

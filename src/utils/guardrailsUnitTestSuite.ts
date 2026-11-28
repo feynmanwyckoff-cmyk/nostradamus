@@ -1324,6 +1324,186 @@ export function runInstitutionalGuardrailsUnitTests(): UnitTestCaseResult[] {
     });
   }
 
+  // ==========================================================================
+  // TEST 13 (P1.5): 5-Point Mathematical & UX Synchronization Audit
+  // (1. PBV Z-Score & Dynamic Window Label, 2. Upside/Downside vs MoS,
+  //  3. Standby Allocation 0% vs Proyeksi Plafon & Tranche Sync,
+  //  4. Single Source of Truth Conviction Score, 5. Post-Override Graham-Joeliardi Floor)
+  // ==========================================================================
+  {
+    const universe = buildIdx100StockUniverse(40);
+    const antmBase = universe.find((s) => s.ticker === 'ANTM') ?? universe[0];
+
+    // 1. Test Pure Cyclical issuer-specific PBV Z-Score (Current PBV < Historical Mean -> strictly negative Z)
+    // and dynamic window label (3Y when only epsAvg3YIdr is provided)
+    const antmBelowMeanStock: StockMetrics = {
+      ...antmBase,
+      ticker: 'ANTM',
+      name: 'Aneka Tambang Tbk',
+      sector: 'Basic Materials',
+      lastPrice: 1200, // With BVPS ~1240 -> Current PBV ~0.97x (< ANTM 10Y Mean 1.48x -> Z MUST be negative!)
+      sharesOutstanding: 24_030_764_725,
+      equityAttributableIdr: 29_800_000_000_000,
+      netIncomeTTMIdr: 2_800_000_000_000,
+      roe: 9.4,
+      debtToEquity: 0.16,
+      grossProfitabilityToAssets: 13.5,
+      ocfToNetIncomeRatio: 1.1,
+      historicalEps7YAvgIdr: undefined,
+      epsAvg5YIdr: undefined,
+      epsAvg3YIdr: 125 // Only 3Y historical EPS provided -> label must adapt to "Normalized 3Y EPS"
+    };
+    const antmEval = evaluateJoeliardiOosFundamental(antmBelowMeanStock, DEFAULT_GLOBAL_MACRO);
+
+    // 2. Test Upside/Downside vs Margin of Safety mathematical separation
+    // Overvalued / Hold stock where FairValue < MarketPrice
+    const holdStock: StockMetrics = {
+      ...antmBase,
+      ticker: 'AVIA',
+      name: 'Avia Avian Tbk',
+      sector: 'Basic Materials',
+      lastPrice: 780, // High market price so recommendation becomes WATCHLIST/HOLD
+      sharesOutstanding: 61_953_000_000,
+      equityAttributableIdr: 9_920_000_000_000,
+      netIncomeTTMIdr: 1_915_000_000_000,
+      revenueTTMIdr: 7_450_000_000_000,
+      operatingProfitTTMIdr: 2_210_000_000_000,
+      ebitdaTTMIdr: 2_480_000_000_000,
+      totalAssetsIdr: 11_200_000_000_000,
+      totalDebtIdr: 396_000_000_000,
+      ocfTTMIdr: 2_145_000_000_000,
+      roe: 19.3,
+      debtToEquity: 0.04,
+      grossProfitabilityToAssets: 28.5,
+      ocfToNetIncomeRatio: 1.12,
+      dividendYieldPct: 4.8,
+      forwardDividendYieldPct: 4.8,
+      beta1Y: 0.72,
+      volatilityAnn: 19.5,
+      fundamentalsSource: 'LIVE_YAHOO_API',
+      priceSource: 'LIVE_YAHOO_API'
+    };
+    const holdEval = evaluateJoeliardiOosFundamental(holdStock, DEFAULT_GLOBAL_MACRO);
+    const expectedUpsidePct = Number(
+      (
+        ((holdEval.intrinsicValueIdr - holdStock.lastPrice) /
+          Math.max(1, holdStock.lastPrice)) *
+        100
+      ).toFixed(1)
+    );
+    const expectedMosPct = Number(
+      (
+        ((holdEval.intrinsicValueIdr - holdStock.lastPrice) /
+          Math.max(1, holdEval.intrinsicValueIdr)) *
+        100
+      ).toFixed(1)
+    );
+
+    // 5. Compare Post-Override Graham-Joeliardi Floor (Quality Compounder) vs Cyclical Penalty Floor
+    const floorCompounder = calculateInvariantGrahamJoeliardiFloor({
+      epsTTM: 30.9,
+      epsAvg3Y: 28.5,
+      epsAvg5Y: 27.5,
+      growthRate: 0.02, // Even if raw cyclical growth passed was 2.0%, post-override compounder boosts sustainable g
+      spotRf10Y: 0.0675,
+      roeTTM: 0.193,
+      roeAvg3Y: 0.14, // Below 15% 3Y avg, which on cyclical would trigger -25% weak moat penalty
+      roeAvg5Y: 0.14,
+      debtToEquity: 0.04,
+      ensembleFairValue: 900,
+      effectiveModule: 'Compounder',
+      isQualityCompounderOverride: true,
+      tickRounder: (v) => Math.round(v)
+    });
+    const floorCyclicalPenalized = calculateInvariantGrahamJoeliardiFloor({
+      epsTTM: 30.9,
+      epsAvg3Y: 28.5,
+      epsAvg5Y: 27.5,
+      growthRate: 0.02,
+      spotRf10Y: 0.0675,
+      roeTTM: 0.193,
+      roeAvg3Y: 0.14,
+      roeAvg5Y: 0.14,
+      debtToEquity: 0.04,
+      ensembleFairValue: 900,
+      effectiveModule: 'Pure_Cyclical',
+      isQualityCompounderOverride: false,
+      tickRounder: (v) => Math.round(v)
+    });
+
+    const antmPbvZScore = antmEval.pbvZScore ?? 0;
+
+    const assertions = [
+      {
+        label: '1. PBV Z-Score menggunakan mean/stdDev historis emiten sendiri (PBV di bawah rata-rata wajib bertanda negatif) & label window Normalized EPS dinamis (3Y)',
+        passed:
+          antmPbvZScore < 0 &&
+          antmEval.historicalNormalizedYears === 3 &&
+          Boolean(antmEval.valuationModuleLabel?.includes('Normalized 3Y EPS')),
+        expected: 'PBV Z-Score < 0 (saat PBV < Mean 10Y) & Label "Normalized 3Y EPS"',
+        actual: `Z=${antmPbvZScore}σ | Years=${antmEval.historicalNormalizedYears}Y | Label="${antmEval.valuationModuleLabel}"`
+      },
+      {
+        label: '2. Pemisahan tegas Upside/Downside = ((FV - Price)/Price)*100 vs Margin of Safety = ((FV - Price)/FV)*100',
+        passed:
+          holdEval.upsideDownsidePct === expectedUpsidePct &&
+          holdEval.marginOfSafetyPct === expectedMosPct &&
+          holdEval.upsideDownsidePct !== holdEval.marginOfSafetyPct &&
+          holdEval.decision?.upsideDownsidePct === expectedUpsidePct,
+        expected: `Upside/Downside = ${expectedUpsidePct}% vs MoS = ${expectedMosPct}%`,
+        actual: `Upside/Downside = ${holdEval.upsideDownsidePct}% vs MoS = ${holdEval.marginOfSafetyPct}%`
+      },
+      {
+        label: '3. Saat rekomendasi WATCHLIST/HOLD atau AVOID, Active Allocation = 0% (Standby), Plafon Barbell = Proyeksi Plafon, & Tranche Share % sinkron',
+        passed:
+          holdEval.isStandbyAllocation === true &&
+          holdEval.activeAllocationPct === 0 &&
+          (holdEval.projectedBarbellCapPct ?? 0) > 0 &&
+          (holdEval.tranche1SharePct ?? 0) + (holdEval.tranche2SharePct ?? 0) === 100 &&
+          Boolean(
+            holdEval.decision?.narrativeExecutionSentence?.includes('Active Allocation: 0% (Standby)') ||
+              holdEval.keyStrengths.some((s) => s.includes('Active Allocation: 0% (Standby)'))
+          ) &&
+          Boolean(
+            holdEval.decision?.narrativeExecutionSentence?.includes('Proyeksi Plafon Jika Trigger Terpenuhi') ||
+              holdEval.keyStrengths.some((s) => s.includes('Proyeksi Plafon Jika Trigger Terpenuhi'))
+          ),
+        expected: 'isStandby=true, Active=0%, Proyeksi Plafon > 0%, T1%+T2%=100%',
+        actual: `isStandby=${holdEval.isStandbyAllocation}, Active=${holdEval.activeAllocationPct}%, Plafon=${holdEval.projectedBarbellCapPct}%, Split=${holdEval.tranche1SharePct}%/${holdEval.tranche2SharePct}%`
+      },
+      {
+        label: '4. Single Source of Truth Conviction Score: joeliardiEval.finalConvictionScore === decision.finalConvictionScore === riskSizingResult.adjustedConvictionScore',
+        passed:
+          typeof holdEval.finalConvictionScore === 'number' &&
+          holdEval.finalConvictionScore === holdEval.decision?.finalConvictionScore &&
+          holdEval.finalConvictionScore === holdEval.riskSizingResult?.adjustedConvictionScore,
+        expected: 'Satu variabel skor final identik di seluruh objek evaluasi & keputusan',
+        actual: `eval=${holdEval.finalConvictionScore} | decision=${holdEval.decision?.finalConvictionScore} | risk=${holdEval.riskSizingResult?.adjustedConvictionScore}`
+      },
+      {
+        label: '5. Graham-Joeliardi Moat Floor memakai archetype post-override (Quality Compounder bebas penalti cap siklikal & bebas weak-moat haircut)',
+        passed:
+          floorCompounder.isMoatHaircutApplied === false &&
+          floorCyclicalPenalized.isMoatHaircutApplied === true &&
+          floorCompounder.standaloneFloor > floorCyclicalPenalized.standaloneFloor,
+        expected: 'Compounder Floor > Cyclical Penalized Floor (Haircut false vs true)',
+        actual: `Compounder Floor: Rp ${floorCompounder.standaloneFloor} (haircut=${floorCompounder.isMoatHaircutApplied}) vs Cyclical: Rp ${floorCyclicalPenalized.standaloneFloor} (haircut=${floorCyclicalPenalized.isMoatHaircutApplied})`
+      }
+    ];
+
+    results.push({
+      id: 'P1.5_FIVE_POINT_MATH_AND_UX_SYNCHRONIZATION',
+      priority: 'P1',
+      title: 'P1.5 Audit 5 Celah Matematis & UX (PBV Z-Score, Upside vs MoS, Standby 0%, Single Conviction Score & G-J Floor Sync)',
+      scenarioType: 'CLEAN_DATA',
+      passed: assertions.every((a) => a.passed),
+      expectedSummary: 'Seluruh 5 celah matematis & UX (Z-Score, Upside vs MoS, Standby 0%, Skor Tunggal, G-J Floor Override) lolos 100%',
+      actualSummary: `Z=${antmPbvZScore}σ (${antmEval.historicalNormalizedYears}Y) | Upside=${holdEval.upsideDownsidePct}% vs MoS=${holdEval.marginOfSafetyPct}% | Active=${holdEval.activeAllocationPct}% | Score=${holdEval.finalConvictionScore}/100 | G-J Floor=Rp ${floorCompounder.standaloneFloor}`,
+      assertions
+    });
+  }
+
   return results;
 }
+
 

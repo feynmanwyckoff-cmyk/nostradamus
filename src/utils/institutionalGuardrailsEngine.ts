@@ -954,6 +954,8 @@ export interface InvariantGrahamJoeliardiParams {
   roeHaircutThresholdPct?: number;    // Default 15.0% (or Ke + tolerance)
   derHaircutThreshold?: number | null;// Default 1.0x; null for Banks/Financials so banking DER is never penalized
   weakMoatHaircutFactor?: number;     // Default 0.75 (-25% haircut)
+  effectiveModule?: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical';
+  isQualityCompounderOverride?: boolean;
   tickRounder?: (price: number) => number;
 }
 
@@ -978,6 +980,12 @@ export function calculateInvariantGrahamJoeliardiFloor(
   const epsAvg3Y = typeof params.epsAvg3Y === 'number' && params.epsAvg3Y > 0 ? params.epsAvg3Y : epsTTM;
   const epsAvg5Y = typeof params.epsAvg5Y === 'number' && params.epsAvg5Y > 0 ? params.epsAvg5Y : epsAvg3Y;
 
+  // Post-Override Archetype Synchronization (Point 5):
+  // If the issuer was routed/overridden to Quality Compounder ('Compounder'), ensure it is NEVER
+  // penalized by raw cyclical caps on growth (g) or moat multiplier.
+  const isPostOverrideCompounder =
+    Boolean(params.isQualityCompounderOverride) || params.effectiveModule === 'Compounder';
+
   // Historical normalized EPS = min(TTM, Avg3Y, Avg5Y_or_3Y_blend) — never Forward Annualized EPS
   const historicalAvgEps = Number(((epsAvg3Y + epsAvg5Y) / 2).toFixed(2));
   const normalizedBasisEps = Math.max(2, Math.round(Math.min(epsTTM, epsAvg3Y, historicalAvgEps)));
@@ -992,20 +1000,32 @@ export function calculateInvariantGrahamJoeliardiFloor(
     Math.max(1.0, Math.min(roeTTMPct, roeAvg3YPct, historicalAvgRoePct)).toFixed(2)
   );
 
-  // Bound growth g in Graham formula to conservative [0%, 6.0%]
-  const safeG = Math.max(0, Math.min(6.0, toPercentValue(params.growthRate, 4.5)));
+  // Bound growth g in Graham formula using post-override archetype:
+  // Quality Compounders allow up to 6.0% (and floor at sustainable compounder growth if ROE >= 15% & DER < 0.5x),
+  // whereas Pure Cyclicals are bounded at [0%, 4.5%].
+  const rawGPct = toPercentValue(params.growthRate, isPostOverrideCompounder ? 5.2 : 4.0);
+  const gCapByArchetype = params.effectiveModule === 'Pure_Cyclical' && !isPostOverrideCompounder ? 4.5 : 6.0;
+  const compounderMinG =
+    isPostOverrideCompounder && roeTTMPct >= 15.0 && params.debtToEquity < 0.50
+      ? Math.min(5.5, Math.max(rawGPct, Math.min(6.0, roeTTMPct * 0.25)))
+      : rawGPct;
+  const safeG = Number(Math.max(0, Math.min(gCapByArchetype, compounderMinG)).toFixed(2));
   const safeSbn10YPct = Math.max(5.0, Math.min(10.5, toPercentValue(params.spotRf10Y, 6.75)));
 
   const rawFormula = (normalizedBasisEps * (8.5 + 2 * safeG) * 4.4) / safeSbn10YPct;
 
-  // FASE 3 Sector-Aware Moat Haircut:
-  // - Uses sector-specific ROE threshold (default 15.0%)
-  // - Uses sector-specific DER threshold (default 1.0x, or null for Financials/Banks so deposit leverage is never penalized)
-  const roeThreshold = params.roeHaircutThresholdPct ?? 15.0;
+  // FASE 3 Sector-Aware Moat Haircut (Post-Override Archetype Synchronized):
+  // - Quality Compounders (post-override) use compounder ROE threshold (14.0%) and DER threshold (1.0x),
+  //   and if TTM ROE >= 15% with DER < 0.50x, are protected from cyclical weak-moat haircut.
+  const roeThreshold = isPostOverrideCompounder
+    ? Math.min(14.0, params.roeHaircutThresholdPct ?? 14.0)
+    : params.roeHaircutThresholdPct ?? 15.0;
   const derThreshold = params.derHaircutThreshold === undefined ? 1.0 : params.derHaircutThreshold;
   const haircutFactor = params.weakMoatHaircutFactor ?? 0.75;
 
-  const isLowRoe = normalizedBasisRoePct < roeThreshold;
+  const isCompounderStrongMoatExempt =
+    isPostOverrideCompounder && roeTTMPct >= 15.0 && params.debtToEquity < 0.50;
+  const isLowRoe = !isCompounderStrongMoatExempt && normalizedBasisRoePct < roeThreshold;
   const isHighDer = derThreshold !== null && params.debtToEquity > derThreshold;
   const isMoatHaircutApplied = isLowRoe || isHighDer;
   const moatHaircutMultiplier = isMoatHaircutApplied ? haircutFactor : 1.0;
@@ -1475,6 +1495,10 @@ export function resolveExecutionThesis(params: {
   isDispersionPenalized?: boolean;
   isNonOpCatalystRejected?: boolean;
   marginOfSafetyPct?: number;
+  tranche1SharePct?: number;
+  tranche2SharePct?: number;
+  maxBarbellCapPct?: number;
+  isHighConvictionActionEligible?: boolean;
 }): {
   primaryActionLabel: string;
   holdingFactorsExplanation: string;
@@ -1487,14 +1511,21 @@ export function resolveExecutionThesis(params: {
     isWeakMoat,
     isHscPenaltyActive,
     isDispersionPenalized,
-    isNonOpCatalystRejected
+    isNonOpCatalystRejected,
+    tranche1SharePct = 60,
+    tranche2SharePct = 40,
+    maxBarbellCapPct
   } = params;
+  const ceilingNote =
+    typeof maxBarbellCapPct === 'number' && maxBarbellCapPct > 0
+      ? ` [Active Allocation: 0% (Standby) · Proyeksi Plafon Jika Trigger Terpenuhi: Maks. ${maxBarbellCapPct.toFixed(2)}% (T1 ${tranche1SharePct}% + T2 ${tranche2SharePct}%)]`
+      : ' [Active Allocation: 0% (Standby)]';
 
   if (convictionGrade === 'D (AVOID / HSC)') {
     return {
       primaryActionLabel: 'HINDARI / JANGAN AKUMULASI (HARD BLOCK HSC)',
       holdingFactorsExplanation: 'Terdeteksi risiko tata kelola / konsentrasi kepemilikan ekstrem KSEI (High Shareholder Concentration).',
-      narrativeExecutionSentence: 'HINDARI / JANGAN AKUMULASI (HARD BLOCK HSC) — terdeteksi risiko konsentrasi kepemilikan ekstrem KSEI.'
+      narrativeExecutionSentence: `HINDARI / JANGAN AKUMULASI (HARD BLOCK HSC) — terdeteksi risiko konsentrasi kepemilikan ekstrem KSEI.${ceilingNote}`
     };
   }
 
@@ -1502,7 +1533,7 @@ export function resolveExecutionThesis(params: {
     return {
       primaryActionLabel: 'TUNDA EKSEKUSI — WAJIB AUDIT DATA FUNDAMENTAL',
       holdingFactorsExplanation: 'Ditemukan anomali rekonsiliasi data fundamental (CRITICAL_DATA_MISMATCH / YTD_CUMULATIVE_SUM_SUSPECT).',
-      narrativeExecutionSentence: 'TUNDA EKSEKUSI — WAJIB AUDIT DATA FUNDAMENTAL sebelum alokasi modal.'
+      narrativeExecutionSentence: `TUNDA EKSEKUSI — WAJIB AUDIT DATA FUNDAMENTAL sebelum alokasi modal.${ceilingNote}`
     };
   }
 
@@ -1519,24 +1550,28 @@ export function resolveExecutionThesis(params: {
           ? 'Data fundamental masih berstatus fallback katalog statis (SEED_WARN) atau skor konviksi di bawah ambang 65/100.'
           : 'Skor konviksi di bawah ambang institusional 65/100 atau bantalan Margin of Safety belum memadai.',
       narrativeExecutionSentence:
-        'SPECULATIVE WATCHLIST / TUNGGU AUDIT DATA — tahan alokasi modal baru hingga kualitas fundamental dan diskon valuasi terkonfirmasi.'
+        `SPECULATIVE WATCHLIST / TUNGGU AUDIT DATA — tahan alokasi modal baru hingga kualitas fundamental dan diskon valuasi terkonfirmasi.${ceilingNote}`
     };
   }
 
-  if (convictionGrade === 'B (WATCHLIST / HOLD)' || (score >= 65 && score < 75)) {
+  if (
+    convictionGrade === 'B (WATCHLIST / HOLD)' ||
+    (score >= 65 && score < 75) ||
+    params.isHighConvictionActionEligible === false
+  ) {
     const factors: string[] = [];
     if (isWeakMoat) factors.push('Weak Moat Penalty (ROE/ROIC di bawah Cost of Equity)');
     if (isHscPenaltyActive) factors.push('HSC Concentration Penalty');
     if (isDispersionPenalized) factors.push('Epistemic Dispersion (ketidakpastian antar-model valuasi)');
     if (isNonOpCatalystRejected) factors.push('Guardrail Kualitas Laba (Katalis Non-Operasional Ditolak)');
     if (factors.length === 0) {
-      factors.push('Skor konviksi berada di pita transisi 65-74/100 atau Margin of Safety moderat');
+      factors.push('Skor konviksi berada di pita transisi 65-74/100 atau Margin of Safety belum mencapai syarat eksekusi');
     }
     const factorStr = factors.join(', ');
     return {
       primaryActionLabel: 'WATCHLIST / HOLD — TUNGGU KONFIRMASI SKOR ATAU DISKON LEBIH DALAM',
       holdingFactorsExplanation: `Faktor penahan utama: ${factorStr}.`,
-      narrativeExecutionSentence: `WATCHLIST / HOLD — TUNGGU KONFIRMASI SKOR ATAU DISKON LEBIH DALAM (Faktor penahan: ${factorStr}).`
+      narrativeExecutionSentence: `WATCHLIST / HOLD — TUNGGU KONFIRMASI SKOR ATAU DISKON LEBIH DALAM (Faktor penahan: ${factorStr}).${ceilingNote}`
     };
   }
 
@@ -1548,14 +1583,14 @@ export function resolveExecutionThesis(params: {
     return {
       primaryActionLabel: 'AKUMULASI SELEKTIF DI ZONA DISKON',
       holdingFactorsExplanation: 'Fundamental solid (Skor 75-79/100, Grade A-) dengan disiplin masuk ketat di rentang harga diskon.',
-      narrativeExecutionSentence: 'AKUMULASI SELEKTIF DI ZONA DISKON melalui pembagian Tranche 1 (60%) dan Tranche 2 (40%).'
+      narrativeExecutionSentence: `AKUMULASI SELEKTIF DI ZONA DISKON melalui pembagian Tranche 1 (${tranche1SharePct}%) dan Tranche 2 (${tranche2SharePct}%).`
     };
   }
 
   return {
     primaryActionLabel: 'LAYAK AKUMULASI BERTAHAP (CORE CONVICTION)',
     holdingFactorsExplanation: 'Kualitas bisnis, neraca, dan Margin of Safety memenuhi standar tertinggi Core Conviction (Skor Min. 80/100).',
-    narrativeExecutionSentence: 'LAYAK AKUMULASI BERTAHAP (CORE CONVICTION) dengan disiplin pembagian Tranche 1 (60%) dan Tranche 2 (40%).'
+    narrativeExecutionSentence: `LAYAK AKUMULASI BERTAHAP (CORE CONVICTION) dengan disiplin pembagian Tranche 1 (${tranche1SharePct}%) dan Tranche 2 (${tranche2SharePct}%).`
   };
 }
 
@@ -1659,12 +1694,17 @@ export function calculateVolatilityTargetedSizingAndStop(
     );
   }
 
-  // Tranche Sizing (Tranche 1 restricted to 35% if high epistemic dispersion > 40% is active)
+  // Tranche Sizing (Single Source of Truth: derived strictly from tranche1ScalingFactor)
   const t1Factor = input.dispersionPenalty.tranche1ScalingFactor;
   const tranche1AllocationPct = Number((finalMaxAllocationPct * t1Factor).toFixed(2));
   const tranche2AllocationPct = Number(
     Math.max(0, finalMaxAllocationPct - tranche1AllocationPct).toFixed(2)
   );
+  const tranche1SharePct = Math.round(
+    (tranche1AllocationPct / Math.max(0.01, finalMaxAllocationPct)) * 100
+  );
+  const tranche2SharePct = Math.max(0, 100 - tranche1SharePct);
+  const isTranche1CappedByDispersion = tranche1SharePct <= 40;
 
   // -------------------------------------------------------------------------
   // ATR / VOLATILITY-CALIBRATED STOP LOSS (BOUNDED WITHIN SECTOR STOP BAND)
@@ -1751,6 +1791,9 @@ export function calculateVolatilityTargetedSizingAndStop(
     finalConvictionGrade === 'A- (SOLID VALUE)' ||
     finalConvictionGrade === 'A (SOLID VALUE)';
 
+  const isStandbyAllocation = !isCoreOrSolidGrade;
+  const activeAllocationPct = isStandbyAllocation ? 0 : finalMaxAllocationPct;
+
   const stopLossMode: RiskSizingResult['stopLossMode'] = isCoreOrSolidGrade
     ? 'DUAL_CORE_CONVICTION_TRANCHE_AND_ATR'
     : 'ATR_VOL_CALIBRATED';
@@ -1762,13 +1805,19 @@ export function calculateVolatilityTargetedSizingAndStop(
     `Invalidasi Integritas Data: Status SANITY_CHECK berubah menjadi FAIL (CRITICAL_DATA_MISMATCH / YTD_CUMULATIVE_SUM_SUSPECT) atau muncul indikasi distribusi tidak wajar KSEI.`
   ];
 
-  const trancheExecutionGuide = `Tranche 1 (Inisiasi ${input.dispersionPenalty.isDispersionPenalized ? '35%' : '60%'}): ${tranche1AllocationPct.toFixed(
-    2
-  )}% ekuitas${
-    input.dispersionPenalty.isDispersionPenalized ? ' [Dibatasi Penalti Dispersi >40%]' : ''
-  } · Tranche 2 (Konfirmasi Laba/Support ${input.dispersionPenalty.isDispersionPenalized ? '65%' : '40%'}): +${tranche2AllocationPct.toFixed(
-    2
-  )}% (Total Plafon Maks. ${finalMaxAllocationPct.toFixed(2)}%).`;
+  const trancheExecutionGuide = isStandbyAllocation
+    ? `Active Allocation: 0% (Standby — Status ${finalConvictionGrade}) · Proyeksi Plafon Jika Trigger Terpenuhi: Maks. ${finalMaxAllocationPct.toFixed(
+        2
+      )}% (Tranche 1 [${tranche1SharePct}%]: ${tranche1AllocationPct.toFixed(2)}%${
+        isTranche1CappedByDispersion ? ' [Dibatasi Penalti Dispersi >40%]' : ''
+      } + Tranche 2 [${tranche2SharePct}%]: ${tranche2AllocationPct.toFixed(2)}%).`
+    : `Active Allocation Maks. ${finalMaxAllocationPct.toFixed(
+        2
+      )}% · Tranche 1 (Inisiasi ${tranche1SharePct}%): ${tranche1AllocationPct.toFixed(2)}% ekuitas${
+        isTranche1CappedByDispersion ? ' [Dibatasi Penalti Dispersi >40%]' : ''
+      } · Tranche 2 (Konfirmasi Laba/Support ${tranche2SharePct}%): +${tranche2AllocationPct.toFixed(
+        2
+      )}% (Total Plafon Maks. ${finalMaxAllocationPct.toFixed(2)}%).`;
 
   return {
     beta1Y: Number(beta1Y.toFixed(2)),
@@ -1781,6 +1830,11 @@ export function calculateVolatilityTargetedSizingAndStop(
     isVolatilityScalarTriggered,
     tranche1AllocationPct,
     tranche2AllocationPct,
+    tranche1SharePct,
+    tranche2SharePct,
+    activeAllocationPct,
+    projectedBarbellCapPct: finalMaxAllocationPct,
+    isStandbyAllocation,
     atr20IDR,
     atrMultipleStopDistanceIDR: Math.round(atrMultipleStopDistanceIDR),
     volMonthlyStopDistanceIDR: Math.round(volMonthlyStopDistanceIDR),

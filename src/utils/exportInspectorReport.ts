@@ -764,10 +764,12 @@ export function renderInspectorReportCanvas(
 
   // Extract core academic & valuation metrics (Single Source of Truth from rawTickerData)
   const finalConvictionScore =
+    joeliardiEval.decision?.finalConvictionScore ??
     joeliardiEval.finalConvictionScore ??
     joeliardiEval.riskSizingResult?.adjustedConvictionScore ??
     joeliardiEval.totalConvictionScore;
   const finalConvictionGrade =
+    joeliardiEval.decision?.finalGrade ??
     joeliardiEval.riskSizingResult?.finalConvictionGrade ??
     joeliardiEval.convictionGrade;
 
@@ -812,6 +814,27 @@ export function renderInspectorReportCanvas(
     joeliardiEval.tranche2Pct ??
     joeliardiEval.riskSizingResult?.tranche2AllocationPct ??
     Number((betaCap - tranche1Pct).toFixed(2));
+  const tranche1SharePct =
+    joeliardiEval.tranche1SharePct ??
+    joeliardiEval.riskSizingResult?.tranche1SharePct ??
+    (betaCap > 0 ? Math.round((tranche1Pct / betaCap) * 100) : 60);
+  const tranche2SharePct =
+    joeliardiEval.tranche2SharePct ??
+    joeliardiEval.riskSizingResult?.tranche2SharePct ??
+    Math.max(0, 100 - tranche1SharePct);
+  const isStandbyAllocation = Boolean(
+    joeliardiEval.isStandbyAllocation ??
+      joeliardiEval.riskSizingResult?.isStandbyAllocation
+  );
+  const upsideDownsideVal =
+    joeliardiEval.upsideDownsidePct ??
+    Number(
+      (
+        ((joeliardiEval.intrinsicValueIdr - stock.lastPrice) /
+          Math.max(1, stock.lastPrice)) *
+        100
+      ).toFixed(1)
+    );
   const secProfile = joeliardiEval.sectorMethodologyProfile;
   const hasSectorNoticeBanner = Boolean(joeliardiEval.sectorMethodologyNotice);
   const sectorNoticeBannerTotalH = hasSectorNoticeBanner ? 44 : 0;
@@ -1142,10 +1165,12 @@ export function renderInspectorReportCanvas(
           lines: [
             (joeliardiEval.primaryExecutionActionLabel || ex.recommendedAction).replace(/^Strong\s+Buy\s*[:—-]\s*/i, ''),
             stock.isHscFlagged
-              ? '▸ Jangan alokasikan modal inti pada saham berstatus konsentrasi HSC.'
+              ? '▸ Jangan alokasikan modal inti pada saham berstatus konsentrasi HSC (Active Allocation = 0% Standby).'
+              : isStandbyAllocation
+              ? `▸ Active Allocation = 0% (Standby). Proyeksi Plafon Jika Trigger Terpenuhi: Maks. ${betaCapPct.toFixed(2)}% (${tranche1SharePct}% Tranche 1 / ${tranche2SharePct}% Tranche 2).`
               : joeliardiEval.decisionState === 'BUY_ON_STRENGTH_CATALYST'
-              ? '▸ Momentum laba/buyback aktif memvalidasi akumulasi bertahap tanpa menunggu diskon dalam.'
-              : '▸ Bagi order beli dalam 2 termin (60% Tranche 1 / 40% Tranche 2) untuk mengoptimalkan harga rata-rata.'
+              ? `▸ Momentum laba/buyback aktif memvalidasi akumulasi bertahap (${tranche1SharePct}% Tranche 1 / ${tranche2SharePct}% Tranche 2).`
+              : `▸ Bagi order beli dalam 2 termin (${tranche1SharePct}% Tranche 1 / ${tranche2SharePct}% Tranche 2) untuk mengoptimalkan harga rata-rata.`
           ],
           color: '#F3F4F6'
         },
@@ -1169,9 +1194,9 @@ export function renderInspectorReportCanvas(
             { k: 'Rentang Ideal:', v: extractedRange, vColor: '#34D399' },
             { k: 'Nilai Wajar:', v: `Rp ${formatIdrPriceDisplay(fairIdr)}`, vColor: '#F9FAFB' },
             {
-              k: 'Margin of Safety (MoS):',
-              v: `${mosVal >= 0 ? '+' : ''}${mosVal.toFixed(1)}% (Spot Rp ${formatIdrPriceDisplay(spotIdr)})`,
-              vColor: mosVal >= 0 ? '#34D399' : '#FBBF24'
+              k: 'Upside / MoS:',
+              v: `${upsideDownsideVal >= 0 ? '+' : ''}${upsideDownsideVal.toFixed(1)}% (MoS ${mosVal >= 0 ? '+' : ''}${mosVal.toFixed(1)}%)`,
+              vColor: upsideDownsideVal >= 0 ? '#34D399' : '#FBBF24'
             }
           ],
           lines: [
@@ -1197,12 +1222,20 @@ export function renderInspectorReportCanvas(
         },
         {
           label: '4. VOL-TARGETED BARBELL & ADTV',
-          badge: `Maks. ${betaCapPct.toFixed(2)}%`,
-          badgeColor: '#38BDF8',
+          badge: isStandbyAllocation
+            ? `Active 0% (Plafon ${betaCapPct.toFixed(2)}%)`
+            : `Maks. ${betaCapPct.toFixed(2)}%`,
+          badgeColor: isStandbyAllocation ? '#FBBF24' : '#38BDF8',
           kvRows: [
-            { k: 'Alokasi:', v: basketLabel, vColor: '#F9FAFB' },
             {
-              k: 'T1 (60%) + T2 (40%):',
+              k: isStandbyAllocation ? 'Active Allocation:' : 'Alokasi:',
+              v: isStandbyAllocation ? '0% (Standby)' : basketLabel,
+              vColor: isStandbyAllocation ? '#FBBF24' : '#F9FAFB'
+            },
+            {
+              k: isStandbyAllocation
+                ? `Proyeksi (${tranche1SharePct}%/${tranche2SharePct}%):`
+                : `T1 (${tranche1SharePct}%) + T2 (${tranche2SharePct}%):`,
               v: `${tranche1Pct.toFixed(2)}% + ${tranche2Pct.toFixed(2)}% = ${betaCapPct.toFixed(2)}% (1/Beta ${betaProp.toFixed(2)}x)`,
               vColor: '#38BDF8'
             },
@@ -1852,14 +1885,15 @@ export function renderInspectorReportCanvas(
       ]
     },
     {
-      label: 'MARGIN OF SAFETY & STATE',
+      label: 'UPSIDE / DOWNSIDE & MOS',
       labelColor: '#9CA3AF',
-      main: `${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct.toFixed(1)}%`,
+      main: `${upsideDownsideVal >= 0 ? '+' : ''}${upsideDownsideVal.toFixed(1)}%`,
       mainColor: isMosStatePositive
         ? '#34D399'
-        : joeliardiEval.marginOfSafetyPct >= 0
+        : upsideDownsideVal >= 0
         ? '#FBBF24'
         : '#FB7185',
+      rightMainAux: `MoS: ${joeliardiEval.marginOfSafetyPct >= 0 ? '+' : ''}${joeliardiEval.marginOfSafetyPct.toFixed(1)}%`,
       sub: joeliardiEval.valuationLabel,
       subColor:
         joeliardiEval.isHighConvictionActionEligible &&
@@ -2037,7 +2071,9 @@ export function renderInspectorReportCanvas(
       lines: [
         `Komposit: ${stock.dmuCompositeScore.toFixed(2)}/10 (Top ${stock.dmuRankPct}%)`,
         `Propensitas 1/Beta: ${betaPropensity.toFixed(2)}x (Beta ${stock.beta1Y.toFixed(2)}x)`,
-        `Batas Alokasi Maks: Maks. ${betaCap.toFixed(2)}% (T1 ${tranche1Pct.toFixed(2)}% + T2 ${tranche2Pct.toFixed(2)}%)`
+        isStandbyAllocation
+          ? `Active: 0% (Standby) · Proyeksi Plafon: ${betaCap.toFixed(2)}%`
+          : `Alokasi Aktif: Maks. ${betaCap.toFixed(2)}% (T1 ${tranche1Pct.toFixed(2)}% + T2 ${tranche2Pct.toFixed(2)}%)`
       ]
     }
   ];
@@ -2396,14 +2432,24 @@ export function renderInspectorReportCanvas(
       '"Fira Code", monospace'
     );
 
-    const mosColor = m.mosPct >= 10 ? '#34D399' : m.mosPct >= 0 ? '#FBBF24' : '#FB7185';
+    const mUpside =
+      m.upsideDownsidePct ??
+      Number((((m.fairPriceIdr - stock.lastPrice) / Math.max(1, stock.lastPrice)) * 100).toFixed(1));
+    const mosColor = m.mosPct >= 10 ? '#34D399' : mUpside >= 0 ? '#FBBF24' : '#FB7185';
     ctx.fillStyle = mosColor;
-    ctx.font = '700 10px "Fira Code", monospace';
+    ctx.font = '700 9.8px "Fira Code", monospace';
     ctx.textAlign = 'right';
     ctx.fillText(
-      `${m.mosPct >= 0 ? '+' : ''}${m.mosPct.toFixed(1)}%`,
+      `${mUpside >= 0 ? '+' : ''}${mUpside.toFixed(1)}%`,
       x + cardW - 12,
-      curY + 65
+      curY + 60
+    );
+    ctx.fillStyle = '#9CA3AF';
+    ctx.font = '600 7.8px "Fira Code", monospace';
+    ctx.fillText(
+      `MoS ${m.mosPct >= 0 ? '+' : ''}${m.mosPct.toFixed(1)}%`,
+      x + cardW - 12,
+      curY + 70
     );
     ctx.textAlign = 'left';
 
@@ -2672,15 +2718,24 @@ export function renderInspectorReportCanvas(
     ctx.lineTo(floorBoxX + col1W + col2W, curY + standaloneFloorBarH - 12);
     ctx.stroke();
 
-    // Column 3: Floor Price, MoS% & Diff vs Model Final (strictly bounded inside Column 3)
+    // Column 3: Floor Price, Upside/MoS% & Diff vs Model Final (strictly bounded inside Column 3)
     const rightEdgeX = floorBoxX + floorBoxW - 14;
     const col3InnerW = col3W - 28;
     const flMos = standaloneFloorMethod.mosPct;
-    const flMosStr = `${flMos >= 0 ? '+' : ''}${flMos.toFixed(1)}%`;
+    const flUpside =
+      standaloneFloorMethod.upsideDownsidePct ??
+      Number(
+        (
+          ((standaloneFloorMethod.fairPriceIdr - stock.lastPrice) /
+            Math.max(1, stock.lastPrice)) *
+          100
+        ).toFixed(1)
+      );
+    const flMosStr = `${flUpside >= 0 ? '+' : ''}${flUpside.toFixed(1)}%`;
     ctx.font = '700 10.5px "Fira Code", monospace';
     const flMosW = ctx.measureText(flMosStr).width;
 
-    ctx.fillStyle = flMos >= 10 ? '#34D399' : flMos >= 0 ? '#FBBF24' : '#FB7185';
+    ctx.fillStyle = flMos >= 10 ? '#34D399' : flUpside >= 0 ? '#FBBF24' : '#FB7185';
     ctx.textAlign = 'right';
     ctx.fillText(flMosStr, rightEdgeX, curY + 34);
 

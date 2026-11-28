@@ -3503,6 +3503,7 @@ export function evaluateJoeliardiOosFundamental(
     isCapexOverrideTriggered,
     ui_notifications: routedUiNotifications,
     normalizedEps7YIdr,
+    historicalNormalizedYears,
     normalizedRoePct,
     pbv10YMean,
     pbv10YStdDev,
@@ -3512,6 +3513,7 @@ export function evaluateJoeliardiOosFundamental(
     basisEpsForBenchmarkIdr,
     adjustedGrowthRatePct
   } = routedValResult;
+  const actualNormalizedYears = historicalNormalizedYears ?? 7;
 
   // P1.3: Statistical Arbitrage Computed SOLELY as Tactical Overlay (Removed from Intrinsic Ensemble)
   const splitCalibratedStock: StockMetrics =
@@ -3570,22 +3572,31 @@ export function evaluateJoeliardiOosFundamental(
     ? `Model P/E & RIM Diblokir (Laba Operasional Negatif) → Book Survival Floor 0.85× BVPS = Rp ${intrinsicValueIdr.toLocaleString('id-ID')}`
     : ensembleAgg.ensembleFormulaAudit;
 
-  // P1.2 & FASE 3: STANDALONE GRAHAM-JOELIARDI "MOAT" FLOOR with Sector-Aware Weak-Moat & Always-On <= 90% Ensemble Clamp
+  const isPostOverrideQualityCompounder =
+    Boolean(isTier2QualityCompounderOverride) || Boolean(prelimAuditCheck.isAutoReroutedToCompounder);
+
+  // P1.2 & FASE 3 + POINT 5: STANDALONE GRAHAM-JOELIARDI "MOAT" FLOOR
+  // Uses post-override archetype (effectiveModule & isQualityCompounderOverride) so Quality Compounders
+  // are never penalized by cyclical growth caps or cyclical floor haircuts.
   const grahamBenchmark = calculateGrahamJoeliardiBenchmark({
     basisEpsIdr: basisEpsForBenchmarkIdr,
     epsAvg3YIdr: rawTickerData.epsAvg3Y,
     epsAvg5YIdr: rawTickerData.epsAvg5Y,
-    growthRatePct: adjustedGrowthRatePct,
+    growthRatePct: isPostOverrideQualityCompounder
+      ? Math.max(adjustedGrowthRatePct, sustainableGrowthRatePct)
+      : adjustedGrowthRatePct,
     sbn10YYieldPct: sbnSpot10YPct || 6.75,
-    roePct: valuationRoeBasisPct,
-    roeAvg3YPct: (rawTickerData.roeAvg3Y ?? valuationRoeBasisPct / 100) * 100,
-    roeAvg5YPct: (rawTickerData.roeAvg5Y ?? valuationRoeBasisPct / 100) * 100,
+    roePct: isPostOverrideQualityCompounder ? ttmRoeBasisPct : valuationRoeBasisPct,
+    roeAvg3YPct: (rawTickerData.roeAvg3Y ?? (isPostOverrideQualityCompounder ? ttmRoeBasisPct : valuationRoeBasisPct) / 100) * 100,
+    roeAvg5YPct: (rawTickerData.roeAvg5Y ?? (isPostOverrideQualityCompounder ? ttmRoeBasisPct : valuationRoeBasisPct) / 100) * 100,
     derRatio: sectorProfile.isCorporateDerBypassed ? 0.5 : der,
     ensembleFairValueIdr: intrinsicValueIdr,
     maxRatioToEnsemble: activeProfile.floorPolicy.maxRatioToEnsemble,
     roeHaircutThresholdPct: activeProfile.floorPolicy.roeHaircutThresholdPct,
     derHaircutThreshold: activeProfile.floorPolicy.derHaircutThreshold,
     weakMoatHaircutFactor: activeProfile.floorPolicy.weakMoatHaircutFactor,
+    effectiveModule,
+    isQualityCompounderOverride: isPostOverrideQualityCompounder,
     tickRounder: roundToIdxTick
   });
 
@@ -3624,8 +3635,7 @@ export function evaluateJoeliardiOosFundamental(
     earningsYieldPct: impliedPer > 0 ? 100 / impliedPer : 0,
     earningsGrowthYoYPct: corpIntercept.earningsGrowthYoYPct,
     currentRoute: valuationModuleRoute,
-    isTier2QualityCompounderOverride:
-      isTier2QualityCompounderOverride || prelimAuditCheck.isAutoReroutedToCompounder,
+    isTier2QualityCompounderOverride: isPostOverrideQualityCompounder,
     reportedFairPer: joeliardiFairPer,
     reportedFairPbv: joeliardiFairPbv,
     isStatArbValid,
@@ -3672,6 +3682,12 @@ export function evaluateJoeliardiOosFundamental(
     ? singleSourceJustifiedPbv
     : rawSectorPrimaryFairMultiple;
 
+  // POINT 2: Strict Separation of Upside/Downside (%) vs Margin of Safety (%)
+  // - Upside / Downside (%) = ((FairValue - MarketPrice) / MarketPrice) * 100
+  // - Margin of Safety (%) = ((FairValue - MarketPrice) / FairValue) * 100
+  const upsideDownsidePct = Number(
+    (((intrinsicValueIdr - price) / Math.max(1, price)) * 100).toFixed(1)
+  );
   const marginOfSafetyPct = Number(
     (((intrinsicValueIdr - price) / Math.max(1, intrinsicValueIdr)) * 100).toFixed(1)
   );
@@ -3679,6 +3695,8 @@ export function evaluateJoeliardiOosFundamental(
   // Build Structured Multi-Method Valuation Comparison Array (Primary Ensemble + 3 Pure Intrinsic Legs + Invariant Graham-Joeliardi Floor)
   const calcMos = (fairIdr: number) =>
     Number((((fairIdr - price) / Math.max(1, fairIdr)) * 100).toFixed(1));
+  const calcUpside = (fairIdr: number) =>
+    Number((((fairIdr - price) / Math.max(1, price)) * 100).toFixed(1));
 
   const wSecPct = Math.round(dynamicEnsemble.legs[0].weight * 100);
   const wRimPct = Math.round(dynamicEnsemble.legs[1].weight * 100);
@@ -3694,6 +3712,7 @@ export function evaluateJoeliardiOosFundamental(
       fairMultipleLabel: `Wajar PER ${joeliardiFairPer}x · PBV ${joeliardiFairPbv}x`,
       fairPriceIdr: intrinsicValueIdr,
       mosPct: marginOfSafetyPct,
+      upsideDownsidePct,
       weightPct: 100,
       isPrimaryEnsemble: true
     },
@@ -3701,11 +3720,12 @@ export function evaluateJoeliardiOosFundamental(
       id: 'sector_specific_matrix',
       name: `${sectorPrimaryMetricLabel}`,
       shortLabel: `Modul (${sectorPrimaryMetricShort})`,
-      metricBasis: `${sectorPrimaryPerShareLabel}: Rp ${sectorPrimaryPerShareIdr.toLocaleString('id-ID')}/shm${dynamicEnsemble.legs[0].isOutlierSlashed ? ' [Outlier -50% Bobot]' : ''}`,
+      metricBasis: `${sectorPrimaryPerShareLabel}: Rp ${sectorPrimaryPerShareIdr.toLocaleString('id-ID')}/shm${dynamicEnsemble.legs[0].isOutlierSlashed ? ' [Outlier Dipangkas ke 5%]' : ''}`,
       impliedMultipleLabel: `Implied ${sectorPrimaryMetricShort} ${sectorPrimaryImpliedMultiple}x`,
       fairMultipleLabel: `Wajar ${sectorPrimaryMetricShort} ${sectorPrimaryFairMultiple}x`,
       fairPriceIdr: sectorSpecificFairValueIdr,
       mosPct: calcMos(sectorSpecificFairValueIdr),
+      upsideDownsidePct: calcUpside(sectorSpecificFairValueIdr),
       weightPct: wSecPct,
       isSectorPrimary: true
     },
@@ -3713,22 +3733,24 @@ export function evaluateJoeliardiOosFundamental(
       id: 'multistage_rim',
       name: `Multi-Stage Residual Income (Ohlson-Penman ${rimFadeYears}Y · ω=${rimPersistenceOmega})`,
       shortLabel: `RIM ${rimFadeYears}Y Fade`,
-      metricBasis: `BVPS Rp ${estimatedBvpsIdr.toLocaleString('id-ID')} · TTM ROE ${ttmRoeBasisPct.toFixed(1)}% · ω=${rimPersistenceOmega}${wRimPct === 0 ? ' [Dimatikan pada Siklikal/Properti]' : dynamicEnsemble.legs[1].isOutlierSlashed ? ' [Outlier -50% Bobot]' : ''}`,
+      metricBasis: `BVPS Rp ${estimatedBvpsIdr.toLocaleString('id-ID')} · TTM ROE ${ttmRoeBasisPct.toFixed(1)}% · ω=${rimPersistenceOmega}${wRimPct === 0 ? ' [Dimatikan pada Siklikal/Properti]' : dynamicEnsemble.legs[1].isOutlierSlashed ? ' [Outlier Dipangkas ke 5%]' : ''}`,
       impliedMultipleLabel: `Implied PBV ${impliedPbv}x`,
       fairMultipleLabel: `Justified PBV ${damodaranJustifiedPbv}x`,
       fairPriceIdr: rimFairValueIdr,
       mosPct: calcMos(rimFairValueIdr),
+      upsideDownsidePct: calcUpside(rimFairValueIdr),
       weightPct: wRimPct
     },
     {
       id: 'historical_evebitda_5y',
       name: `${evEbitda5YAnchor.anchorLabel} (Jangkar Fundamental Intrinsik 5Y)`,
       shortLabel: evEbitda5YAnchor.anchorLabel,
-      metricBasis: `EBITDA/Shm: Rp ${evEbitda5YAnchor.ebitdaPerShareIDR.toLocaleString('id-ID')}${dynamicEnsemble.legs[2].isOutlierSlashed ? ' [Outlier -50% Bobot]' : ''}`,
+      metricBasis: `EBITDA/Shm: Rp ${evEbitda5YAnchor.ebitdaPerShareIDR.toLocaleString('id-ID')}${dynamicEnsemble.legs[2].isOutlierSlashed ? ' [Outlier Dipangkas ke 5%]' : ''}`,
       impliedMultipleLabel: `Implied ${evEbitda5YAnchor.impliedEvToEbitda}x`,
       fairMultipleLabel: `Mean 5Y ${evEbitda5YAnchor.fairEvToEbitda5YMean}x`,
       fairPriceIdr: evEbitda5YAnchor.anchorFairPriceIDR,
       mosPct: calcMos(evEbitda5YAnchor.anchorFairPriceIDR),
+      upsideDownsidePct: calcUpside(evEbitda5YAnchor.anchorFairPriceIDR),
       weightPct: wEvPct
     },
     {
@@ -3744,6 +3766,7 @@ export function evaluateJoeliardiOosFundamental(
         : `Full Moat (×1,00)`,
       fairPriceIdr: grahamBenchmark.grahamJoeliardiBenchmarkIdr,
       mosPct: calcMos(grahamBenchmark.grahamJoeliardiBenchmarkIdr),
+      upsideDownsidePct: calcUpside(grahamBenchmark.grahamJoeliardiBenchmarkIdr),
       weightPct: 0,
       isStandaloneBenchmark: true
     }
@@ -4414,7 +4437,7 @@ export function evaluateJoeliardiOosFundamental(
   const totalConvictionScore = finalConvictionScore;
 
   // ============================================================================
-  // FIX 3.1: SINGLE SOURCE OF TRUTH EXECUTION THESIS & GRADE-LOCKED RECOMMENDATION
+  // FIX 3.1 + POINT 3: SINGLE SOURCE OF TRUTH EXECUTION THESIS & POSITION SIZING
   // ============================================================================
   const isHighConvictionActionEligible =
     sanityReport.status === 'PASS' &&
@@ -4426,6 +4449,14 @@ export function evaluateJoeliardiOosFundamental(
       convictionGrade === 'A- (SOLID VALUE)' ||
       convictionGrade === 'A (SOLID VALUE)');
 
+  const maxBarbellCapPct = Number(riskSizingResult.finalMaxAllocationPct.toFixed(2));
+  const tranche1Pct = Number(riskSizingResult.tranche1AllocationPct.toFixed(2));
+  const tranche2Pct = Number(riskSizingResult.tranche2AllocationPct.toFixed(2));
+  const tranche1SharePct =
+    riskSizingResult.tranche1SharePct ??
+    Math.round((tranche1Pct / Math.max(0.01, maxBarbellCapPct)) * 100);
+  const tranche2SharePct = riskSizingResult.tranche2SharePct ?? Math.max(0, 100 - tranche1SharePct);
+
   const executionThesis = resolveExecutionThesis({
     score: totalConvictionScore,
     convictionGrade,
@@ -4434,7 +4465,11 @@ export function evaluateJoeliardiOosFundamental(
     isHscPenaltyActive: stock.hscTier === 'KSEI_DIVIDEND_PENALTY' || Boolean(stock.isHscFlagged),
     isDispersionPenalized: dispersionPenalty.isDispersionPenalized,
     isNonOpCatalystRejected: sanityReport.flags.includes('CATALYST_UNCONFIRMED_NON_OP'),
-    marginOfSafetyPct
+    marginOfSafetyPct,
+    tranche1SharePct,
+    tranche2SharePct,
+    maxBarbellCapPct,
+    isHighConvictionActionEligible
   });
   const primaryExecutionActionLabel = executionThesis.primaryActionLabel;
 
@@ -4479,6 +4514,35 @@ export function evaluateJoeliardiOosFundamental(
           ...rawDecisionTree,
           decisionActionLabel: primaryExecutionActionLabel
         };
+
+  // POINT 3: If recommendation is WATCHLIST/HOLD or AVOID (or decisionState is WAIT_FOR_PULLBACK / AVOID_HSC_BLOCK / DATA_AUDIT_REQUIRED),
+  // set Active Allocation = 0% (Standby) and show Barbell ceiling strictly as "Proyeksi Plafon Jika Trigger Terpenuhi".
+  const isStandbyAllocation =
+    !isHighConvictionActionEligible ||
+    decisionTree.decisionState === 'WAIT_FOR_PULLBACK' ||
+    decisionTree.decisionState === 'AVOID_HSC_BLOCK' ||
+    decisionTree.decisionState === 'DATA_AUDIT_REQUIRED';
+  const activeAllocationPct = isStandbyAllocation ? 0 : maxBarbellCapPct;
+  const projectedBarbellCapPct = maxBarbellCapPct;
+
+  riskSizingResult.isStandbyAllocation = isStandbyAllocation;
+  riskSizingResult.activeAllocationPct = activeAllocationPct;
+  riskSizingResult.projectedBarbellCapPct = projectedBarbellCapPct;
+  riskSizingResult.tranche1SharePct = tranche1SharePct;
+  riskSizingResult.tranche2SharePct = tranche2SharePct;
+  riskSizingResult.trancheExecutionGuide = isStandbyAllocation
+    ? `Active Allocation: 0% (Standby) · Proyeksi Plafon Jika Trigger Terpenuhi: Maks. ${maxBarbellCapPct.toFixed(
+        2
+      )}% (Tranche 1 [${tranche1SharePct}%]: ${tranche1Pct.toFixed(2)}%${
+        tranche1SharePct <= 40 ? ' [Dibatasi Penalti Dispersi >40%]' : ''
+      } + Tranche 2 [${tranche2SharePct}%]: ${tranche2Pct.toFixed(2)}%).`
+    : `Active Allocation: Maks. ${maxBarbellCapPct.toFixed(
+        2
+      )}% · Tranche 1 (Inisiasi ${tranche1SharePct}%): ${tranche1Pct.toFixed(2)}% ekuitas${
+        tranche1SharePct <= 40 ? ' [Dibatasi Penalti Dispersi >40%]' : ''
+      } · Tranche 2 (Konfirmasi Laba/Support ${tranche2SharePct}%): +${tranche2Pct.toFixed(
+        2
+      )}% (Total Plafon Maks. ${maxBarbellCapPct.toFixed(2)}%).`;
 
   // FIX 3.2: Subordinate Tactical Overlay StatArb so it NEVER contradicts the primary fundamental signal
   let updatedStatArbRationale = statArbRationale;
@@ -4551,10 +4615,6 @@ export function evaluateJoeliardiOosFundamental(
       ? 'DATA: PROXY'
       : 'DATA: FRESH';
 
-  // FIX 2.2: Single Source of Truth for Barbell Cap & Tranche Sizing (60% T1 / 40% T2, rounded 2 decimals)
-  const maxBarbellCapPct = Number(riskSizingResult.finalMaxAllocationPct.toFixed(2));
-  const tranche1Pct = Number(riskSizingResult.tranche1AllocationPct.toFixed(2));
-  const tranche2Pct = Number(riskSizingResult.tranche2AllocationPct.toFixed(2));
   const betaWeightedSizingCapPct = maxBarbellCapPct;
   const maxSafeAllocationIdr = sanityReport.maxDailyAbsorption5PctIDR;
   const realCashCappedAllocationIdr =
@@ -4685,7 +4745,7 @@ export function evaluateJoeliardiOosFundamental(
       : sanityReport.isGradeABlocked
       ? `DATA AUDIT REQUIRED: ${sanityReport.flags.join(' · ')}`
       : isHighConvictionActionEligible && decisionTree.decisionState === 'STRONG_BUY_CYCLICAL_ZSCORE'
-      ? `STRONG BUY CYCLICAL FLOOR: PBV Z-SCORE ${pbvZScore}σ ≤ -1.5σ vs 10Y MEAN (${pbv10YMean}x)`
+      ? `STRONG BUY CYCLICAL FLOOR: PBV Z-SCORE ${pbvZScore}σ ≤ -1.5σ vs HIST MEAN (${pbv10YMean}x)`
       : isHighConvictionActionEligible && decisionTree.decisionState === 'BUY_ON_STRENGTH_CATALYST'
       ? `BUY ON STRENGTH (DUAL-CONFIRMED): NI YoY +${rawTickerData.netIncomeYoYPct}% & OP YoY +${rawTickerData.operatingProfitYoYPct}% (TTM ROE ${ttmRoeBasisPct.toFixed(1)}%)`
       : isHighConvictionActionEligible && statArbSignal === 'MEAN_REVERSION_BUY' && marginOfSafetyPct >= 8
@@ -4746,7 +4806,7 @@ export function evaluateJoeliardiOosFundamental(
   keyStrengths.push(`[${sectorProfile.regimeBadgeLabel}] ${sectorProfile.sectorMethodologyNotice}`);
 
   keyStrengths.push(
-    `Arsitektur Valuasi Intrinsik Murni [${valuationModuleLabel} · Basis TTM Default]: Bobot Ensemble (${wSecPct}% ${sectorPrimaryMetricShort} + ${wRimPct}% RIM ω=${rimPersistenceOmega} + ${wEvPct}% ${evEbitda5YAnchor.anchorLabel}) menghasilkan Nilai Intrinsik Rp ${intrinsicValueIdr.toLocaleString('id-ID')} | Floor Mandiri Graham-Joeliardi (3-5Y Norm): Rp ${grahamBenchmark.grahamJoeliardiBenchmarkIdr.toLocaleString('id-ID')} (${grahamBenchmark.isFloorClamped ? 'Clamped ≤ 90% Ensemble' : grahamBenchmark.isMoatHaircutApplied ? 'Haircut -25%' : 'Full Moat'}).`
+    `Arsitektur Valuasi Intrinsik Murni [${valuationModuleLabel} · Basis TTM Default]: Bobot Ensemble (${wSecPct}% ${sectorPrimaryMetricShort} + ${wRimPct}% RIM ω=${rimPersistenceOmega} + ${wEvPct}% ${evEbitda5YAnchor.anchorLabel}) menghasilkan Nilai Intrinsik Rp ${intrinsicValueIdr.toLocaleString('id-ID')} (Upside/Downside ${upsideDownsidePct >= 0 ? '+' : ''}${upsideDownsidePct}% · MoS ${marginOfSafetyPct >= 0 ? '+' : ''}${marginOfSafetyPct}%) | Floor Mandiri Graham-Joeliardi (3-5Y Norm): Rp ${grahamBenchmark.grahamJoeliardiBenchmarkIdr.toLocaleString('id-ID')} (${grahamBenchmark.isFloorClamped ? 'Clamped ≤ 90% Ensemble' : grahamBenchmark.isMoatHaircutApplied ? 'Haircut -25%' : 'Full Moat'}).`
   );
 
   if (valuationModuleRoute === 'CAPEX_AGGRESSOR') {
@@ -4760,7 +4820,11 @@ export function evaluateJoeliardiOosFundamental(
   );
 
   keyStrengths.push(
-    `Volatility-Targeted Barbell Sizing & Dual Stop Loss: Plafon Posisi Final ${riskSizingResult.finalMaxAllocationPct}% (min[1/Beta ${riskSizingResult.inverseBetaCapPct}%, 1/Vol ${riskSizingResult.inverseVolatilityCapPct}%, Rezim ${riskSizingResult.regimeCapPct}%]) | Stop Loss Kuantitatif ATR/Vol: Rp ${riskSizingResult.stopLossPriceIDR.toLocaleString('id-ID')} (-${riskSizingResult.stopLossPct}%) | Tranche 1: ${riskSizingResult.tranche1AllocationPct}% & Tranche 2: ${riskSizingResult.tranche2AllocationPct}% (${riskSizingResult.trancheExecutionGuide}).`
+    `Volatility-Targeted Barbell Sizing & Dual Stop Loss: ${
+      isStandbyAllocation
+        ? `Active Allocation: 0% (Standby) · Proyeksi Plafon Jika Trigger Terpenuhi: Maks. ${maxBarbellCapPct.toFixed(2)}%`
+        : `Active Allocation Maks. ${maxBarbellCapPct.toFixed(2)}%`
+    } (min[1/Beta ${riskSizingResult.inverseBetaCapPct}%, 1/Vol ${riskSizingResult.inverseVolatilityCapPct}%, Rezim ${riskSizingResult.regimeCapPct}%]) | Stop Loss Kuantitatif ATR/Vol: Rp ${riskSizingResult.stopLossPriceIDR.toLocaleString('id-ID')} (-${riskSizingResult.stopLossPct}%) | ${riskSizingResult.trancheExecutionGuide}`
   );
 
   if (isDualConfirmedCatalystActive) {
@@ -4775,7 +4839,7 @@ export function evaluateJoeliardiOosFundamental(
   }
   if (isHighConvictionActionEligible && isCyclicalStrongBuyZScore) {
     keyStrengths.push(
-      `Strong Buy Siklikal (PBV Z-Score ${pbvZScore}σ ≤ -1,5σ): Diperdagangkan jauh di bawah rata-rata PBV 10 tahun (${pbv10YMean}x) dengan Normalized 7Y EPS Rp ${normalizedEps7YIdr.toLocaleString('id-ID')}/shm dan neraca sehat (DER ${der.toFixed(2)}x ≤ 1,0x).`
+      `Strong Buy Siklikal (PBV Z-Score ${pbvZScore}σ ≤ -1,5σ): Diperdagangkan jauh di bawah rata-rata PBV historis emiten (${pbv10YMean}x) dengan Normalized ${actualNormalizedYears}Y EPS Rp ${normalizedEps7YIdr.toLocaleString('id-ID')}/shm dan neraca sehat (DER ${der.toFixed(2)}x ≤ 1,0x).`
     );
   }
   if (isHighConvictionActionEligible && isDefensiveDiscountAnomaly) {
@@ -4822,7 +4886,7 @@ export function evaluateJoeliardiOosFundamental(
   }
   if (dynamicEnsemble.outlierPenalizedLeg) {
     keyRisks.push(
-      `Filter Outlier Ensemble Aktif: Bobot model ${dynamicEnsemble.outlierPenalizedLeg} dipangkas 50% karena menyimpang >40% dari median tiga metode (Rp ${dynamicEnsemble.medianPriceIdr.toLocaleString('id-ID')}).`
+      `Filter Outlier Ensemble Aktif: Bobot model ${dynamicEnsemble.outlierPenalizedLeg} dipangkas ke 5% (redistribusi proporsional 95%) karena menyimpang >40% dari median tiga metode (Rp ${dynamicEnsemble.medianPriceIdr.toLocaleString('id-ID')}).`
     );
   }
   if (stock.isHscFlagged) {
@@ -4869,7 +4933,7 @@ export function evaluateJoeliardiOosFundamental(
   }
   if (marginOfSafetyPct < 0) {
     keyRisks.push(
-      `Harga pasar saat ini berada ${Math.abs(marginOfSafetyPct).toFixed(1)}% di atas estimasi Nilai Intrinsik Wajar Quantedge Ensemble${decisionTree.decisionState === 'BUY_ON_STRENGTH_CATALYST' ? ' (masih dalam batas toleransi ≤10% Buy on Strength)' : ''}.`
+      `Harga pasar saat ini berada ${Math.abs(upsideDownsidePct).toFixed(1)}% (MoS ${marginOfSafetyPct.toFixed(1)}%) di atas estimasi Nilai Intrinsik Wajar Quantedge Ensemble${decisionTree.decisionState === 'BUY_ON_STRENGTH_CATALYST' ? ' (masih dalam batas toleransi ≤10% Buy on Strength)' : ''}.`
     );
   }
   if (adtv20dIdr < 10_000_000_000) {
@@ -4899,6 +4963,13 @@ export function evaluateJoeliardiOosFundamental(
     standaloneFairPbv,
     intrinsicValueIdr,
     marginOfSafetyPct,
+    upsideDownsidePct,
+    historicalNormalizedYears: actualNormalizedYears,
+    activeAllocationPct,
+    projectedBarbellCapPct,
+    tranche1SharePct,
+    tranche2SharePct,
+    isStandbyAllocation,
     annualizedEpsQ3Idr,
     historicalDpr3YPct,
     estimatedForwardDpsIdr,
@@ -5048,8 +5119,7 @@ export function evaluateJoeliardiOosFundamental(
     isConvictionCappedBySeed: convictionCappedByLineage,
     seedCapWarningReason: convictionCapReason,
     sectorClassification: sectorProfile.classification,
-    isQualityCompounderOverride:
-      isTier2QualityCompounderOverride || prelimAuditCheck.isAutoReroutedToCompounder,
+    isQualityCompounderOverride: isPostOverrideQualityCompounder,
     financialAuditReport,
     decision: {
       ticker: stock.ticker,
@@ -5071,6 +5141,7 @@ export function evaluateJoeliardiOosFundamental(
       standaloneFloorIdr: grahamBenchmark.grahamJoeliardiBenchmarkIdr,
       isFloorClamped: grahamBenchmark.isFloorClamped,
       mosPct: marginOfSafetyPct,
+      upsideDownsidePct,
       mosRequiredPct: decisionTree.dynamicRequiredMosPct,
       formattedAccumulationZone: decisionTree.formattedAccumulationZone,
       sbnSpot1YPct,
@@ -5085,8 +5156,13 @@ export function evaluateJoeliardiOosFundamental(
       rimFadeYears,
       gSustPct: sustainableGrowthRatePct,
       maxCapPct: maxBarbellCapPct,
+      activeAllocationPct,
+      projectedBarbellCapPct,
       tranche1Pct,
       tranche2Pct,
+      tranche1SharePct,
+      tranche2SharePct,
+      isStandbyAllocation,
       stopLossIdr: riskSizingResult.stopLossPriceIDR,
       stopLossPct: riskSizingResult.stopLossPct,
       adtv20dIdr,
@@ -5098,8 +5174,7 @@ export function evaluateJoeliardiOosFundamental(
       classificationConfidence: sectorProfile.classification?.classificationConfidence,
       isSectorDataIncomplete: sectorProfile.isSectorDataIncomplete,
       sectorDataFlags: sectorProfile.sectorDataFlags,
-      isQualityCompounderOverride:
-        isTier2QualityCompounderOverride || prelimAuditCheck.isAutoReroutedToCompounder,
+      isQualityCompounderOverride: isPostOverrideQualityCompounder,
       kePremiaBps: sbnCurve.kePremiaBps,
       erpAsOfDate: sbnCurve.erpAsOfDate,
       erpSource: sbnCurve.erpSource,

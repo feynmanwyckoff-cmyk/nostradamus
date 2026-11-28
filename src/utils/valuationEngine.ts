@@ -98,7 +98,18 @@ export const CALIBRATED_CYCLICAL_10Y_PBV_STATS: Record<
   BSDE: { meanPbv10Y: 0.98, stdDevPbv10Y: 0.28, normalizedMidCycleRoePct: 10.2 },
   PWON: { meanPbv10Y: 1.45, stdDevPbv10Y: 0.36, normalizedMidCycleRoePct: 12.8 },
   SMRA: { meanPbv10Y: 1.35, stdDevPbv10Y: 0.38, normalizedMidCycleRoePct: 10.6 },
-  DMAS: { meanPbv10Y: 1.42, stdDevPbv10Y: 0.32, normalizedMidCycleRoePct: 15.2 }
+  DMAS: { meanPbv10Y: 1.42, stdDevPbv10Y: 0.32, normalizedMidCycleRoePct: 15.2 },
+  ANTM: { meanPbv10Y: 1.48, stdDevPbv10Y: 0.42, normalizedMidCycleRoePct: 11.8 },
+  INCO: { meanPbv10Y: 1.35, stdDevPbv10Y: 0.38, normalizedMidCycleRoePct: 11.2 },
+  MDKA: { meanPbv10Y: 2.85, stdDevPbv10Y: 0.72, normalizedMidCycleRoePct: 10.5 },
+  TINS: { meanPbv10Y: 1.26, stdDevPbv10Y: 0.44, normalizedMidCycleRoePct: 10.8 },
+  NCKL: { meanPbv10Y: 1.85, stdDevPbv10Y: 0.45, normalizedMidCycleRoePct: 18.5 },
+  MBMA: { meanPbv10Y: 1.92, stdDevPbv10Y: 0.48, normalizedMidCycleRoePct: 12.0 },
+  AMMN: { meanPbv10Y: 3.40, stdDevPbv10Y: 0.85, normalizedMidCycleRoePct: 15.4 },
+  ADMR: { meanPbv10Y: 2.65, stdDevPbv10Y: 0.62, normalizedMidCycleRoePct: 22.0 },
+  BSSR: { meanPbv10Y: 2.10, stdDevPbv10Y: 0.52, normalizedMidCycleRoePct: 24.0 },
+  SMGR: { meanPbv10Y: 1.25, stdDevPbv10Y: 0.35, normalizedMidCycleRoePct: 9.8 },
+  INTP: { meanPbv10Y: 1.55, stdDevPbv10Y: 0.40, normalizedMidCycleRoePct: 11.2 }
 };
 
 const KBMI4_AND_CONSUMER_MONOPOLY_TICKERS = new Set([
@@ -435,6 +446,7 @@ export interface RoutedValuationModuleOutput extends ValuationReport {
   isCapexOverrideTriggered: boolean;
   valuationReport: ValuationReport;
   normalizedEps7YIdr: number;
+  historicalNormalizedYears?: number;
   normalizedRoePct: number;
   pbv10YMean?: number;
   pbv10YStdDev?: number;
@@ -956,18 +968,29 @@ export const ValuationEngine = {
     // =========================================================================
     // MODULE 3: THE PURE CYCLICAL MODULE (Upstream Coal, CPO, Metals, Cyclical Property)
     // Trigger: Verified Price-Taker Commodity / Cyclical Asset-Heavy Issuer
-    // Logic: Focus on 7Y-10Y Mid-Cycle Normalized Earnings and Book Value Stability
-    //        + 10Y PBV Standard Deviation Z-Score (without double-compressing already-normalized ROE).
+    // Logic: Focus on Multi-Year Mid-Cycle Normalized Earnings and Book Value Stability
+    //        + Issuer-Own Historical PBV Z-Score: (Current_PBV - Mean_Historical_PBV) / StdDev_Historical_PBV
+    //        NEVER compare against generic parent sector average, and NEVER invert sign.
     // =========================================================================
     const cycStats = CALIBRATED_CYCLICAL_10Y_PBV_STATS[clean];
-    const pbv10YMean = Number((stock.pbv10YMean ?? cycStats?.meanPbv10Y ?? 1.32).toFixed(2));
-    const pbv10YStdDev = Number((stock.pbv10YStdDev ?? cycStats?.stdDevPbv10Y ?? 0.35).toFixed(2));
+    const actualNormalizedYears =
+      typeof stock.historicalEps7YAvgIdr === 'number' && stock.historicalEps7YAvgIdr > 0
+        ? 7
+        : typeof stock.epsAvg5YIdr === 'number' && stock.epsAvg5YIdr > 0
+        ? 5
+        : typeof stock.epsAvg3YIdr === 'number' && stock.epsAvg3YIdr > 0
+        ? 3
+        : cycStats
+        ? 7
+        : 5;
 
-    // Normalized 7Y-10Y Mid-Cycle ROE & EPS:
+    // Normalized Multi-Year Mid-Cycle ROE & EPS:
     // Avoid double-compression when `ttmRoePct` passed in is already normalized or moderate (< 20%)
     const midCycleNormalizedRoePct = Number(
       (
         cycStats?.normalizedMidCycleRoePct ??
+        stock.roeAvg5YPct ??
+        stock.roeAvg3YPct ??
         (ttmRoePct > 22.0
           ? Math.max(10.0, Math.min(20.0, ttmRoePct * 0.72 + 12.5 * 0.28))
           : Math.max(6.5, Math.min(20.0, ttmRoePct)))
@@ -976,7 +999,10 @@ export const ValuationEngine = {
     const normalizedEps7YIdr = Math.max(
       2,
       Math.round(
-        stock.historicalEps7YAvgIdr ?? (currentBvpsIdr * midCycleNormalizedRoePct) / 100
+        stock.historicalEps7YAvgIdr ??
+          stock.epsAvg5YIdr ??
+          stock.epsAvg3YIdr ??
+          (currentBvpsIdr * midCycleNormalizedRoePct) / 100
       )
     );
     const normalizedRoePct = Number(
@@ -1003,9 +1029,32 @@ export const ValuationEngine = {
       ).toFixed(2)
     );
 
+    // Issuer-Own Historical Mean & StdDev PBV (NEVER parent sector generic mean):
+    // Priority: 1) stock.pbv10YMean, 2) calibrated issuer 10Y PBV stats, 3) issuer's own historical ROE-derived fair PBV trajectory
+    const issuerOwnHistoricalMeanPbv = Number(
+      (
+        stock.pbv10YMean ??
+        cycStats?.meanPbv10Y ??
+        Math.max(0.55, Math.min(4.5, normalizedFairPbv * 1.05))
+      ).toFixed(2)
+    );
+    const issuerOwnHistoricalStdDevPbv = Number(
+      (
+        stock.pbv10YStdDev ??
+        cycStats?.stdDevPbv10Y ??
+        Math.max(0.22, Number((issuerOwnHistoricalMeanPbv * 0.26).toFixed(2)))
+      ).toFixed(2)
+    );
+    const pbv10YMean = issuerOwnHistoricalMeanPbv;
+    const pbv10YStdDev = issuerOwnHistoricalStdDevPbv;
+
     const impliedPbv = Number((price / Math.max(1, currentBvpsIdr)).toFixed(2));
+    // Strict Z-Score formula: (Current_PBV - Mean_Historical_PBV) / StdDev_Historical_PBV
+    // Invariant: If Current_PBV < Mean_Historical_PBV, Z-Score is strictly NEGATIVE (< 0).
+    const rawPbvDiff = impliedPbv - pbv10YMean;
+    const rawZ = rawPbvDiff / Math.max(0.10, pbv10YStdDev);
     const pbvZScore = Number(
-      ((impliedPbv - pbv10YMean) / Math.max(0.12, pbv10YStdDev)).toFixed(2)
+      (rawPbvDiff < 0 ? -Math.abs(rawZ) : rawPbvDiff > 0 ? Math.abs(rawZ) : 0).toFixed(2)
     );
     const isCyclicalStrongBuyZScore =
       !stock.isHscFlagged && !isCyclicalDerPenalized && pbvZScore <= -1.5;
@@ -1024,7 +1073,7 @@ export const ValuationEngine = {
       ...valuationReport,
       valuationReport,
       route: 'PURE_CYCLICAL',
-      moduleLabel: `Pure Cyclical (Normalized 7Y EPS & PBV Z=${pbvZScore >= 0 ? '+' : ''}${pbvZScore}σ)`,
+      moduleLabel: `Pure Cyclical (Normalized ${actualNormalizedYears}Y EPS & PBV Z=${pbvZScore >= 0 ? '+' : ''}${pbvZScore}σ)`,
       sectorValuationArchetype: 'PURE_CYCLICAL_NORMALIZED',
       sectorPrimaryMetricShort: 'Norm PBV',
       sectorPrimaryMetricLabel: 'Pure Cyclical: Mid-Cycle Normalized PBV & Replacement Cost',
@@ -1033,12 +1082,13 @@ export const ValuationEngine = {
       sectorPrimaryPerShareIdr: currentBvpsIdr,
       sectorPrimaryPerShareLabel: 'BVPS Siklus',
       sectorSpecificFairValueIdr: cyclicalTargetPriceIdr,
-      sectorAcademicRationale: `[Modul 3: Pure Cyclical — Anti-Value Trap] Mematikan P/E & EPS TTM puncak siklus. Menggunakan 7Y Normalized EPS Rp ${normalizedEps7YIdr.toLocaleString('id-ID')}/shm (Normalized ROE ${normalizedRoePct.toFixed(1)}%, ω=${rimPersistenceOmega.toFixed(2)}) dan BVPS Rp ${currentBvpsIdr.toLocaleString('id-ID')} menghasilkan Normalized Justified PBV ${normalizedFairPbv}x (Target Rp ${cyclicalTargetPriceIdr.toLocaleString('id-ID')}). Saat ini PBV ${impliedPbv}x berada pada Z-Score ${pbvZScore >= 0 ? '+' : ''}${pbvZScore}σ vs Mean 10Y ${pbv10YMean}x${isCyclicalStrongBuyZScore ? ' (≤ -1.5σ → Sinyal STRONG BUY Siklikal Aktif)' : ''}${isCyclicalDerPenalized ? ` [Penalti QMJ: DER ${der.toFixed(2)}x > 1.0x]` : ' [QMJ Lolos: Produsen Biaya Rendah & Neraca Kuat]'}.`,
+      sectorAcademicRationale: `[Modul 3: Pure Cyclical — Anti-Value Trap] Mematikan P/E & EPS TTM puncak siklus. Menggunakan Normalized ${actualNormalizedYears}Y EPS Rp ${normalizedEps7YIdr.toLocaleString('id-ID')}/shm (Normalized ROE ${normalizedRoePct.toFixed(1)}%, ω=${rimPersistenceOmega.toFixed(2)}) dan BVPS Rp ${currentBvpsIdr.toLocaleString('id-ID')} menghasilkan Normalized Justified PBV ${normalizedFairPbv}x (Target Rp ${cyclicalTargetPriceIdr.toLocaleString('id-ID')}). Saat ini PBV ${impliedPbv}x berada pada Z-Score ${pbvZScore >= 0 ? '+' : ''}${pbvZScore}σ vs Mean Historis Emiten ${pbv10YMean}x (σ=${pbv10YStdDev}x)${isCyclicalStrongBuyZScore ? ' (≤ -1.5σ → Sinyal STRONG BUY Siklikal Aktif)' : ''}${isCyclicalDerPenalized ? ` [Penalti QMJ: DER ${der.toFixed(2)}x > 1.0x]` : ' [QMJ Lolos: Produsen Biaya Rendah & Neraca Kuat]'}.`,
       cwipToAssetsRatio,
       capexToDaRatio,
       capexToRevenueRatio,
       isCapexOverrideTriggered,
       normalizedEps7YIdr,
+      historicalNormalizedYears: actualNormalizedYears,
       normalizedRoePct,
       pbv10YMean,
       pbv10YStdDev,
@@ -1491,6 +1541,8 @@ export function calculateGrahamJoeliardiBenchmark(params: {
   roeHaircutThresholdPct?: number;
   derHaircutThreshold?: number | null;
   weakMoatHaircutFactor?: number;
+  effectiveModule?: 'Compounder' | 'Capex_Aggressor' | 'Pure_Cyclical';
+  isQualityCompounderOverride?: boolean;
   tickRounder: (rawPrice: number) => number;
 }): GrahamJoeliardiBenchmarkResult {
   const {
@@ -1508,6 +1560,8 @@ export function calculateGrahamJoeliardiBenchmark(params: {
     roeHaircutThresholdPct,
     derHaircutThreshold,
     weakMoatHaircutFactor,
+    effectiveModule,
+    isQualityCompounderOverride,
     tickRounder
   } = params;
 
@@ -1526,6 +1580,8 @@ export function calculateGrahamJoeliardiBenchmark(params: {
     roeHaircutThresholdPct,
     derHaircutThreshold,
     weakMoatHaircutFactor,
+    effectiveModule,
+    isQualityCompounderOverride,
     tickRounder
   });
 

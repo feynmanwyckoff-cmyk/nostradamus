@@ -286,6 +286,7 @@ export interface ValuationMethodComparisonItem {
   fairMultipleLabel: string;
   fairPriceIdr: number;
   mosPct: number;
+  upsideDownsidePct?: number;
   weightPct: number;
   isPrimaryEnsemble?: boolean;
   isSectorPrimary?: boolean;
@@ -307,6 +308,13 @@ export interface JoeliardiOosEvaluation {
   standaloneFairPbv?: number;
   intrinsicValueIdr: number;
   marginOfSafetyPct: number;
+  upsideDownsidePct?: number;
+  historicalNormalizedYears?: number;
+  activeAllocationPct?: number;
+  projectedBarbellCapPct?: number;
+  tranche1SharePct?: number;
+  tranche2SharePct?: number;
+  isStandbyAllocation?: boolean;
   annualizedEpsQ3Idr: number;
   historicalDpr3YPct: number;
   estimatedForwardDpsIdr: number;
@@ -546,6 +554,7 @@ export interface EmitenDecision {
   standaloneFloorIdr: number;
   isFloorClamped: boolean;
   mosPct: number;
+  upsideDownsidePct?: number;
   mosRequiredPct: number;
   formattedAccumulationZone: string;
   // Discount Rate, Beta & Persistence SSOT
@@ -562,8 +571,13 @@ export interface EmitenDecision {
   gSustPct: number;
   // Sizing, Stop Loss & Adaptive ADTV Formatting SSOT
   maxCapPct: number;
+  activeAllocationPct?: number;
+  projectedBarbellCapPct?: number;
   tranche1Pct: number;
   tranche2Pct: number;
+  tranche1SharePct?: number;
+  tranche2SharePct?: number;
+  isStandbyAllocation?: boolean;
   stopLossIdr: number;
   stopLossPct: number;
   adtv20dIdr: number;
@@ -882,6 +896,11 @@ export interface RiskSizingResult {
   isVolatilityScalarTriggered: boolean;
   tranche1AllocationPct: number;  // Initial position size (further capped if dispersion penalty active)
   tranche2AllocationPct: number;  // Follow-on tranche on confirmation
+  tranche1SharePct?: number;      // e.g. 60 or 35 (% of finalMaxAllocationPct)
+  tranche2SharePct?: number;      // e.g. 40 or 65 (% of finalMaxAllocationPct)
+  activeAllocationPct?: number;   // 0% when WATCHLIST/HOLD or AVOID (Standby), else finalMaxAllocationPct
+  projectedBarbellCapPct?: number;// Barbell ceiling if trigger met
+  isStandbyAllocation?: boolean;  // True when status is WATCHLIST/HOLD or AVOID
   // 2. ATR / Volatility-Calibrated Stop Loss & Tranche Invalidation Mode
   atr20IDR: number;
   atrMultipleStopDistanceIDR: number; // 2.5 * ATR_20
