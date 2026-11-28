@@ -41,6 +41,27 @@ export function resolveSectorBetaFallback(sector: string): number {
   return 0.90;
 }
 
+const snapshotBetaCache = new Map<string, number>();
+let cachedJkseReturns: number[] | null = null;
+
+function getCachedJkseReturns(): number[] {
+  if (cachedJkseReturns !== null) return cachedJkseReturns;
+  const snapData = (
+    embeddedSnapshot as unknown as {
+      data?: Record<string, { closes?: number[]; timestamps?: number[] }>;
+    }
+  )?.data;
+  const jkseCloses = (snapData?.['^JKSE']?.closes ?? []).filter(
+    (c) => Number.isFinite(c) && c > 0
+  );
+  const mRet: number[] = [];
+  for (let i = 1; i < jkseCloses.length; i++) {
+    mRet.push((jkseCloses[i] - jkseCloses[i - 1]) / jkseCloses[i - 1]);
+  }
+  cachedJkseReturns = mRet;
+  return mRet;
+}
+
 /**
  * MODUL 2.1: Computes authentic 1Y Beta from daily return regression of the stock vs ^JKSE
  * using at least 30–35 overlapping trading days from static-market-snapshot.json when
@@ -61,6 +82,12 @@ export function computeAuthenticBeta1YFromSnapshotOrSeries(
   }
 
   const cleanTicker = ticker.replace(/\.JK$/i, '').trim().toUpperCase();
+  const cacheKey = `${cleanTicker}:${(sector || '').trim()}`;
+  const cachedBeta = snapshotBetaCache.get(cacheKey);
+  if (cachedBeta !== undefined) {
+    return cachedBeta;
+  }
+
   const yfSym = `${cleanTicker}.JK`;
   const snapData = (
     embeddedSnapshot as unknown as {
@@ -69,18 +96,13 @@ export function computeAuthenticBeta1YFromSnapshotOrSeries(
   )?.data;
 
   const stockEntry = snapData?.[yfSym];
-  const jkseEntry = snapData?.['^JKSE'];
   const stockCloses = (stockEntry?.closes ?? []).filter((c) => Number.isFinite(c) && c > 0);
-  const jkseCloses = (jkseEntry?.closes ?? []).filter((c) => Number.isFinite(c) && c > 0);
+  const mRet = getCachedJkseReturns();
 
-  if (stockCloses.length >= 15 && jkseCloses.length >= 15) {
+  if (stockCloses.length >= 15 && mRet.length >= 14) {
     const sRet: number[] = [];
     for (let i = 1; i < stockCloses.length; i++) {
       sRet.push((stockCloses[i] - stockCloses[i - 1]) / stockCloses[i - 1]);
-    }
-    const mRet: number[] = [];
-    for (let i = 1; i < jkseCloses.length; i++) {
-      mRet.push((jkseCloses[i] - jkseCloses[i - 1]) / jkseCloses[i - 1]);
     }
 
     // Use up to 60 overlapping recent trading days (minimum 14–35 days available in snapshot)
@@ -107,13 +129,17 @@ export function computeAuthenticBeta1YFromSnapshotOrSeries(
         const sectorPrior = resolveSectorBetaFallback(sector);
         const vasicekBeta = 0.70 * rawRegressedBeta + 0.30 * sectorPrior;
         if (Number.isFinite(vasicekBeta) && vasicekBeta > 0.38) {
-          return Number(Math.max(0.42, Math.min(2.25, vasicekBeta)).toFixed(2));
+          const result = Number(Math.max(0.42, Math.min(2.25, vasicekBeta)).toFixed(2));
+          snapshotBetaCache.set(cacheKey, result);
+          return result;
         }
       }
     }
   }
 
-  return Number(resolveSectorBetaFallback(sector).toFixed(2));
+  const fallbackResult = Number(resolveSectorBetaFallback(sector).toFixed(2));
+  snapshotBetaCache.set(cacheKey, fallbackResult);
+  return fallbackResult;
 }
 
 /**
@@ -994,8 +1020,15 @@ export function calculateInvariantGrahamJoeliardiFloor(
   if (hasExplicitEnsemble) {
     const rawLimit = Math.max(50, safeEnsemble * maxRatio);
     let candidate = tickRounder(rawLimit);
-    while (candidate > rawLimit + 1e-6 && candidate > 50) {
-      candidate = tickRounder(candidate - 1);
+    for (let guard = 0; guard < 6 && candidate > rawLimit + 1e-6 && candidate > 50; guard++) {
+      const step =
+        candidate > 5000 ? 25 : candidate > 2000 ? 10 : candidate > 500 ? 5 : candidate > 200 ? 2 : 1;
+      const nextCandidate = tickRounder(Math.max(50, candidate - step));
+      if (nextCandidate >= candidate) {
+        candidate = Math.max(50, candidate - step);
+        break;
+      }
+      candidate = nextCandidate;
     }
     maxAllowedFloor = candidate;
   }

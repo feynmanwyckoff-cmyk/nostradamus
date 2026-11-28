@@ -37,6 +37,8 @@ import {
 import { runQuantValuationInWorkerAsync } from '../utils/quantWorkerBridge';
 import { QuantWorkerOutputPayload } from '../workers/quantValuationWorker';
 import {
+  buildDeepAnalyticalConvictionReport,
+  buildEmitenCorporateActionRadarBaseline,
   clearLiveQuoteMemoryCache,
   fetchLiveEmitenSpecificNews,
   fetchLiveIdxTicker,
@@ -286,15 +288,23 @@ const METRIC_LABELS = [
   'margin usaha'
 ];
 
+function escapeRegexLiteral(raw: string): string {
+  return raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+const ESCAPED_VERDICT_TERMS = VERDICT_TERMS.map(escapeRegexLiteral);
+const ESCAPED_METRIC_LABELS = METRIC_LABELS.map(escapeRegexLiteral);
+
 const BASE_NARRATIVE_PATTERN_PARTS = [
-  `\\b(?:${VERDICT_TERMS.join('|')})\\b`,
-  `\\b(?:${METRIC_LABELS.join('|')})\\s*~?(?:Rp\\s*)?[+-]?\\d+(?:[.,]\\d+)?(?:%|x|\\/100|\\/10|\\/saham)?`,
+  `\\b(?:${ESCAPED_VERDICT_TERMS.join('|')})\\b`,
+  `\\b(?:${ESCAPED_METRIC_LABELS.join('|')})\\s*~?(?:Rp\\s*)?[+-]?\\d+(?:[.,]\\d+)?(?:%|x|\\/100|\\/10|\\/saham)?`,
   `~?Rp\\s*\\d+(?:[.,]\\d+)*(?:\\/saham)?`,
   `[+-]?\\d+(?:[.,]\\d+)?(?:%|x|\\b\\/100\\b|\\b\\/10\\b)`
 ];
 
 const narrativeRegexByTickerCache = new Map<string, RegExp>();
 const narrativeHighlightNodeCache = new Map<string, React.ReactNode>();
+const quantRationaleRegexCache = new Map<string, RegExp>();
 const quantRationaleNodeCache = new Map<string, React.ReactNode>();
 
 function renderHighlightedFinancialNarrative(
@@ -350,6 +360,20 @@ function renderHighlightedFinancialNarrative(
   return rendered;
 }
 
+const BASE_QUANT_RATIONALE_TOKEN_PATTERNS: string[] = [
+  `terdiskon\\s+tajam\\s+[+-]?\\d+(?:[.,]\\d+)?%`,
+  `(?:diskon|premi)\\s+[+-]?\\d+(?:[.,]\\d+)?%`,
+  `Surplus\\s+konversi\\s+kas\\s+riil\\s+sangat\\s+solid`,
+  `Anomali\\s+Relative\\s+Value\\s+Terdeteksi`,
+  `Ohlson-Penman\\s+RIM(?:\\s*\\([^)]+\\))?`,
+  `Multi-Stage\\s+RIM(?:\\s*\\([^)]+\\))?`,
+  `(?:OCF\\/NI|GP\\/A(?:\\s+Novy-Marx)?|DER|Forward\\s+ROE|Fwd\\s+ROE|Ke|Z-Score|Spread\\s+1D|Spread\\s+30D|P\\/CF|EV\\/EBITDA|P\\/AFFO|Justified\\s+PBV|Quality\\s+P\\/E|Cash\\s+EPS|EBITDA|AFFO|OCF|EPS|BVPS|ρ|ω)\\s*(?:=\\s*)?~?(?:Rp\\s*)?[+-]?\\d+(?:[.,]\\d+)?(?:%|x|σ|\\/[a-zA-Z]+)?`,
+  `[+-]?\\d+(?:[.,]\\d+)?x\\s+vs\\s+(?:Wajar|Justified\\s+PBV)\\s+[+-]?\\d+(?:[.,]\\d+)?x`,
+  `[+-]?\\d+(?:[.,]\\d+)?%\\s+excess\\s+return`,
+  `~?Rp\\s*\\d+(?:[.,]\\d+)*(?:\\/shm|\\/saham)?`,
+  `[+-]?\\d+(?:[.,]\\d+)?(?:%|x|σ)`
+];
+
 function renderHighlightedQuantRationale(
   text: string,
   ticker?: string,
@@ -364,30 +388,24 @@ function renderHighlightedQuantRationale(
     return cachedNode;
   }
 
-  // Split out "Langkah Follow-Up: ..." if present so we can style the follow-up sentence inline with distinct tactical emphasis
-  const followUpSplit = text.split(/(Langkah Follow-Up:\s*[\s\S]*)$/i);
-  const mainBody = followUpSplit[0] || '';
-  const followUpClause = followUpSplit[1] || '';
+  // Fast string indexOf split for "Langkah Follow-Up: ..." instead of greedy regex split
+  const lowerText = text.toLowerCase();
+  const followUpIdx = lowerText.indexOf('langkah follow-up:');
+  const mainBody = followUpIdx >= 0 ? text.slice(0, followUpIdx) : text;
+  const followUpClause = followUpIdx >= 0 ? text.slice(followUpIdx) : '';
 
-  const tokenPatterns: string[] = [
-    `terdiskon\\s+tajam\\s+[+-]?\\d+(?:[.,]\\d+)?%`,
-    `(?:diskon|premi)\\s+[+-]?\\d+(?:[.,]\\d+)?%`,
-    `Surplus\\s+konversi\\s+kas\\s+riil\\s+sangat\\s+solid`,
-    `Anomali\\s+Relative\\s+Value\\s+Terdeteksi`,
-    `Ohlson-Penman\\s+RIM(?:\\s*\\([^)]+\\))?`,
-    `Multi-Stage\\s+RIM(?:\\s*\\([^)]+\\))?`,
-    `(?:OCF\\/NI|GP\\/A(?:\\s+Novy-Marx)?|DER|Forward\\s+ROE|Fwd\\s+ROE|Ke|Z-Score|Spread\\s+1D|Spread\\s+30D|P\\/CF|EV\\/EBITDA|P\\/AFFO|Justified\\s+PBV|Quality\\s+P\\/E|Cash\\s+EPS|EBITDA|AFFO|OCF|EPS|BVPS|ρ|ω)\\s*(?:=\\s*)?~?(?:Rp\\s*)?[+-]?\\d+(?:[.,]\\d+)?(?:%|x|σ|\\/[a-zA-Z]+)?`,
-    `[+-]?\\d+(?:[.,]\\d+)?x\\s+vs\\s+(?:Wajar|Justified\\s+PBV)\\s+[+-]?\\d+(?:[.,]\\d+)?x`,
-    `[+-]?\\d+(?:[.,]\\d+)?%\\s+excess\\s+return`,
-    `~?Rp\\s*\\d+(?:[.,]\\d+)*(?:\\/shm|\\/saham)?`,
-    `[+-]?\\d+(?:[.,]\\d+)?(?:%|x|σ)`
-  ];
-  if (cleanTicker.length >= 4) tokenPatterns.push(`\\b${cleanTicker}\\b`);
-  if (cleanPeer.length >= 4) tokenPatterns.push(`\\b${cleanPeer}\\b`);
-  const regex = new RegExp(`(${tokenPatterns.join('|')})`, 'g');
+  const regexCacheKey = `${cleanTicker}::${cleanPeer}`;
+  let regex = quantRationaleRegexCache.get(regexCacheKey);
+  if (!regex) {
+    const tokenPatterns = [...BASE_QUANT_RATIONALE_TOKEN_PATTERNS];
+    if (cleanTicker.length >= 4) tokenPatterns.push(`\\b${cleanTicker}\\b`);
+    if (cleanPeer.length >= 4) tokenPatterns.push(`\\b${cleanPeer}\\b`);
+    regex = new RegExp(`(${tokenPatterns.join('|')})`, 'g');
+    quantRationaleRegexCache.set(regexCacheKey, regex);
+  }
 
   const highlightTokens = (segmentText: string, keyPrefix: string) => {
-    const parts = segmentText.split(regex);
+    const parts = segmentText.split(regex!);
 
     return parts.map((part, idx) => {
       if (!part) return null;
@@ -802,7 +820,8 @@ export function EmitenFundamentalInspectorModal({
     activeStock?.splitRatioDivisor,
     activeStock?.buybackNominalIdr,
     activeStock?.earningsGrowthYoYPct,
-    catalystRevision
+    catalystRevision,
+    isValuationHydrated
   ]);
 
   // Real-Time Live Preview for Calibration Modal before saving (strictly gated when drawer is open)
@@ -1280,10 +1299,10 @@ export function EmitenFundamentalInspectorModal({
     ];
   }, [activeStock, joeliardiEval]);
 
-  // Trigger lightweight 2-stage progressive block reveal whenever a new structuredReport arrives (eliminates 50Hz full-modal re-renders)
+  // Instant full-report reveal whenever a new structuredReport arrives (eliminates progressive timers and extra re-renders)
   useEffect(() => {
     if (typingTimerRef.current) {
-      window.clearInterval(typingTimerRef.current);
+      window.clearTimeout(typingTimerRef.current);
       typingTimerRef.current = null;
     }
 
@@ -1302,26 +1321,10 @@ export function EmitenFundamentalInspectorModal({
     const totalCot = structuredReport.chainOfThoughtSteps?.length || 0;
     const totalSecs = structuredReport.sections?.length || 0;
 
-    // Frame 0: Immediately display full Executive Summary + initial Chain-of-Thought cards (hits memoized RegExp cache once)
     setTypedCharCount(totalChars);
     setVisibleCotCount(totalCot);
-    setVisibleSectionCount(Math.min(2, totalSecs));
-    setIsTypingComplete(totalSecs <= 2);
-
-    if (totalSecs > 2) {
-      typingTimerRef.current = window.setTimeout(() => {
-        setVisibleSectionCount(totalSecs);
-        setIsTypingComplete(true);
-        typingTimerRef.current = null;
-      }, 90);
-    }
-
-    return () => {
-      if (typingTimerRef.current) {
-        window.clearTimeout(typingTimerRef.current);
-        typingTimerRef.current = null;
-      }
-    };
+    setVisibleSectionCount(totalSecs);
+    setIsTypingComplete(true);
   }, [structuredReport, isAnalyzingAi]);
 
   const handleSkipTypingAnimation = () => {
@@ -1343,203 +1346,240 @@ export function EmitenFundamentalInspectorModal({
   // Helper to run non-blocking AI inspection without triggering repeated interval re-renders
   const runWithThinkingStages = async <T,>(taskFn: () => Promise<T>): Promise<T> => {
     setThinkingStageIdx(2);
-    await new Promise((resolve) => setTimeout(resolve, 16));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     return await taskFn();
   };
 
-  // Lazy On-Demand Fetch: Waits until Frame-1 modal shell has mounted, then pulls live quote + worker fundamentals, <=3m news, and runs AI synthesis
+  // Instant Snapshot Synthesis + Lightweight Non-Blocking Background Sync:
+  // 1. Immediately renders full Investment Committee Report & Corporate Action Radar from existing snapshot on Frame 1 (<15ms).
+  // 2. Quietly syncs Cloudflare Worker (if configured) and RSS news in the background without blocking UI or re-ranking the 975-stock table.
   useEffect(() => {
     if (!stock || !isValuationHydrated) return;
     let isMounted = true;
     setLiveStockOverride(null);
-    setIsSyncingOnDemand(true);
-    setIsLoadingNews(true);
-    setStructuredReport(null);
-    setAiAnalysisFallbackText(null);
-    const defaultQuestion = `Apakah ${stock.ticker} layak dibeli pada harga Rp ${stock.lastPrice.toLocaleString('id-ID')} berdasarkan Nilai Intrinsik Wajar & Fundamental Kualitas Moat?`;
+
+    const baseStock = activeStock || stock;
+    const defaultQuestion = `Apakah ${baseStock.ticker} layak dibeli pada harga Rp ${baseStock.lastPrice.toLocaleString('id-ID')} berdasarkan Nilai Intrinsik Wajar & Fundamental Kualitas Moat?`;
     setUserQuestion(defaultQuestion);
 
+    const baselineRadarNews = buildEmitenCorporateActionRadarBaseline(
+      baseStock.ticker,
+      baseStock.name,
+      baseStock.sector,
+      baseStock
+    );
+    setRecentNews(baselineRadarNews);
+    setIsLoadingNews(false);
+
+    const initialEval =
+      joeliardiEval ||
+      evaluateJoeliardiOosFundamental(
+        baseStock,
+        undefined,
+        availablePortfolioCashIdr,
+        regimeStatus
+      );
+    const instantReport = buildDeepAnalyticalConvictionReport({
+      stock: baseStock,
+      joeliardiEval: initialEval,
+      recentNews: baselineRadarNews,
+      userQuestion: defaultQuestion,
+      regimeStatus,
+      availablePortfolioCashIdr
+    });
+    const instantParsedSummary = parseDirectSummaryHeaderAndBody(
+      instantReport.directAnswerSummary || ''
+    );
+    setStructuredReport(instantReport);
+    setTypedCharCount(instantParsedSummary.body.length);
+    setVisibleCotCount(instantReport.chainOfThoughtSteps?.length || 0);
+    setVisibleSectionCount(instantReport.sections?.length || 0);
+    setIsTypingComplete(true);
+    setAiAnalysisFallbackText(stripRawMarkdownArtifacts(instantReport.directAnswerSummary));
+    setIsAiGenerated(false);
+    setAiGeneratedAt(new Date().toISOString());
+    setIsAnalyzingAi(false);
+
     const runLazyOnDemandInspect = async () => {
-      let currentStock = activeStock || stock;
+      // Yield once so Frame 1 + Instant Committee Report finishes painting smoothly first
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      if (!isMounted) return;
+
+      let currentStock = baseStock;
       let hasMeaningfulChange = false;
+      const hasConfiguredWorker = Boolean(getRealtimeWorkerUrl());
+      const needsPriceHydration = !currentStock.lastPrice || currentStock.lastPrice <= 0;
 
-      // 1. Pull On-Demand Real-Time Single-Ticker Fundamentals + Price from Cloudflare Worker first (1 fast request).
-      // Only fall back to multi-proxy fetchLiveIdxTicker if Worker did not return a valid spot price.
-      try {
-        const workerEntry = await tryFetchLiveTickerFundamentalsOnDemand(stock.ticker).catch(
-          () => null
-        );
-        if (!isMounted) return;
+      if (hasConfiguredWorker || needsPriceHydration) {
+        setIsSyncingOnDemand(true);
+        try {
+          const workerEntry = await tryFetchLiveTickerFundamentalsOnDemand(stock.ticker, {
+            skipRelayChartProbe: !needsPriceHydration
+          }).catch(() => null);
+          if (!isMounted) return;
 
-        let freshQuote: StockMetrics | null = null;
-        if (!workerEntry || !workerEntry.lastPrice || workerEntry.lastPrice <= 0) {
-          freshQuote = await fetchLiveIdxTicker(stock.ticker).catch(() => null);
+          let freshQuote: StockMetrics | null = null;
+          if (needsPriceHydration && (!workerEntry || !workerEntry.lastPrice || workerEntry.lastPrice <= 0)) {
+            freshQuote = await fetchLiveIdxTicker(stock.ticker).catch(() => null);
+          }
+          if (!isMounted) return;
+
+          if (freshQuote && freshQuote.lastPrice > 0) {
+            currentStock = {
+              ...currentStock,
+              ...freshQuote,
+              isHscFlagged: stock.isHscFlagged,
+              hscSource: stock.hscSource,
+              hscTier: stock.hscTier,
+              hscReason: stock.hscReason,
+              kseiHscConcentrationPct: stock.kseiHscConcentrationPct,
+              kseiHscIsNew: stock.kseiHscIsNew,
+              kseiHscFootnote: stock.kseiHscFootnote,
+              kseiHscScorePenaltyPts: stock.kseiHscScorePenaltyPts
+            };
+          }
+
+          if (workerEntry) {
+            const ov = resolveTickerFundamentalOverlay(
+              currentStock.ticker,
+              {
+                defaultRoe: currentStock.trailingRoePct ?? currentStock.roe,
+                defaultDer: currentStock.debtToEquity,
+                defaultOpMargin: currentStock.operatingMargin
+              },
+              workerEntry.adtv20dIdr ?? currentStock.adtv20dIdr,
+              'LIVE_YAHOO_API',
+              workerEntry.asOfDate || new Date().toISOString().slice(0, 10)
+            );
+            currentStock = enrichStockMetrics({
+              ...currentStock,
+              ...(workerEntry.lastPrice && workerEntry.lastPrice > 0
+                ? {
+                    lastPrice: workerEntry.lastPrice,
+                    previousClose: workerEntry.previousClose ?? currentStock.previousClose,
+                    change1D: workerEntry.change1D ?? currentStock.change1D,
+                    priceSource: 'LIVE_YAHOO_API',
+                    priceAsOfDate: workerEntry.asOfDate || new Date().toISOString().slice(0, 10)
+                  }
+                : {}),
+              ...(workerEntry.adtv20dIdr && workerEntry.adtv20dIdr > 0
+                ? {
+                    adtv20dIdr: workerEntry.adtv20dIdr,
+                    adtvSource: 'LIVE_YAHOO_API',
+                    adtvAsOfDate: workerEntry.asOfDate || new Date().toISOString().slice(0, 10)
+                  }
+                : {}),
+              ...(workerEntry.beta1Y ? { beta1Y: workerEntry.beta1Y } : {}),
+              ...(workerEntry.realizedAnnualVol ? { volatilityAnn: workerEntry.realizedAnnualVol } : {}),
+              ...(workerEntry.atr20 ? { atr20Idr: workerEntry.atr20 } : {}),
+              ...(workerEntry.dividendYieldTTM !== undefined && workerEntry.dividendYieldTTM !== null
+                ? { dividendYieldPct: workerEntry.dividendYieldTTM }
+                : {}),
+              ...(ov.sharesOutstanding ? { sharesOutstanding: ov.sharesOutstanding } : {}),
+              ...(ov.revenueTTMIdr ? { revenueTTMIdr: ov.revenueTTMIdr } : {}),
+              ...(ov.latestFullYearRevenueIdr ? { latestFullYearRevenueIdr: ov.latestFullYearRevenueIdr } : {}),
+              ...(ov.operatingProfitTTMIdr ? { operatingProfitTTMIdr: ov.operatingProfitTTMIdr } : {}),
+              ...(ov.ebitdaTTMIdr ? { ebitdaTTMIdr: ov.ebitdaTTMIdr } : {}),
+              ...(ov.netIncomeTTMIdr ? { netIncomeTTMIdr: ov.netIncomeTTMIdr } : {}),
+              ...(ov.netIncomeYoYPct !== undefined ? { earningsGrowthYoYPct: ov.netIncomeYoYPct } : {}),
+              ...(ov.operatingProfitYoYPct !== undefined ? { operatingProfitGrowthYoYPct: ov.operatingProfitYoYPct } : {}),
+              ...(ov.equityAttributableIdr ? { equityAttributableIdr: ov.equityAttributableIdr } : {}),
+              ...(ov.totalAssetsIdr ? { totalAssetsIdr: ov.totalAssetsIdr } : {}),
+              ...(ov.totalDebtIdr !== undefined ? { totalDebtIdr: ov.totalDebtIdr } : {}),
+              ...(ov.cashAndEquivalentsIdr !== undefined ? { cashAndEquivalentsIdr: ov.cashAndEquivalentsIdr } : {}),
+              ...(ov.ocfTTMIdr !== undefined ? { ocfTTMIdr: ov.ocfTTMIdr } : {}),
+              ...(ov.capexTTMIdr !== undefined ? { capexTTMIdr: ov.capexTTMIdr } : {}),
+              ...(ov.daTTMIdr !== undefined ? { daTTMIdr: ov.daTTMIdr } : {}),
+              ...(ov.roeAvg3YPct !== undefined ? { roeAvg3YPct: ov.roeAvg3YPct } : {}),
+              ...(ov.roeAvg5YPct !== undefined ? { roeAvg5YPct: ov.roeAvg5YPct } : {}),
+              ...(ov.daAnomaly !== undefined ? { daAnomaly: ov.daAnomaly } : {}),
+              ...(ov.daMethodNote ? { daMethodNote: ov.daMethodNote } : {}),
+              ...(ov.ttmMethod ? { ttmMethod: ov.ttmMethod } : {}),
+              ...(ov.flowAudit ? { flowAudit: ov.flowAudit } : {}),
+              ...(ov.missingFundamentalFields ? { missingFundamentalFields: ov.missingFundamentalFields } : {}),
+              ...(ov.reportingCurrency ? { reportingCurrency: ov.reportingCurrency } : {}),
+              ...(ov.fxRateUsdIdr ? { fxRateUsdIdr: ov.fxRateUsdIdr } : {}),
+              ...(ov.computedRoePct ? { roe: ov.computedRoePct, trailingRoePct: ov.computedRoePct } : {}),
+              ...(ov.computedOpMarginPct ? { operatingMargin: ov.computedOpMarginPct } : {}),
+              ...(ov.computedDer !== undefined ? { debtToEquity: ov.computedDer } : {}),
+              ...(ov.fundamentalsSource ? { fundamentalsSource: ov.fundamentalsSource } : {}),
+              ...(ov.fundamentalsAsOfDate ? { fundamentalsAsOfDate: ov.fundamentalsAsOfDate } : {}),
+              ...(ov.fundamentalsFiscalPeriod ? { fundamentalsFiscalPeriod: ov.fundamentalsFiscalPeriod } : {}),
+              ...(ov.fundamentalsNote ? { fundamentalsNote: ov.fundamentalsNote } : {})
+            });
+          }
+
+          hasMeaningfulChange =
+            currentStock.lastPrice !== stock.lastPrice ||
+            currentStock.change1D !== stock.change1D ||
+            currentStock.revenueTTMIdr !== stock.revenueTTMIdr ||
+            currentStock.netIncomeTTMIdr !== stock.netIncomeTTMIdr ||
+            currentStock.equityAttributableIdr !== stock.equityAttributableIdr ||
+            currentStock.adtv20dIdr !== stock.adtv20dIdr ||
+            currentStock.fundamentalsSource !== stock.fundamentalsSource;
+
+          if (hasMeaningfulChange) {
+            setLiveStockOverride(currentStock);
+          }
+        } finally {
+          if (isMounted) setIsSyncingOnDemand(false);
         }
-        if (!isMounted) return;
-
-        if (freshQuote && freshQuote.lastPrice > 0) {
-          currentStock = {
-            ...currentStock,
-            ...freshQuote,
-            isHscFlagged: stock.isHscFlagged,
-            hscSource: stock.hscSource,
-            hscTier: stock.hscTier,
-            hscReason: stock.hscReason,
-            kseiHscConcentrationPct: stock.kseiHscConcentrationPct,
-            kseiHscIsNew: stock.kseiHscIsNew,
-            kseiHscFootnote: stock.kseiHscFootnote,
-            kseiHscScorePenaltyPts: stock.kseiHscScorePenaltyPts
-          };
-        }
-
-        if (workerEntry) {
-          const ov = resolveTickerFundamentalOverlay(
-            currentStock.ticker,
-            {
-              defaultRoe: currentStock.trailingRoePct ?? currentStock.roe,
-              defaultDer: currentStock.debtToEquity,
-              defaultOpMargin: currentStock.operatingMargin
-            },
-            workerEntry.adtv20dIdr ?? currentStock.adtv20dIdr,
-            'LIVE_YAHOO_API',
-            workerEntry.asOfDate || new Date().toISOString().slice(0, 10)
-          );
-          currentStock = enrichStockMetrics({
-            ...currentStock,
-            ...(workerEntry.lastPrice && workerEntry.lastPrice > 0
-              ? {
-                  lastPrice: workerEntry.lastPrice,
-                  previousClose: workerEntry.previousClose ?? currentStock.previousClose,
-                  change1D: workerEntry.change1D ?? currentStock.change1D,
-                  priceSource: 'LIVE_YAHOO_API',
-                  priceAsOfDate: workerEntry.asOfDate || new Date().toISOString().slice(0, 10)
-                }
-              : {}),
-            ...(workerEntry.adtv20dIdr && workerEntry.adtv20dIdr > 0
-              ? {
-                  adtv20dIdr: workerEntry.adtv20dIdr,
-                  adtvSource: 'LIVE_YAHOO_API',
-                  adtvAsOfDate: workerEntry.asOfDate || new Date().toISOString().slice(0, 10)
-                }
-              : {}),
-            ...(workerEntry.beta1Y ? { beta1Y: workerEntry.beta1Y } : {}),
-            ...(workerEntry.realizedAnnualVol ? { volatilityAnn: workerEntry.realizedAnnualVol } : {}),
-            ...(workerEntry.atr20 ? { atr20Idr: workerEntry.atr20 } : {}),
-            ...(workerEntry.dividendYieldTTM !== undefined && workerEntry.dividendYieldTTM !== null
-              ? { dividendYieldPct: workerEntry.dividendYieldTTM }
-              : {}),
-            ...(ov.sharesOutstanding ? { sharesOutstanding: ov.sharesOutstanding } : {}),
-            ...(ov.revenueTTMIdr ? { revenueTTMIdr: ov.revenueTTMIdr } : {}),
-            ...(ov.latestFullYearRevenueIdr ? { latestFullYearRevenueIdr: ov.latestFullYearRevenueIdr } : {}),
-            ...(ov.operatingProfitTTMIdr ? { operatingProfitTTMIdr: ov.operatingProfitTTMIdr } : {}),
-            ...(ov.ebitdaTTMIdr ? { ebitdaTTMIdr: ov.ebitdaTTMIdr } : {}),
-            ...(ov.netIncomeTTMIdr ? { netIncomeTTMIdr: ov.netIncomeTTMIdr } : {}),
-            ...(ov.netIncomeYoYPct !== undefined ? { earningsGrowthYoYPct: ov.netIncomeYoYPct } : {}),
-            ...(ov.operatingProfitYoYPct !== undefined ? { operatingProfitGrowthYoYPct: ov.operatingProfitYoYPct } : {}),
-            ...(ov.equityAttributableIdr ? { equityAttributableIdr: ov.equityAttributableIdr } : {}),
-            ...(ov.totalAssetsIdr ? { totalAssetsIdr: ov.totalAssetsIdr } : {}),
-            ...(ov.totalDebtIdr !== undefined ? { totalDebtIdr: ov.totalDebtIdr } : {}),
-            ...(ov.cashAndEquivalentsIdr !== undefined ? { cashAndEquivalentsIdr: ov.cashAndEquivalentsIdr } : {}),
-            ...(ov.ocfTTMIdr !== undefined ? { ocfTTMIdr: ov.ocfTTMIdr } : {}),
-            ...(ov.capexTTMIdr !== undefined ? { capexTTMIdr: ov.capexTTMIdr } : {}),
-            ...(ov.daTTMIdr !== undefined ? { daTTMIdr: ov.daTTMIdr } : {}),
-            ...(ov.roeAvg3YPct !== undefined ? { roeAvg3YPct: ov.roeAvg3YPct } : {}),
-            ...(ov.roeAvg5YPct !== undefined ? { roeAvg5YPct: ov.roeAvg5YPct } : {}),
-            ...(ov.daAnomaly !== undefined ? { daAnomaly: ov.daAnomaly } : {}),
-            ...(ov.daMethodNote ? { daMethodNote: ov.daMethodNote } : {}),
-            ...(ov.ttmMethod ? { ttmMethod: ov.ttmMethod } : {}),
-            ...(ov.flowAudit ? { flowAudit: ov.flowAudit } : {}),
-            ...(ov.missingFundamentalFields ? { missingFundamentalFields: ov.missingFundamentalFields } : {}),
-            ...(ov.reportingCurrency ? { reportingCurrency: ov.reportingCurrency } : {}),
-            ...(ov.fxRateUsdIdr ? { fxRateUsdIdr: ov.fxRateUsdIdr } : {}),
-            ...(ov.computedRoePct ? { roe: ov.computedRoePct, trailingRoePct: ov.computedRoePct } : {}),
-            ...(ov.computedOpMarginPct ? { operatingMargin: ov.computedOpMarginPct } : {}),
-            ...(ov.computedDer !== undefined ? { debtToEquity: ov.computedDer } : {}),
-            ...(ov.fundamentalsSource ? { fundamentalsSource: ov.fundamentalsSource } : {}),
-            ...(ov.fundamentalsAsOfDate ? { fundamentalsAsOfDate: ov.fundamentalsAsOfDate } : {}),
-            ...(ov.fundamentalsFiscalPeriod ? { fundamentalsFiscalPeriod: ov.fundamentalsFiscalPeriod } : {}),
-            ...(ov.fundamentalsNote ? { fundamentalsNote: ov.fundamentalsNote } : {})
-          });
-        }
-
-        hasMeaningfulChange =
-          currentStock.lastPrice !== stock.lastPrice ||
-          currentStock.change1D !== stock.change1D ||
-          currentStock.revenueTTMIdr !== stock.revenueTTMIdr ||
-          currentStock.netIncomeTTMIdr !== stock.netIncomeTTMIdr ||
-          currentStock.equityAttributableIdr !== stock.equityAttributableIdr ||
-          currentStock.adtv20dIdr !== stock.adtv20dIdr ||
-          currentStock.fundamentalsSource !== stock.fundamentalsSource;
-
-        if (hasMeaningfulChange) {
-          setLiveStockOverride(currentStock);
-        }
-      } finally {
-        if (isMounted) setIsSyncingOnDemand(false);
+      } else {
+        setIsSyncingOnDemand(false);
       }
 
       if (!isMounted) return;
 
-      // 2. Pull emiten-specific news & corporate actions after live quote/worker overlay resolves
+      // 2. Pull live emiten-specific RSS news quietly in the background
       const fetchedNews = await fetchLiveEmitenSpecificNews(
         currentStock.ticker,
         currentStock.name,
         currentStock.sector,
         currentStock
-      )
-        .then((items) => {
-          if (isMounted) {
-            setRecentNews(items);
-            setIsLoadingNews(false);
-          }
-          return items;
-        })
-        .catch(() => {
-          if (isMounted) {
-            setIsLoadingNews(false);
-          }
-          return [] as NewsSentimentItem[];
-        });
+      ).catch(() => baselineRadarNews);
       if (!isMounted) return;
 
-      // 3. Reuse existing joeliardiEval if stock metrics didn't mutate, avoiding duplicate full-universe peer scan
-      setIsAnalyzingAi(true);
-      try {
-        const evalObj =
-          !hasMeaningfulChange && joeliardiEval
-            ? joeliardiEval
-            : evaluateJoeliardiOosFundamental(
-                currentStock,
-                undefined,
-                availablePortfolioCashIdr,
-                regimeStatus
-              );
+      // 3. Only re-synthesize the report if live Worker metrics changed or new external RSS headlines arrived
+      const hasLiveExternalHeadlines = fetchedNews.length > baselineRadarNews.length;
+      if (hasMeaningfulChange || hasLiveExternalHeadlines) {
+        const evalObj = hasMeaningfulChange
+          ? evaluateJoeliardiOosFundamental(
+              currentStock,
+              undefined,
+              availablePortfolioCashIdr,
+              regimeStatus
+            )
+          : initialEval;
         const qText = `Apakah ${currentStock.ticker} layak dibeli pada harga Rp ${currentStock.lastPrice.toLocaleString('id-ID')} berdasarkan Nilai Intrinsik Wajar & Fundamental Kualitas Moat?`;
-        setUserQuestion(qText);
-        const aiRes = await runWithThinkingStages(() =>
-          requestEmitenAiInspection({
-            stock: currentStock,
-            joeliardiEval: evalObj,
-            recentNews: fetchedNews,
-            userQuestion: qText,
-            regimeStatus,
-            availablePortfolioCashIdr
-          })
-        );
+        const updatedReport = buildDeepAnalyticalConvictionReport({
+          stock: currentStock,
+          joeliardiEval: evalObj,
+          recentNews: fetchedNews.length > 0 ? fetchedNews : baselineRadarNews,
+          userQuestion: qText,
+          regimeStatus,
+          availablePortfolioCashIdr
+        });
         if (isMounted) {
-          setStructuredReport(aiRes.structuredReport);
-          setAiAnalysisFallbackText(stripRawMarkdownArtifacts(aiRes.analysis));
-          setIsAiGenerated(aiRes.isAiGenerated);
-          setAiGeneratedAt(aiRes.generatedAt);
+          const updatedParsedSummary = parseDirectSummaryHeaderAndBody(
+            updatedReport.directAnswerSummary || ''
+          );
+          if (fetchedNews.length > 0) {
+            setRecentNews(fetchedNews);
+          }
+          setUserQuestion(qText);
+          setStructuredReport(updatedReport);
+          setTypedCharCount(updatedParsedSummary.body.length);
+          setVisibleCotCount(updatedReport.chainOfThoughtSteps?.length || 0);
+          setVisibleSectionCount(updatedReport.sections?.length || 0);
+          setIsTypingComplete(true);
+          setAiAnalysisFallbackText(stripRawMarkdownArtifacts(updatedReport.directAnswerSummary));
         }
-      } finally {
-        if (isMounted) {
-          setIsAnalyzingAi(false);
-        }
+      } else if (isMounted && fetchedNews.length > 0 && fetchedNews.length !== baselineRadarNews.length) {
+        setRecentNews(fetchedNews);
       }
     };
 
-    runLazyOnDemandInspect();
+    void runLazyOnDemandInspect();
 
     return () => {
       isMounted = false;

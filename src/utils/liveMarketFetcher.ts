@@ -1208,11 +1208,12 @@ export async function testRealtimeWorkerConnection(
  */
 export async function tryFetchLiveTickerFundamentalsOnDemand(
   ticker: string,
-  options?: { forceRefresh?: boolean }
+  options?: { forceRefresh?: boolean; skipRelayChartProbe?: boolean }
 ): Promise<FundamentalsSnapshotTickerEntry | null> {
   const clean = ticker.trim().toUpperCase().replace(/\.JK$/i, '');
   const yfSym = `${clean}.JK`;
   const forceRefresh = Boolean(options?.forceRefresh);
+  const skipRelayChartProbe = Boolean(options?.skipRelayChartProbe);
   const workerBaseUrl = getRealtimeWorkerUrl();
 
   // Check in-memory cache first if not forcing refresh
@@ -1477,8 +1478,11 @@ export async function tryFetchLiveTickerFundamentalsOnDemand(
   }
 
   // PRIORITY 2 (Fallback without Worker):
-  // 1. Pull Chart v8 3mo to extract real 20D volume * close ADTV
-  const chartRes = await fetchSingleChartViaBrowserRelay(yfSym, '3mo');
+  // 1. Pull Chart v8 3mo to extract real 20D volume * close ADTV (skipped during passive background modal open when skipRelayChartProbe is true unless forceRefresh is set)
+  const chartRes =
+    skipRelayChartProbe && !forceRefresh
+      ? null
+      : await fetchSingleChartViaBrowserRelay(yfSym, '3mo');
   if (chartRes?.adtv20dIdr && chartRes.adtv20dIdr > 0) {
     setLiveChartAdtvCacheEntry(clean, chartRes.adtv20dIdr, chartRes.adtvAsOfDate);
   }
@@ -3066,7 +3070,15 @@ export async function refreshLiveGlobalMacroAndIhsg(
   );
   const wave1Telemetry = getLastBatchSyncTelemetry();
 
-  const buildHydratedStateFromMap = (activeBatchMap: Record<string, SparkSeriesItem>) => {
+  const yieldToBrowserMainThread = () =>
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+  const buildHydratedStateFromMapAsync = async (
+    activeBatchMap: Record<string, SparkSeriesItem>,
+    changedSymbolSet?: Set<string>
+  ) => {
     let stageIhsgQuote = liveIhsgQuote;
     let stageIhsgReturns30D = ihsgReturns30D;
     let stageRawDecimalRets = ihsgRawDecimalRets;
@@ -3102,8 +3114,39 @@ export async function refreshLiveGlobalMacroAndIhsg(
     let syncedCnt = 0;
     let liquidCnt = 0;
 
-    const stageStocks: StockMetrics[] = expandedStocks.map((stock) => {
+    const stageStocks: StockMetrics[] = new Array(expandedStocks.length);
+    const CHUNK_SLICE_SIZE = 65;
+
+    for (let idx = 0; idx < expandedStocks.length; idx++) {
+      if (idx > 0 && idx % CHUNK_SLICE_SIZE === 0) {
+        await yieldToBrowserMainThread();
+      }
+
+      const stock = expandedStocks[idx];
       const res = activeBatchMap[stock.yfTicker];
+
+      // Fast-path reuse: if stock is already enriched and its price/change1D/ADTV did not change in this wave,
+      // reuse the existing enriched StockMetrics object directly to avoid redundant 60-day covariance & overlay math
+      const isExplicitlyChanged = changedSymbolSet ? changedSymbolSet.has(stock.yfTicker) : true;
+      if (
+        !isExplicitlyChanged &&
+        stock.isLiveFetched &&
+        typeof stock.dmuCompositeScore === 'number' &&
+        stock.dmuCompositeScore > 0
+      ) {
+        const resPrice = res && res.lastPrice > 0 ? Math.round(res.lastPrice) : 0;
+        if (
+          resPrice === stock.lastPrice &&
+          (res?.change1D ?? 0) === stock.change1D &&
+          Boolean(stock.revenueTTMIdr || stock.fundamentalsSource)
+        ) {
+          syncedCnt++;
+          if (stock.isLiquid !== false && stock.lastPrice >= 68) liquidCnt++;
+          stageStocks[idx] = stock;
+          continue;
+        }
+      }
+
       const catEntry =
         IDX_CATALOG_BY_TICKER_MAP.get(stock.ticker) || {
           defaultRoe: stock.trailingRoePct ?? stock.roe,
@@ -3174,7 +3217,7 @@ export async function refreshLiveGlobalMacroAndIhsg(
         syncedCnt++;
         if (isLiquid) liquidCnt++;
 
-        return enrichStockMetrics({
+        stageStocks[idx] = enrichStockMetrics({
           ticker: stock.ticker,
           idxTicker: stock.idxTicker,
           yfTicker: stock.yfTicker,
@@ -3218,12 +3261,13 @@ export async function refreshLiveGlobalMacroAndIhsg(
           dividendYieldPct,
           lastSyncedAt: nowStr
         });
+        continue;
       }
 
       const overlay = resolveTickerFundamentalOverlay(stock.ticker, catEntry);
       const dividendYieldPct = getEmitenDividendYield(stock.ticker);
       syncedCnt++;
-      return enrichStockMetrics({
+      stageStocks[idx] = enrichStockMetrics({
         ticker: stock.ticker,
         idxTicker: stock.idxTicker,
         yfTicker: stock.yfTicker,
@@ -3246,7 +3290,7 @@ export async function refreshLiveGlobalMacroAndIhsg(
         dividendYieldPct,
         lastSyncedAt: nowStr
       });
-    });
+    }
 
     return {
       stageMacro,
@@ -3262,16 +3306,18 @@ export async function refreshLiveGlobalMacroAndIhsg(
     ...(snapshot?.data || {}),
     ...wave1Map
   };
+  const wave1ChangedSet = new Set<string>(Object.keys(wave1Map));
 
-  let partialState: ReturnType<typeof buildHydratedStateFromMap> | null = null;
+  let partialState: Awaited<ReturnType<typeof buildHydratedStateFromMapAsync>> | null = null;
   if (onPriorityWaveComplete) {
-    partialState = buildHydratedStateFromMap(combinedWave1Map);
+    partialState = await buildHydratedStateFromMapAsync(combinedWave1Map, wave1ChangedSet);
     onPriorityWaveComplete({
       updatedMacro: partialState.stageMacro,
       ihsgReturns30D: partialState.stageIhsgReturns30D,
       liveIhsgQuote: partialState.stageIhsgQuote,
       updatedStocks: partialState.stageStocks
     });
+    await yieldToBrowserMainThread();
   }
 
   // STAGE 2: Full Universe Sweep (~925 remaining IDX stocks in parallel chunks; on static hosts uses snapshot directly without extra CORS relay calls)
@@ -3298,11 +3344,12 @@ export async function refreshLiveGlobalMacroAndIhsg(
     ...combinedWave1Map,
     ...wave2Map
   };
+  const wave2ChangedSet = new Set<string>([...Object.keys(wave1Map), ...Object.keys(wave2Map)]);
 
   const finalState =
     partialState && wave2Telemetry.liveNetworkHits === 0 && wave2Telemetry.memoryCacheHits === 0
       ? partialState
-      : buildHydratedStateFromMap(batchMap);
+      : await buildHydratedStateFromMapAsync(batchMap, wave2ChangedSet);
   for (let i = 0; i < finalState.stageMacro.length; i++) {
     updatedMacro[i] = finalState.stageMacro[i];
   }
@@ -3334,6 +3381,7 @@ export async function refreshLiveGlobalMacroAndIhsg(
   };
 
   onProgress?.(liveSyncedCount, updatedStocksList.length, 'Selesai');
+  await yieldToBrowserMainThread();
 
   const rankedStocks = rankUniverseWithBuffer(updatedStocksList, 40);
   return {
@@ -4686,7 +4734,7 @@ export function stripRawMarkdownArtifacts(text: string): string {
  * Performs genuine cross-metric financial reasoning (DuPont ROE vs DER decomposition, Earnings Yield vs SBN 10Y,
  * Momentum-Value divergence detection, and contextual question answering) without rigid markdown templates.
  */
-function buildDeepAnalyticalConvictionReport(params: {
+export function buildDeepAnalyticalConvictionReport(params: {
   stock: StockMetrics;
   joeliardiEval: JoeliardiOosEvaluation;
   recentNews: NewsSentimentItem[];

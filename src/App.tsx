@@ -260,17 +260,20 @@ export default function App() {
   const deferredStocksUpdateRef = useRef<StockMetrics[] | null>(null);
   const lastProgressUpdateTsRef = useRef<number>(0);
 
-  const handleInspectTicker = useCallback((tk: string | null) => {
-    inspectedTickerRef.current = tk;
-    setGlobalInspectedTicker(tk);
-    if (tk === null && deferredStocksUpdateRef.current) {
-      const pendingStocks = deferredStocksUpdateRef.current;
-      deferredStocksUpdateRef.current = null;
-      window.requestAnimationFrame(() => {
-        setStocks(pendingStocks);
-      });
-    }
-  }, []);
+  const handleInspectTicker = useCallback(
+    (tk: string | null) => {
+      inspectedTickerRef.current = tk;
+      setGlobalInspectedTicker(tk);
+      if (tk === null && deferredStocksUpdateRef.current) {
+        const pendingStocks = deferredStocksUpdateRef.current;
+        deferredStocksUpdateRef.current = null;
+        window.setTimeout(() => {
+          setStocks(rankUniverseWithBuffer(pendingStocks, rebalanceBufferPct));
+        }, 16);
+      }
+    },
+    [rebalanceBufferPct]
+  );
 
   const globalInspectedStockObj = useMemo(() => {
     if (!globalInspectedTicker) return null;
@@ -735,27 +738,51 @@ export default function App() {
     [githubConfig]
   );
 
-  // Keep instant local fallback synced with full Indonesian Date + Time (HH:MM:SS WIB), debounced off the critical render thread
+  // Keep instant local fallback synced with full Indonesian Date + Time (HH:MM:SS WIB), debounced & scheduled during browser idle time
   useEffect(() => {
     if (simRegimeMode !== 'LIVE') return;
+    // Defer 2MB JSON serialization while the user is actively inspecting an emiten modal
+    if (globalInspectedTicker) return;
+    let idleHandle: number | null = null;
     const timer = window.setTimeout(() => {
-      try {
-        const nowFullStr = formatFullIndonesianDateTime(new Date());
-        const payload: ScreenerCachePayload = {
-          savedAt: nowFullStr,
-          fullDateTimeStr: lastFullSyncDateTime,
-          stocks,
-          macroIndicators,
-          liveIhsgQuote,
-          liveIhsgReturns
-        };
-        localStorage.setItem(SCREENER_CACHE_KEY, JSON.stringify(payload));
-      } catch {
-        // ignore
+      const writeCache = () => {
+        if (inspectedTickerRef.current) return;
+        try {
+          const nowFullStr = formatFullIndonesianDateTime(new Date());
+          const payload: ScreenerCachePayload = {
+            savedAt: nowFullStr,
+            fullDateTimeStr: lastFullSyncDateTime,
+            stocks,
+            macroIndicators,
+            liveIhsgQuote,
+            liveIhsgReturns
+          };
+          localStorage.setItem(SCREENER_CACHE_KEY, JSON.stringify(payload));
+        } catch {
+          // ignore
+        }
+      };
+      if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+        idleHandle = (window as any).requestIdleCallback(writeCache, { timeout: 2500 });
+      } else {
+        writeCache();
       }
-    }, 650);
-    return () => window.clearTimeout(timer);
-  }, [stocks, macroIndicators, liveIhsgQuote, liveIhsgReturns, simRegimeMode, lastFullSyncDateTime]);
+    }, 1200);
+    return () => {
+      window.clearTimeout(timer);
+      if (idleHandle !== null && typeof window !== 'undefined' && 'cancelIdleCallback' in window) {
+        (window as any).cancelIdleCallback(idleHandle);
+      }
+    };
+  }, [
+    stocks,
+    macroIndicators,
+    liveIhsgQuote,
+    liveIhsgReturns,
+    simRegimeMode,
+    lastFullSyncDateTime,
+    globalInspectedTicker
+  ]);
 
   useEffect(() => {
     try {
@@ -986,15 +1013,15 @@ export default function App() {
           bypassMemoryCache,
           (partialWave1) => {
             // Immediately render Wave 1 Priority (<1s) updates for IHSG, Macro, Portfolio & Liquid Leaders
-            // Defer 975-stock table commit if the user is actively inspecting an emiten modal
+            // Defer 975-stock re-ranking & table commit if the user is actively inspecting an emiten modal
+            if (inspectedTickerRef.current) {
+              deferredStocksUpdateRef.current = partialWave1.updatedStocks;
+              return;
+            }
             const rerankedWave1 = rankUniverseWithBuffer(
               partialWave1.updatedStocks,
               rebalanceBufferPct
             );
-            if (inspectedTickerRef.current) {
-              deferredStocksUpdateRef.current = rerankedWave1;
-              return;
-            }
             setMacroIndicators(partialWave1.updatedMacro);
             setStocks(rerankedWave1);
             if (partialWave1.liveIhsgQuote && partialWave1.liveIhsgQuote.lastPrice > 1000) {
@@ -1031,11 +1058,12 @@ export default function App() {
         telemetry
       } = marketResult;
 
-      const rerankedStocks = rankUniverseWithBuffer(updatedStocks, rebalanceBufferPct);
       setMacroIndicators(updatedMacro);
+      let rerankedStocks = updatedStocks;
       if (inspectedTickerRef.current) {
-        deferredStocksUpdateRef.current = rerankedStocks;
+        deferredStocksUpdateRef.current = updatedStocks;
       } else {
+        rerankedStocks = rankUniverseWithBuffer(updatedStocks, rebalanceBufferPct);
         setStocks(rerankedStocks);
       }
       setNewsItems(liveNews);
@@ -1226,13 +1254,16 @@ export default function App() {
                 data?: Record<string, { lastPrice?: number; change1D?: number; closes?: number[] }>;
               };
               if (snap && snap.data && typeof snap.data === 'object') {
-                // Only update market prices from static-market-snapshot.json
-                const targetBuffer =
-                  typeof snap.rebalanceBufferPct === 'number'
-                    ? snap.rebalanceBufferPct
-                    : rebalanceBufferPct;
-                const freshBase = buildIdx100StockUniverse(targetBuffer);
-                setStocks(freshBase);
+                // Only rebuild full 975-stock base if initial cache was empty or incomplete (<900 stocks);
+                // handleMasterSyncAll below will time-slice hydrate any price updates smoothly
+                if (stocks.length < 900) {
+                  const targetBuffer =
+                    typeof snap.rebalanceBufferPct === 'number'
+                      ? snap.rebalanceBufferPct
+                      : rebalanceBufferPct;
+                  const freshBase = buildIdx100StockUniverse(targetBuffer);
+                  setStocks(freshBase);
+                }
 
                 const resolvedBaseline = getEmbeddedIhsgBaseline();
                 const nextQuote =
