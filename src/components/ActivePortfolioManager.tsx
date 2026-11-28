@@ -72,7 +72,7 @@ const STOCKBIT_ROUNDTRIP_FEE_PCT = STOCKBIT_BUY_FEE_PCT + STOCKBIT_SELL_FEE_PCT;
 const STOCKBIT_STAMP_DUTY_THRESHOLD_IDR = 10_000_000; // TC > Rp 10.000.000
 const STOCKBIT_STAMP_DUTY_IDR = 10_000; // Bea Materai Rp 10.000
 
-export function ActivePortfolioManager({
+function ActivePortfolioManagerInner({
   stocks,
   regime,
   holdings,
@@ -1750,3 +1750,17 @@ export function ActivePortfolioManager({
     </section>
   );
 }
+
+export const ActivePortfolioManager = React.memo(
+  ActivePortfolioManagerInner,
+  (prev, next) =>
+    prev.stocks === next.stocks &&
+    prev.regime === next.regime &&
+    prev.holdings === next.holdings &&
+    prev.cashReserveIdr === next.cashReserveIdr &&
+    prev.rebalanceBufferPct === next.rebalanceBufferPct &&
+    prev.lastCacheSavedAt === next.lastCacheSavedAt &&
+    prev.githubConfig === next.githubConfig &&
+    prev.isSyncingCloud === next.isSyncingCloud
+);
+

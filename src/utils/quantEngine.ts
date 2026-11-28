@@ -564,12 +564,19 @@ export function getHscManualOverrides(): HscManualOverrides {
   }
 }
 
+let quantOverrideEpoch = 0;
+
+export function bumpQuantOverrideEpoch(): void {
+  quantOverrideEpoch += 1;
+}
+
 export function saveHscManualOverrides(overrides: HscManualOverrides): void {
   const normalized: HscManualOverrides = {
     added: Array.from(new Set(overrides.added)),
     removed: Array.from(new Set(overrides.removed))
   };
   cachedHscManualOverrides = normalized;
+  quantOverrideEpoch += 1;
   try {
     if (typeof window === 'undefined' || !window.localStorage) return;
     window.localStorage.setItem(HSC_MANUAL_STORAGE_KEY, JSON.stringify(normalized));
@@ -1351,12 +1358,27 @@ export function enrichStockMetrics(item: RawStockInput): StockMetrics {
   };
 }
 
+const enrichedArrayEpochMap = new WeakMap<StockMetrics[], number>();
+const rankedBufferCacheMap = new WeakMap<StockMetrics[], Map<string, StockMetrics[]>>();
+
 export function rankUniverseWithBuffer(
   list: StockMetrics[],
   rebalanceBufferPct: number = 40
 ): StockMetrics[] {
-  // Re-evaluate HSC & 4-Factor scores so any manual HSC toggle immediately reflects in rankings
-  const refreshedList = list.map((s) => enrichStockMetrics(s));
+  const cacheKey = `${rebalanceBufferPct}:${quantOverrideEpoch}`;
+  const existingBufferMap = rankedBufferCacheMap.get(list);
+  if (existingBufferMap) {
+    const cachedRanked = existingBufferMap.get(cacheKey);
+    if (cachedRanked) {
+      return cachedRanked;
+    }
+  }
+
+  // Only re-run enrichStockMetrics across the universe if this array has not yet been enriched in the current override epoch
+  const isAlreadyEnrichedForEpoch = enrichedArrayEpochMap.get(list) === quantOverrideEpoch;
+  const refreshedList = isAlreadyEnrichedForEpoch
+    ? list
+    : list.map((s) => enrichStockMetrics(s));
 
   const sorted = [...refreshedList].sort((a, b) => {
     const aClean = a.isLiquid !== false && a.lastPrice >= 68 && !a.isHscFlagged ? 1 : 0;
@@ -1386,7 +1408,7 @@ export function rankUniverseWithBuffer(
     rankMap.set(s.ticker, { rankPct, zone });
   });
 
-  return refreshedList.map((s) => {
+  const rankedResult = refreshedList.map((s) => {
     const r = rankMap.get(s.ticker);
     if (!r) return s;
     return {
@@ -1395,6 +1417,25 @@ export function rankUniverseWithBuffer(
       dmuZone: r.zone
     };
   });
+
+  enrichedArrayEpochMap.set(list, quantOverrideEpoch);
+  enrichedArrayEpochMap.set(rankedResult, quantOverrideEpoch);
+
+  let listMap = rankedBufferCacheMap.get(list);
+  if (!listMap) {
+    listMap = new Map<string, StockMetrics[]>();
+    rankedBufferCacheMap.set(list, listMap);
+  }
+  listMap.set(cacheKey, rankedResult);
+
+  let resultMap = rankedBufferCacheMap.get(rankedResult);
+  if (!resultMap) {
+    resultMap = new Map<string, StockMetrics[]>();
+    rankedBufferCacheMap.set(rankedResult, resultMap);
+  }
+  resultMap.set(cacheKey, rankedResult);
+
+  return rankedResult;
 }
 
 /**

@@ -8,6 +8,7 @@ import {
   StructuredAiConvictionReport
 } from '../types/quant';
 import {
+  bumpQuantOverrideEpoch,
   computeSbnSpotYieldCurveAndKe,
   enrichStockMetrics,
   evaluateJoeliardiOosFundamental,
@@ -560,8 +561,30 @@ export function EmitenFundamentalInspectorModal({
   const [sbn10YInput, setSbn10YInput] = useState<string>('6.75');
   const [workerTelemetry, setWorkerTelemetry] =
     useState<QuantWorkerOutputPayload | null>(null);
+  const [hydratedTicker, setHydratedTicker] = useState<string | null>(null);
 
   const typingTimerRef = useRef<number | null>(null);
+
+  // Two-Frame Instant Modal Shell Architecture:
+  // Frame 0 mounts the lightweight modal shell & header (<2ms) so clicking "Inspect" never blocks the main thread;
+  // Frame 1 (after browser paint) activates full forensic valuation & worker hydration.
+  useEffect(() => {
+    if (!stock?.ticker) return;
+    let raf2: number | null = null;
+    const raf1 = window.requestAnimationFrame(() => {
+      raf2 = window.requestAnimationFrame(() => {
+        setHydratedTicker(stock.ticker);
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(raf1);
+      if (raf2 !== null) {
+        window.cancelAnimationFrame(raf2);
+      }
+    };
+  }, [stock?.ticker]);
+
+  const isValuationHydrated = Boolean(stock?.ticker && hydratedTicker === stock.ticker);
 
   // Stabilize incoming stock prop reference against unrelated background universe sync updates
   const stableStock = useMemo(
@@ -589,6 +612,7 @@ export function EmitenFundamentalInspectorModal({
   // Active stock merges initial prop with on-demand live quote, snapshot overlay, and user fundamental overrides
   const activeStock = useMemo(() => {
     if (!stableStock) return null;
+    if (!isValuationHydrated) return stableStock;
     const base =
       liveStockOverride && liveStockOverride.ticker === stableStock.ticker
         ? {
@@ -655,17 +679,17 @@ export function EmitenFundamentalInspectorModal({
       ...(overlay.fundamentalsNote ? { fundamentalsNote: overlay.fundamentalsNote } : {})
     };
     return enrichStockMetrics(mergedWithOverlay);
-  }, [stableStock, liveStockOverride, catalystRevision]);
+  }, [stableStock, liveStockOverride, catalystRevision, isValuationHydrated]);
 
   const joeliardiEval = useMemo(() => {
-    if (!activeStock) return null;
+    if (!activeStock || !isValuationHydrated) return null;
     return evaluateJoeliardiOosFundamental(
       activeStock,
       undefined,
       availablePortfolioCashIdr,
       regimeStatus
     );
-  }, [activeStock, catalystRevision, availablePortfolioCashIdr, regimeStatus]);
+  }, [activeStock, catalystRevision, availablePortfolioCashIdr, regimeStatus, isValuationHydrated]);
 
   // Synchronize Corporate Action Calibrator inputs & trigger Web Worker offload when activeStock or live sync changes
   useEffect(() => {
@@ -781,9 +805,9 @@ export function EmitenFundamentalInspectorModal({
     catalystRevision
   ]);
 
-  // Real-Time Live Preview for Calibration Modal before saving
+  // Real-Time Live Preview for Calibration Modal before saving (strictly gated when drawer is open)
   const liveCalibrationPreview = useMemo(() => {
-    if (!activeStock || !joeliardiEval) return null;
+    if (!showCatalystCalibrator || !activeStock || !joeliardiEval) return null;
     const px = Math.max(50, activeStock.lastPrice);
     const sharesMil = Math.max(1, Number(sharesMillionInput.replace(',', '.')) || 1);
     const sharesFull = Math.round(sharesMil * 1_000_000);
@@ -836,6 +860,7 @@ export function EmitenFundamentalInspectorModal({
       kePct
     };
   }, [
+    showCatalystCalibrator,
     activeStock,
     joeliardiEval,
     sharesMillionInput,
@@ -910,6 +935,7 @@ export function EmitenFundamentalInspectorModal({
       catalystNote: `Kalibrasi USER_OVERRIDE (${activeStock.ticker}): Rev Rp ${(revenueTTMIdr / 1e12).toFixed(2)}T · NI Rp ${(netIncomeTTMIdr / 1e12).toFixed(2)}T · Equity Rp ${(equityAttributableIdr / 1e12).toFixed(2)}T · ROE ${computedRoe.toFixed(2)}% · Shares ${(fullSharesVal / 1e9).toFixed(2)}M lbr · SBN 10Y ${sbn10YPct.toFixed(2)}%.`
     });
 
+    bumpQuantOverrideEpoch();
     setCatalystRevision((r) => r + 1);
     if (onStockSynced) {
       onStockSynced(enrichStockMetrics(activeStock));
@@ -997,6 +1023,7 @@ export function EmitenFundamentalInspectorModal({
       liveMarketCapTrillionIdr: syncedMarketCapTrillion,
       catalystNote: `Sinkronisasi P0 BEI (${activeStock.ticker}): Saham Beredar Resmi ${officialShares.toLocaleString('id-ID')} lbr × Harga Live Rp ${activeStock.lastPrice.toLocaleString('id-ID')} = Market Cap Rp ${syncedMarketCapTrillion.toFixed(2)} Triliun (Implied Δ 0,00%).`
     });
+    bumpQuantOverrideEpoch();
     setCatalystRevision((r) => r + 1);
     if (onStockSynced) {
       onStockSynced(enrichStockMetrics(activeStock));
@@ -1018,6 +1045,7 @@ export function EmitenFundamentalInspectorModal({
     if (!activeStock) return;
     resetCorporateActionOverride(activeStock.ticker);
     resetFundamentalUserOverride(activeStock.ticker);
+    bumpQuantOverrideEpoch();
     setCatalystRevision((r) => r + 1);
     if (onStockSynced) {
       onStockSynced(enrichStockMetrics(activeStock));
@@ -1312,25 +1340,16 @@ export function EmitenFundamentalInspectorModal({
     }
   };
 
-  // Helper to run multi-step thinking animation during AI inspection without blocking the UI
+  // Helper to run non-blocking AI inspection without triggering repeated interval re-renders
   const runWithThinkingStages = async <T,>(taskFn: () => Promise<T>): Promise<T> => {
-    setThinkingStageIdx(0);
-    const stageInterval = window.setInterval(() => {
-      setThinkingStageIdx((prev) => (prev < 3 ? prev + 1 : prev));
-    }, 150);
-
-    const minThinkingDelay = new Promise((resolve) => setTimeout(resolve, 480));
-    try {
-      const [result] = await Promise.all([taskFn(), minThinkingDelay]);
-      return result;
-    } finally {
-      window.clearInterval(stageInterval);
-    }
+    setThinkingStageIdx(2);
+    await new Promise((resolve) => setTimeout(resolve, 16));
+    return await taskFn();
   };
 
-  // Lazy On-Demand Fetch: Pulls live quote + worker fundamentals, <=3m news, and runs AI synthesis
+  // Lazy On-Demand Fetch: Waits until Frame-1 modal shell has mounted, then pulls live quote + worker fundamentals, <=3m news, and runs AI synthesis
   useEffect(() => {
-    if (!stock) return;
+    if (!stock || !isValuationHydrated) return;
     let isMounted = true;
     setLiveStockOverride(null);
     setIsSyncingOnDemand(true);
@@ -1341,7 +1360,8 @@ export function EmitenFundamentalInspectorModal({
     setUserQuestion(defaultQuestion);
 
     const runLazyOnDemandInspect = async () => {
-      let currentStock = stock;
+      let currentStock = activeStock || stock;
+      let hasMeaningfulChange = false;
 
       // 1. Pull On-Demand Real-Time Single-Ticker Fundamentals + Price from Cloudflare Worker first (1 fast request).
       // Only fall back to multi-proxy fetchLiveIdxTicker if Worker did not return a valid spot price.
@@ -1359,7 +1379,7 @@ export function EmitenFundamentalInspectorModal({
 
         if (freshQuote && freshQuote.lastPrice > 0) {
           currentStock = {
-            ...stock,
+            ...currentStock,
             ...freshQuote,
             isHscFlagged: stock.isHscFlagged,
             hscSource: stock.hscSource,
@@ -1442,7 +1462,7 @@ export function EmitenFundamentalInspectorModal({
           });
         }
 
-        const hasMeaningfulChange =
+        hasMeaningfulChange =
           currentStock.lastPrice !== stock.lastPrice ||
           currentStock.change1D !== stock.change1D ||
           currentStock.revenueTTMIdr !== stock.revenueTTMIdr ||
@@ -1482,15 +1502,18 @@ export function EmitenFundamentalInspectorModal({
         });
       if (!isMounted) return;
 
-      // 3. Run multi-stage thinking animation then AI conviction synthesis
+      // 3. Reuse existing joeliardiEval if stock metrics didn't mutate, avoiding duplicate full-universe peer scan
       setIsAnalyzingAi(true);
       try {
-        const evalObj = evaluateJoeliardiOosFundamental(
-          currentStock,
-          undefined,
-          availablePortfolioCashIdr,
-          regimeStatus
-        );
+        const evalObj =
+          !hasMeaningfulChange && joeliardiEval
+            ? joeliardiEval
+            : evaluateJoeliardiOosFundamental(
+                currentStock,
+                undefined,
+                availablePortfolioCashIdr,
+                regimeStatus
+              );
         const qText = `Apakah ${currentStock.ticker} layak dibeli pada harga Rp ${currentStock.lastPrice.toLocaleString('id-ID')} berdasarkan Nilai Intrinsik Wajar & Fundamental Kualitas Moat?`;
         setUserQuestion(qText);
         const aiRes = await runWithThinkingStages(() =>
@@ -1521,9 +1544,78 @@ export function EmitenFundamentalInspectorModal({
     return () => {
       isMounted = false;
     };
-  }, [stock?.ticker]);
+  }, [stock?.ticker, isValuationHydrated]);
 
-  if (!activeStock || !joeliardiEval) return null;
+  if (!activeStock) return null;
+
+  // Frame 0 Instant Modal Shell: paints immediately (<2ms) on click before Frame 1 valuation hydration runs
+  if (!joeliardiEval) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 sm:p-5 overflow-y-auto">
+        <div className="bg-[#FFFFFF] border border-[#E4E2DD] rounded-xs w-full max-w-5xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
+          <div className="px-5 py-3.5 bg-[#FAF9F6] border-b border-[#E4E2DD] flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="p-2 rounded-xs bg-[#D97706]/10 border border-[#D97706]/30 text-[#D97706] shrink-0">
+                <Scale className="w-5 h-5" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#D97706] bb-amber">
+                    NOSTRADAMUS QUANT INSPECTOR
+                  </span>
+                  <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-[#0284C7] bg-[#0284C7]/10 border border-[#0284C7]/30 px-2 py-0.5 rounded-xs">
+                    <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                    <span>Memuat Mesin Valuasi {activeStock.ticker}.JK...</span>
+                  </span>
+                </div>
+                <h3 className="text-base sm:text-lg font-bold text-[#111315] flex items-center gap-2 mt-0.5 truncate">
+                  <span className="font-mono">{activeStock.ticker}</span>
+                  <span className="text-neutral-400 font-normal">·</span>
+                  <span className="truncate">{activeStock.name}</span>
+                  <span className="text-xs font-normal text-neutral-500">
+                    ({activeStock.sector} · Tren IHSG: {regimeStatus})
+                  </span>
+                </h3>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 rounded-xs bg-[#FFFFFF] border border-[#E4E2DD] text-neutral-500 hover:bg-[#E11D48] hover:text-white hover:border-[#E11D48] transition-colors cursor-pointer shrink-0"
+              title="Tutup Jendela Inspector (Esc)"
+              aria-label="Tutup Inspector"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="p-6 space-y-4">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              {[
+                `Harga Pasar Live: Rp ${activeStock.lastPrice.toLocaleString('id-ID')}`,
+                'Menghitung Nilai Intrinsik Wajar...',
+                'Menguji Margin of Safety & State...',
+                'Memvalidasi Router Matriks Sektor...'
+              ].map((label, idx) => (
+                <div
+                  key={idx}
+                  className="p-3.5 rounded-xs bg-[#FAF9F6] border border-[#E4E2DD] animate-pulse"
+                >
+                  <div className="text-[11px] font-mono font-bold text-neutral-500">{label}</div>
+                  <div className="h-6 mt-2 bg-neutral-200/70 rounded-xs w-3/4" />
+                </div>
+              ))}
+            </div>
+            <div className="p-5 rounded-xs bg-[#FAF9F6] border border-[#E4E2DD] flex items-center gap-3 text-xs text-neutral-600 font-mono">
+              <RefreshCw className="w-4 h-4 text-[#D97706] animate-spin shrink-0" />
+              <span>
+                Menjalankan Multi-Stage Residual Income (RIM), Capex Aggressor Router &amp; Forensic Lineage {activeStock.ticker}.JK di background thread...
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const handleManualRefreshSingleTicker = async () => {
     setIsSyncingOnDemand(true);

@@ -48,18 +48,18 @@ export interface QuantWorkerOutputPayload {
   computeDurationMs: number;
 }
 
-function roundToIdxTickWorker(rawPrice: number): number {
-  const safe = Math.max(50, Math.round(Number(rawPrice) || 50));
-  if (safe < 200) return safe;
-  if (safe < 500) return Math.round(safe / 2) * 2;
-  if (safe < 2000) return Math.round(safe / 5) * 5;
-  if (safe < 5000) return Math.round(safe / 10) * 10;
-  return Math.round(safe / 25) * 25;
-}
-
 export function executeQuantRimAndStatArbKernel(
   payload: QuantWorkerInputPayload
 ): QuantWorkerOutputPayload {
+  const roundToIdxTickWorker = (rawPrice: number): number => {
+    const safe = Math.max(50, Math.round(Number(rawPrice) || 50));
+    if (safe < 200) return safe;
+    if (safe < 500) return Math.round(safe / 2) * 2;
+    if (safe < 2000) return Math.round(safe / 5) * 5;
+    if (safe < 5000) return Math.round(safe / 10) * 10;
+    return Math.round(safe / 25) * 25;
+  };
+
   const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
 
   const {

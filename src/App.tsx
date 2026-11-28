@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Swal from 'sweetalert2';
 import {
   CloudStateBundle,
@@ -159,8 +159,8 @@ function loadInitialTheme(): 'dark' | 'light' {
 }
 
 export default function App() {
-  const initialScreenerCache = loadScreenerCache();
-  const initialPortfolioCache = loadPortfolioCache();
+  const initialScreenerCache = useMemo(() => loadScreenerCache(), []);
+  const initialPortfolioCache = useMemo(() => loadPortfolioCache(), []);
 
   const [themeMode, setThemeMode] = useState<'dark' | 'light'>(loadInitialTheme);
   const [activeTab, setActiveTab] = useState<WorkspaceTabId>('command');
@@ -256,6 +256,21 @@ export default function App() {
   const [syncStatusLabel, setSyncStatusLabel] = useState<string | null>(null);
   const [isLoadingNews, setIsLoadingNews] = useState<boolean>(false);
   const [globalInspectedTicker, setGlobalInspectedTicker] = useState<string | null>(null);
+  const inspectedTickerRef = useRef<string | null>(null);
+  const deferredStocksUpdateRef = useRef<StockMetrics[] | null>(null);
+  const lastProgressUpdateTsRef = useRef<number>(0);
+
+  const handleInspectTicker = useCallback((tk: string | null) => {
+    inspectedTickerRef.current = tk;
+    setGlobalInspectedTicker(tk);
+    if (tk === null && deferredStocksUpdateRef.current) {
+      const pendingStocks = deferredStocksUpdateRef.current;
+      deferredStocksUpdateRef.current = null;
+      window.requestAnimationFrame(() => {
+        setStocks(pendingStocks);
+      });
+    }
+  }, []);
 
   const globalInspectedStockObj = useMemo(() => {
     if (!globalInspectedTicker) return null;
@@ -957,7 +972,12 @@ export default function App() {
           macroIndicators,
           targetStocks,
           (_syncedCount, _totalCount, tickerLabel) => {
-            setSyncStatusLabel(`Syncing ${tickerLabel}`);
+            if (inspectedTickerRef.current) return;
+            const nowTs = Date.now();
+            if (nowTs - lastProgressUpdateTsRef.current >= 450) {
+              lastProgressUpdateTsRef.current = nowTs;
+              setSyncStatusLabel(`Syncing ${tickerLabel}`);
+            }
           },
           true,
           priorityHoldingTickers,
@@ -966,10 +986,15 @@ export default function App() {
           bypassMemoryCache,
           (partialWave1) => {
             // Immediately render Wave 1 Priority (<1s) updates for IHSG, Macro, Portfolio & Liquid Leaders
+            // Defer 975-stock table commit if the user is actively inspecting an emiten modal
             const rerankedWave1 = rankUniverseWithBuffer(
               partialWave1.updatedStocks,
               rebalanceBufferPct
             );
+            if (inspectedTickerRef.current) {
+              deferredStocksUpdateRef.current = rerankedWave1;
+              return;
+            }
             setMacroIndicators(partialWave1.updatedMacro);
             setStocks(rerankedWave1);
             if (partialWave1.liveIhsgQuote && partialWave1.liveIhsgQuote.lastPrice > 1000) {
@@ -1008,7 +1033,11 @@ export default function App() {
 
       const rerankedStocks = rankUniverseWithBuffer(updatedStocks, rebalanceBufferPct);
       setMacroIndicators(updatedMacro);
-      setStocks(rerankedStocks);
+      if (inspectedTickerRef.current) {
+        deferredStocksUpdateRef.current = rerankedStocks;
+      } else {
+        setStocks(rerankedStocks);
+      }
       setNewsItems(liveNews);
 
       const rawQuote = fetchedQuote || liveIhsgQuote;
@@ -1696,7 +1725,7 @@ export default function App() {
                   availableCashIdr={cashReserveIdr}
                   onChangeCapital={setCapitalIdr}
                   onLoadIdx100Universe={handleLoadIdx100Universe}
-                  onInspectTicker={(tk) => setGlobalInspectedTicker(tk)}
+                  onInspectTicker={handleInspectTicker}
                   onTriggerSweetAlert={(cap, picks, mode) =>
                     handleGenerateStrategyModal(cap, picks, mode)
                   }
@@ -1715,7 +1744,7 @@ export default function App() {
                 onRemoveStock={handleRemoveStock}
                 onResetUniverse={handleResetUniverse}
                 onToggleHscFlag={handleToggleHscFlag}
-                onInspectTicker={(tk) => setGlobalInspectedTicker(tk)}
+                onInspectTicker={handleInspectTicker}
               />
             )}
 
@@ -1739,7 +1768,7 @@ export default function App() {
                 onExportBackupJson={handleExportBackupJson}
                 onImportBackupJson={handleImportBackupJson}
                 onResetCacheAndPortfolio={handleResetCacheAndPortfolio}
-                onInspectTicker={(tk) => setGlobalInspectedTicker(tk)}
+                onInspectTicker={handleInspectTicker}
               />
             )}
 
@@ -1754,7 +1783,7 @@ export default function App() {
                 stocks={stocks}
                 regimeStatus={regime.status}
                 onToggleHscFlag={handleToggleHscFlag}
-                onInspectTicker={(tk) => setGlobalInspectedTicker(tk)}
+                onInspectTicker={handleInspectTicker}
                 onStockSynced={handleSilentSingleStockSync}
               />
             )}
@@ -1768,7 +1797,7 @@ export default function App() {
           stock={globalInspectedStockObj}
           regimeStatus={regime.status}
           availablePortfolioCashIdr={cashReserveIdr}
-          onClose={() => setGlobalInspectedTicker(null)}
+          onClose={() => handleInspectTicker(null)}
           onToggleHscFlag={handleToggleHscFlag}
           onStockSynced={handleSilentSingleStockSync}
         />
